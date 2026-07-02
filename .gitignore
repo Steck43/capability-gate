@@ -1,0 +1,23 @@
+# live policy — your real skills and paths. never committed.
+# copy allowlist.example.yaml to allowlist.yaml and edit that.
+allowlist.yaml
+
+# runtime artifacts
+logs/
+*.jsonl
+
+# internal working docs — build directives, planning notes. tracked outside git.
+_internal/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
+.cursor/
