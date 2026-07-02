@@ -1,13 +1,13 @@
-# live policy — your real skills and paths. never committed.
-# copy allowlist.example.yaml to allowlist.yaml and edit that.
+# live policy — never committed
 allowlist.yaml
 
-# runtime artifacts
+# runtime artifacts (logs live under ~/.hermes/logs/)
 logs/
 *.jsonl
 
-# internal working docs — build directives, planning notes. tracked outside git.
+# internal working docs
 _internal/
+.cursor/
 
 # python
 __pycache__/
@@ -20,4 +20,3 @@ venv/
 .DS_Store
 .idea/
 .vscode/
-.cursor/

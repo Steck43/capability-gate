@@ -1,36 +1,22 @@
-# allowlist.yaml — capability allowlist for the Hermes tool-gate (Stage 1).
-#
-# Deny by default. A skill may do ONLY what is granted here. Anything not
-# listed is denied. Keep this file small and legible: the whole point is that
-# a human can read it and know exactly what each skill can reach.
-#
-# Grant shape per skill:
-#   tools:  the tool names the skill may call
-#   paths:  glob patterns the skill may touch (** = any depth, * = one segment)
-#
-# require_approval lists tools that always need a human go. In Stage 1 the
-# adapter treats "ask" as block-with-reason, because the approval flow is not
-# wired yet. Stage 3 turns these into a real pause-and-ask.
+# Branch B ("*" bucket). Grants are agent-wide — every path is an every-skill grant.
+# Built from hermes-agent 0.16.0 registry (tools/file_tools.py, code_execution_tool.py, terminal_tool.py).
 
 version: 1
 
+# Opaque tools: effect cannot be bounded from args. Stage 1 maps ASK -> block.
 require_approval:
-  - execute_code
-  - shell
-  - delete_file
+  - terminal      # tools/terminal_tool.py:2676 — shell from any workdir reaches any path
+  - execute_code  # tools/code_execution_tool.py:1821 — sandbox code, no path mediation
 
 skills:
-
-  note-taker:
+  "*":
     tools:
-      - read_file
-      - write_file
+      - read_file     # tools/file_tools.py:1583
+      - write_file    # tools/file_tools.py:1584
+      - patch         # tools/file_tools.py:1585
+      - search_files  # tools/file_tools.py:1586
+      - web_search    # tools/web_tools.py:1548 — no path arg; tool grant only
     paths:
       - "$HERMES_HOME/notes/**"
-
-  web-researcher:
-    tools:
-      - web_search
-      - read_file
-    paths:
       - "$HERMES_HOME/research/**"
+      - "$HERMES_HOME/memories/*/**"
