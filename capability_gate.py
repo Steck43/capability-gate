@@ -48,6 +48,54 @@ from enum import Enum
 from typing import Iterable, Mapping, Sequence
 
 
+_TRACE_FIELDS = ("session_id", "turn_id", "task_id", "tool_call_id")
+
+_PATH_LIKE_KEYS = frozenset({
+    "path", "target", "workdir", "output_path", "workspace_path",
+    "file_path", "directory", "cwd",
+})
+_CONTENT_KEYS = frozenset({
+    "content", "file_content", "patch", "code", "command", "text",
+    "body", "message", "data", "stdout", "stderr", "output",
+})
+
+
+def summarize_args(args: Mapping | None) -> dict:
+    """Safe argument summary: keys, path-like values, content byte lengths only."""
+    if not isinstance(args, Mapping):
+        return {"keys": []}
+    keys = sorted(str(k) for k in args.keys())
+    paths: dict[str, str] = {}
+    content_lengths: dict[str, int] = {}
+    for key, val in args.items():
+        ks = str(key)
+        if ks in _PATH_LIKE_KEYS or ks.endswith("_path"):
+            if isinstance(val, str) and val:
+                paths[ks] = val
+        if ks in _CONTENT_KEYS or ks.endswith("_content"):
+            if isinstance(val, str):
+                content_lengths[ks] = len(val.encode("utf-8"))
+            elif val is not None and not isinstance(val, (bool, int, float)):
+                content_lengths[ks] = len(str(val).encode("utf-8"))
+    out: dict = {"keys": keys}
+    if paths:
+        out["paths"] = paths
+    if content_lengths:
+        out["content_lengths"] = content_lengths
+    return out
+
+
+def _normalize_trace(trace: Mapping[str, str] | None) -> dict[str, str]:
+    if not isinstance(trace, Mapping):
+        return {}
+    out: dict[str, str] = {}
+    for field in _TRACE_FIELDS:
+        val = trace.get(field)
+        if val is not None and str(val):
+            out[field] = str(val)
+    return out
+
+
 class Verdict(str, Enum):
     ALLOW = "allow"
     DENY = "deny"
@@ -195,7 +243,17 @@ class Gate:
     def mode(self) -> str:
         return self._mode
 
-    def evaluate(self, skill: str, tool: str, paths: Sequence[str] = ()) -> Decision:
+    def evaluate(
+        self,
+        skill: str,
+        tool: str,
+        paths: Sequence[str] = (),
+        *,
+        trace: Mapping[str, str] | None = None,
+        args: Mapping | None = None,
+    ) -> Decision:
+        norm_trace = _normalize_trace(trace)
+        arg_summary = summarize_args(args)
         try:
             decision = _decide(self._policy, str(skill), str(tool), [str(p) for p in paths])
         except Exception as exc:  # any failure is a denial, on purpose
@@ -203,11 +261,23 @@ class Gate:
                                 str(skill), str(tool), tuple(str(p) for p in paths))
         # observe mode records the true verdict but does not act on it
         decision = replace(decision, enforced=(self._mode == ENFORCE))
-        self._log(decision)  # written and flushed before the caller can act
+        self._log(decision, trace=norm_trace, arg_summary=arg_summary)
         return decision
 
-    def _log(self, decision: Decision) -> None:
+    def _log(
+        self,
+        decision: Decision,
+        *,
+        trace: Mapping[str, str] | None = None,
+        arg_summary: Mapping | None = None,
+    ) -> None:
         record = {"ts": time.time(), "mode": self._mode, **decision.as_dict()}
+        if trace:
+            for field in _TRACE_FIELDS:
+                if field in trace:
+                    record[field] = trace[field]
+        if arg_summary:
+            record["arg_summary"] = dict(arg_summary)
         line = json.dumps(record, sort_keys=True) + "\n"
         try:
             os.makedirs(os.path.dirname(self._log_path) or ".", exist_ok=True)

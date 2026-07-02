@@ -19,4 +19,4 @@ skills:
     paths:
       - "$HERMES_HOME/notes/**"
       - "$HERMES_HOME/research/**"
-      - "$HERMES_HOME/memories/*/**"
+      - "$HERMES_HOME/memories/notes/**"

@@ -243,3 +243,38 @@ def test_memory_subtree_shape_protects_identity(tmp_path, monkeypatch):
     assert g.evaluate("note-taking", "write_file", [subtree]).verdict is Verdict.ALLOW
     assert g.evaluate("note-taking", "write_file", [identity]).verdict is Verdict.DENY
     assert g.evaluate("note-taking", "write_file", [soul]).verdict is Verdict.DENY
+
+
+# --- enriched observe logging (study setup) --------------------------------
+# Trace fields reconstruct a session. arg_summary carries keys, path values,
+# and content byte lengths only. Raw content must never appear in the log.
+
+def test_log_includes_trace_and_safe_arg_summary(tmp_path):
+    secret = "SUPERSECRET-PII-MUST-NOT-APPEAR-IN-LOG"
+    policy = load_policy({
+        "skills": {"*": {"tools": ["write_file"], "paths": ["/work/**"]}},
+    })
+    log_path = tmp_path / "d.jsonl"
+    g = Gate(policy, log_path=str(log_path))
+    g.evaluate(
+        "*",
+        "write_file",
+        ["/work/note.md"],
+        trace={
+            "session_id": "sess-1",
+            "turn_id": "turn-2",
+            "task_id": "task-3",
+            "tool_call_id": "tc-4",
+        },
+        args={"path": "/work/note.md", "content": secret},
+    )
+    raw = log_path.read_text(encoding="utf-8")
+    rec = json.loads(raw.strip())
+    assert rec["session_id"] == "sess-1"
+    assert rec["turn_id"] == "turn-2"
+    assert rec["task_id"] == "task-3"
+    assert rec["tool_call_id"] == "tc-4"
+    assert rec["arg_summary"]["content_lengths"]["content"] == len(secret.encode("utf-8"))
+    assert rec["arg_summary"]["paths"]["path"] == "/work/note.md"
+    assert secret not in raw
+    assert "content" not in rec["arg_summary"]

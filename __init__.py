@@ -48,6 +48,17 @@ def _resolve_skill(kwargs: dict) -> str:
     return "*"
 
 
+def _extract_trace(kwargs: dict, task_id: str) -> dict[str, str]:
+    trace: dict[str, str] = {}
+    for key in ("session_id", "turn_id", "tool_call_id"):
+        val = kwargs.get(key)
+        if val:
+            trace[key] = str(val)
+    if task_id:
+        trace["task_id"] = str(task_id)
+    return trace
+
+
 def _extract_paths(tool_name: str, args: Any) -> list[str]:
     if not isinstance(args, dict):
         return []
@@ -92,7 +103,13 @@ def register(ctx) -> None:
         try:
             skill = _resolve_skill(kwargs)
             paths = _extract_paths(tool_name, args)
-            decision = gate.evaluate(skill, tool_name, paths)
+            decision = gate.evaluate(
+                skill,
+                tool_name,
+                paths,
+                trace=_extract_trace(kwargs, task_id),
+                args=args if isinstance(args, dict) else None,
+            )
             if decision.verdict.value == "allow" or not decision.enforced:
                 return None
             if decision.verdict.value == "ask":
