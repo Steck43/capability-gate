@@ -19,4 +19,4 @@ skills:
     paths:
       - "$HERMES_HOME/notes/**"
       - "$HERMES_HOME/research/**"
-      - "$HERMES_HOME/memories/notes/**"
+      - "$HERMES_HOME/memories/*/**  # grants memory subtree; blocks top-level USER.md via shape"
