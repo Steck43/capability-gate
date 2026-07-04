@@ -137,6 +137,15 @@ def test_malformed_policy_raises_at_load():
         load_policy(bad)
 
 
+def test_unresolved_var_raises_at_load(monkeypatch):
+    # An unset variable must fail loudly at load, not silently deny at decision time.
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    with pytest.raises(PolicyError):
+        load_policy({
+            "skills": {"note-taker": {"tools": ["write_file"], "paths": ["$HERMES_HOME/notes/**"]}},
+        })
+
+
 # --- mode: enforce is the default, and it acts -----------------------------
 
 def test_enforce_is_default_and_marks_enforced(tmp_path):
@@ -197,16 +206,13 @@ def test_env_var_in_path_expands_and_matches(tmp_path, monkeypatch):
     assert g.evaluate("note-taker", "write_file", [outside]).verdict is Verdict.DENY
 
 
-def test_unset_env_var_fails_closed(tmp_path, monkeypatch):
-    # HERMES_HOME not set: the glob stays literal "$HERMES_HOME/..." and matches
-    # no real path, so the grant is effectively empty and the call is denied.
+def test_unset_env_var_raises_at_load(monkeypatch):
+    # HERMES_HOME not set: fail loudly at load rather than silently deny later.
     monkeypatch.delenv("HERMES_HOME", raising=False)
-    policy = load_policy({
-        "skills": {"note-taker": {"tools": ["write_file"], "paths": ["$HERMES_HOME/notes/**"]}},
-    })
-    g = Gate(policy, log_path=str(tmp_path / "d.jsonl"))
-    d = g.evaluate("note-taker", "write_file", ["/home/landen/.hermes/notes/day.md"])
-    assert d.verdict is Verdict.DENY
+    with pytest.raises(PolicyError):
+        load_policy({
+            "skills": {"note-taker": {"tools": ["write_file"], "paths": ["$HERMES_HOME/notes/**"]}},
+        })
 
 
 # --- skill-agnostic "*" bucket (Stage 1 fallback when skill id is absent) ---

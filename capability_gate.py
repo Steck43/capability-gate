@@ -161,9 +161,19 @@ def load_policy(mapping: Mapping) -> Policy:
             raise PolicyError(f"skill '{name}': 'tools' must be a list")
         if not isinstance(paths, Sequence) or isinstance(paths, str):
             raise PolicyError(f"skill '{name}': 'paths' must be a list")
+        expanded: list[str] = []
+        for p in paths:
+            ep = _expand(str(p))
+            if "$" in ep:
+                raise PolicyError(
+                    f"skill '{name}': path '{p}' has an unresolved variable after expansion "
+                    f"('{ep}'). Set the variable (e.g. HERMES_HOME) before loading, or use an "
+                    f"absolute path. Refusing to load a grant that would silently match nothing."
+                )
+            expanded.append(ep)
         skills[str(name)] = SkillRule(
             tools=frozenset(str(t) for t in tools),
-            path_globs=tuple(_expand(str(p)) for p in paths),
+            path_globs=tuple(expanded),
         )
     approval = mapping.get("require_approval", [])
     if not isinstance(approval, Sequence) or isinstance(approval, str):

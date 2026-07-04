@@ -1,12 +1,12 @@
-# Branch B ("*" bucket). Grants are agent-wide — every path is an every-skill grant.
+# Branch B ("*" bucket). Grants are agent-wide. Every path is an every-skill grant.
 # Built from hermes-agent 0.16.0 registry (tools/file_tools.py, code_execution_tool.py, terminal_tool.py).
 
 version: 1
 
-# Opaque tools: effect cannot be bounded from args. Stage 1 maps ASK -> block.
+# Opaque tools: effect cannot be bounded from args. Stage 1 maps ASK to block.
 require_approval:
-  - terminal      # tools/terminal_tool.py:2676 — shell from any workdir reaches any path
-  - execute_code  # tools/code_execution_tool.py:1821 — sandbox code, no path mediation
+  - terminal      # tools/terminal_tool.py:2676. Shell from any workdir reaches any path.
+  - execute_code  # tools/code_execution_tool.py:1821. Sandbox code, no path mediation.
 
 skills:
   "*":
@@ -15,8 +15,10 @@ skills:
       - write_file    # tools/file_tools.py:1584
       - patch         # tools/file_tools.py:1585
       - search_files  # tools/file_tools.py:1586
-      - web_search    # tools/web_tools.py:1548 — no path arg; tool grant only
+      - web_search    # tools/web_tools.py:1548. No path arg; tool grant only.
     paths:
       - "$HERMES_HOME/notes/**"
       - "$HERMES_HOME/research/**"
-      - "$HERMES_HOME/memories/*/**  # grants memory subtree; blocks top-level USER.md via shape"
+      # memories/*/** grants a memory subtree. The one wildcard segment before **
+      # leaves top-level identity files (USER.md, SOUL.md) structurally unreachable.
+      - "$HERMES_HOME/memories/*/**"

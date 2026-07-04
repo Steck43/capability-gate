@@ -74,6 +74,10 @@ def _extract_paths(tool_name: str, args: Any) -> list[str]:
 
 
 def _build_gate(mode: str) -> Gate:
+    # Guarantee HERMES_HOME before policy expansion so grants resolve the same
+    # way the log path does. Without this, an unset var makes every grant match
+    # nothing and the gate denies silently.
+    os.environ.setdefault("HERMES_HOME", _hermes_home())
     allowlist = os.path.join(_HERE, "allowlist.yaml")
     with open(allowlist, encoding="utf-8") as f:
         policy = load_policy(yaml.safe_load(f))

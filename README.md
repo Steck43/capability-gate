@@ -41,4 +41,15 @@ This is a capability gate for one agent, not an operating system. The isolation 
 
 ## License
 
-TBD.
+MIT. See LICENSE.
+
+## Requirements
+- The decider (`capability_gate.py`) has zero third-party dependencies. Standard library only, by design, so the decision logic is testable without any runtime.
+- Tooling and tests require the packages in `requirements-dev.txt` (PyYAML for policy loading and reporting, pytest for the suite).
+- The Hermes adapter and its tests require a Hermes install; on a standalone clone those tests skip.
+- Tested on Python 3.12.
+
+To run the tests:
+    python3 -m venv .venv && . .venv/bin/activate
+    pip install -r requirements-dev.txt
+    pytest -q

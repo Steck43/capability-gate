@@ -18,7 +18,7 @@ from typing import Any, Iterable
 
 try:
     import yaml
-except ImportError:  # pragma: no cover - yaml is available in Hermes venv
+except ImportError:  # pragma: no cover (yaml is available in the Hermes venv)
     yaml = None  # type: ignore
 
 
