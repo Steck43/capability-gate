@@ -8,6 +8,7 @@ lands.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 import yaml
@@ -34,14 +35,55 @@ def _hermes_home() -> str:
     return os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
 
 
-def _read_mode_from_config(default: str = "observe") -> str:
-    from hermes_cli.config import cfg_get, load_config
+MODE_UNRESOLVED_PREFIX = "mode_unresolved_fail_closed"
 
-    cfg = load_config()
-    mode = cfg_get(cfg, "plugins", "entries", "capability-gate", "mode", default=default)
+
+def resolve_capability_gate_mode(hermes_home: str | None = None) -> tuple[str, str | None]:
+    """Confirm mode from raw config.yaml bytes — never from merged DEFAULT.
+
+    Returns ``(mode, unresolved_reason)``. ``unresolved_reason`` is set when a
+    valid observe|enforce choice cannot be confirmed; callers must fail closed
+    (block) and must not treat that as observe.
+    """
+    home = hermes_home or _hermes_home()
+    cfg_path = Path(home) / "config.yaml"
+    try:
+        raw = cfg_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:unreadable"
+    if not raw.strip():
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:empty"
+    try:
+        data = yaml.safe_load(raw)
+    except Exception:
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:unparseable"
+    if data is None:
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:empty"
+    if not isinstance(data, dict):
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:unparseable"
+    plugins = data.get("plugins")
+    if not isinstance(plugins, dict):
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:missing"
+    entries = plugins.get("entries")
+    if not isinstance(entries, dict):
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:missing"
+    entry = entries.get("capability-gate")
+    if not isinstance(entry, dict):
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:missing"
+    if "mode" not in entry:
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:missing"
+    mode = entry.get("mode")
     if mode not in ("observe", "enforce"):
-        return default
-    return str(mode)
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:invalid"
+    return str(mode), None
+
+
+def _read_mode_from_config(default: str = "observe") -> str:
+    """Legacy helper: confirmed mode only. Unknown → enforce (never silent observe)."""
+    mode, unresolved = resolve_capability_gate_mode()
+    if unresolved:
+        return "enforce"
+    return mode
 
 
 def _resolve_skill(kwargs: dict) -> str:
@@ -86,14 +128,25 @@ def _build_gate(mode: str) -> Gate:
 
 
 def register(ctx) -> None:
-    mode = _read_mode_from_config(default="observe")
+    mode, _unresolved_at_register = resolve_capability_gate_mode()
+    # Build Gate in confirmed or fail-closed-strict mode; unresolved calls block
+    # in the hook before policy (E3).
     try:
         gate = _build_gate(mode)
     except Exception as exc:
+        # Bind message before nested def — Python clears `exc` after the except suite.
+        load_error = repr(exc)
+
         def _closed(tool_name: str, args: dict, task_id: str, **kwargs: Any) -> Optional[dict]:
-            if mode == "observe":
+            # E2/E3: decision-time mode; unknown mode → fail closed (not observe).
+            mode_now, unresolved = resolve_capability_gate_mode()
+            if unresolved:
+                return _BLOCK(unresolved)
+            if mode_now == "observe":
                 return None
-            return _BLOCK(f"capability-gate failed to load, failing closed: {exc!r}")
+            return _BLOCK(
+                f"capability-gate failed to load, failing closed: {load_error}"
+            )
 
         ctx.register_hook("pre_tool_call", _closed)
         return
@@ -105,6 +158,12 @@ def register(ctx) -> None:
         **kwargs: Any,
     ) -> Optional[dict]:
         try:
+            # E2/E3: mode at decision time from raw config — unknown → fail closed.
+            mode, unresolved = resolve_capability_gate_mode()
+            if unresolved:
+                return _BLOCK(unresolved)
+            if mode != gate.mode:
+                gate.set_mode(mode)
             skill = _resolve_skill(kwargs)
             paths = _extract_paths(tool_name, args)
             decision = gate.evaluate(
@@ -114,7 +173,16 @@ def register(ctx) -> None:
                 trace=_extract_trace(kwargs, task_id),
                 args=args if isinstance(args, dict) else None,
             )
-            if decision.verdict.value == "allow" or not decision.enforced:
+            if decision.verdict.value == "allow":
+                return None
+            if not decision.enforced:
+                # E3: reconfirm before observe passthrough — close mid-call enforce flip.
+                mode2, unresolved2 = resolve_capability_gate_mode()
+                if unresolved2:
+                    return _BLOCK(unresolved2)
+                if mode2 == "enforce":
+                    gate.set_mode(mode2)
+                    return _BLOCK(decision.reason)
                 return None
             if decision.verdict.value == "ask":
                 return _BLOCK(
@@ -122,7 +190,11 @@ def register(ctx) -> None:
                 )
             return _BLOCK(decision.reason)
         except Exception as exc:
-            if gate.mode == "observe":
+            # E3: reconfirm before observe fail-open on errors (same class as passthrough).
+            mode_e, unresolved_e = resolve_capability_gate_mode()
+            if unresolved_e:
+                return _BLOCK(unresolved_e)
+            if mode_e == "observe":
                 return None
             return _BLOCK(f"capability-gate error, failing closed: {exc!r}")
 

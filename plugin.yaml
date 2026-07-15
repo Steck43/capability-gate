@@ -2,5 +2,8 @@ name: capability-gate
 version: "0.1.0"
 description: "Deny-by-default capability gate for agent tool calls (Stage 1 observe/enforce)."
 author: Landen Stecker
+require_mount: true
+provides_hooks:
+  - pre_tool_call
 hooks:
   - pre_tool_call

@@ -253,6 +253,12 @@ class Gate:
     def mode(self) -> str:
         return self._mode
 
+    def set_mode(self, mode: str) -> None:
+        """Update mode without rebuilding policy (E2: config flip mid-process)."""
+        if mode not in (ENFORCE, OBSERVE):
+            raise ValueError(f"mode must be '{ENFORCE}' or '{OBSERVE}', got {mode!r}")
+        self._mode = mode
+
     def evaluate(
         self,
         skill: str,
