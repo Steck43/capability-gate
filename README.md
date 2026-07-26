@@ -15,7 +15,7 @@ The decision is deterministic code you can read, not the probabilistic model you
 The gate sits on the Hermes `pre_tool_call` hook and enforces one file: an allowlist. Each skill may touch only the tools and paths its entry grants. Everything else is denied.
 
 - **Deny by default.** An unlisted skill, tool, or path is denied.
-- **Complete mediation.** Every call and every path it touches is checked.
+- **Mediation at the hook.** While the plugin is loaded, every call that reaches `pre_tool_call` is checked, and every path that call touches is checked with it. That is completeness on one path, not a reference monitor over the agent's whole lifetime. A plugin that is not loaded mediates nothing, and this gate cannot prove its own presence.
 - **Least privilege.** A skill does only what its entry grants.
 - **Fail closed.** Any error in the decision path is a denial. The Hermes hook framework catches hook errors and lets the agent continue, so it fails open. A gate cannot lean on the thing it guards. It stops itself.
 - **Fail loud.** A policy that cannot resolve, an unset path variable, a malformed grant, is rejected at load, not silently ignored at decision time where the failure would be a security gap.
@@ -25,7 +25,9 @@ The gate sits on the Hermes `pre_tool_call` hook and enforces one file: an allow
 
 Two modes make rollout safe. Observe decides and logs exactly as it would, and blocks nothing. Enforce acts on the decision.
 
-The intended rollout is observe first. Run observe continuously for two weeks. Read the log. Write the grants to match what the agent actually does. Then flip to enforce. `report.py` reads the decision log and surfaces the grant gap, the tools and paths used but not yet granted, so the enforce allowlist is distilled from real behavior instead of guessed. Observe protects nothing by design. Protection is an enforce-mode property. Do not lean on observe.
+The intended rollout is observe first. Run observe. Read the log. Write the grants to match what the agent actually does. Adjudicate would-denies. Then flip to enforce. `report.py` reads the decision log and surfaces the grant gap, the tools and paths used but not yet granted, so the enforce allowlist is distilled from real behavior instead of guessed. Observe protects nothing by design. Protection is an enforce-mode property. Do not lean on observe.
+
+The allowlist is not frozen at the flip. After enforce, grants can keep training from live behavior under the same deny-by-default rule.
 
 ## Install
 
@@ -41,9 +43,10 @@ Enable the plugin under `plugins.enabled` in your Hermes `config.yaml`. Start in
 
 Honest about what runs versus what is planned.
 
-- **Working, tested.** Stage 1, the decider: deny-by-default allowlist enforcement over tool and path, fail-closed, fail-loud on unresolved policy, log-before-act, observe and enforce modes. The decision core is runtime-agnostic and covered by tests.
-- **In rollout.** The gate runs in observe on a live Hermes agent, logging every decision and blocking nothing, across a two-week window. The enforce allowlist is built from that behavior, then enforce is turned on.
-- **Planned.** Human-in-the-loop approval for heavy actions (the `ask` verdict is already modeled). Real isolation, so that deny means a skill physically cannot reach a resource rather than being asked not to.
+- **Working, tested.** Stage 1, the decider: deny-by-default allowlist enforcement over tool and path, fail-closed, fail-loud on unresolved policy, log-before-act, observe and enforce modes. The decision core is runtime-agnostic and covered by tests. Fresh clone: `python -m pytest -q` passes (Hermes adapter tests skip without Hermes).
+- **Live.** On a Hermes profile this gate is configured in **enforce**. The chain to get there is documented: observe first, then a would-deny review, then adjudication, then the flip, with a named rollback path. The observe study covered the calls the gate saw across a one-month window, which was a small fraction of that agent's total tool traffic in the period, because the plugin was not resident throughout. The allowlist was distilled from what it did see, and it continued to train after the flip. Enforce does not mean a frozen grant set.
+- **Known limits (published).** Path matching is lexical, `normpath` after expand. Symlink resolution is not on the decide path, so a symlink to an off-allowlist target is not caught today. An 18-case adversarial lab was run against the decider at `3a61d7e`. Fourteen of those cases had a ground truth of deny. The gate denied seven. The seven that got through are not all composition: context-blindness and argument-level intent appear as well. One of the seven denials is an `ask` mapped to Stage-1 block semantics rather than a hard deny. Harness and receipt live outside this repository.
+- **This repository is one layer.** Sibling isolation and adjudication work live elsewhere and are not consumed by this gate. This README does not claim them.
 
 This is a capability gate for one agent, not an operating system. The isolation idea it is built on is the same one that runs underneath every OS: let untrusted programs run on a machine without letting them wreck it or each other.
 
