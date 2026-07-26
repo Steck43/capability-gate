@@ -74,9 +74,11 @@ RULES = [
      "Omit, or label as a modeled projection."),
 
     ("OVER-05", "BLOCK", "line",
-     r"(lab|insufficiency lab)[^.]{0,80}\band published it\b", None,
-     "Claims the lab is published. Harness and receipt are not on the public tree.",
-     "Cite the finding. Say the artifacts live outside the repository."),
+     r"\bpublished\b[^.]{0,60}(governance design|schema|policy-engine|lab|harness)"
+     r"|(lab|harness|schema|governance design)[^.]{0,80}\band published it\b", None,
+     "Publication claim for an artifact with no public locator. The lab harness and the "
+     "Unified Policy-Engine Schema are both off the public tree.",
+     "Say designed, or cite the finding and state that the artifact lives elsewhere."),
 
     ("OVER-06", "WARN", "line",
      r"0 FALSE-DENY", None,
