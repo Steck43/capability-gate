@@ -124,15 +124,21 @@ RULES = [
 
     ("SCOPE-03", "WARN", "doc",
      r"\b(judge|adjudicator)\b",
-     r"not consumed|not yet consumed|[Bb]uilt and measured|observe",
+     r"not consumed|not yet consumed|not in live|[Bb]uilt and measured",
      "Adjudicator appears but the apply_verdict=False scope is stated nowhere in the artifact.",
      "Built and measured, not consumed in live adjudication."),
 
     ("SCOPE-04", "WARN", "doc",
      r"(runs|running|is|it is|[Cc]onfigured) in \*{0,2}enforce",
-     r"[Cc]onfigured|own profile|own agent profile|own Hermes profile|rollout|[Oo]bserve",
+     r"own (agent |Hermes )?profile|a Hermes profile|local Hermes|rollout",
      "An in-enforce deployment claim with no profile scope anywhere in the artifact.",
      "Configured in enforce on my own agent profile."),
+
+    ("PATH-01", "BLOCK", "para",
+     r"canonicaliz|realpath",
+     r"\bnot\b|lexical|normpath|is not on the decide path|does not resolve",
+     "Canonicalization asserted. The gate matches lexically; realpath is not on the decide path.",
+     "Normalized against granted scope, or state the limit explicitly."),
 
     ("TAX-01", "WARN", "line",
      r"\bGovern\.|\*\*Defend", None,
