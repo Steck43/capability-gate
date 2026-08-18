@@ -1,10 +1,8 @@
 """Tests for report.py using a synthetic log fixture."""
 
 import json
-from pathlib import Path
 
 import report
-
 
 FIXTURE = [
     {

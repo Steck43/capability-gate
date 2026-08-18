@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import yaml
 
@@ -38,7 +38,9 @@ def _hermes_home() -> str:
 MODE_UNRESOLVED_PREFIX = "mode_unresolved_fail_closed"
 
 
-def resolve_capability_gate_mode(hermes_home: str | None = None) -> tuple[str, str | None]:
+def resolve_capability_gate_mode(
+    hermes_home: str | None = None,
+) -> tuple[str, str | None]:
     """Confirm mode from raw config.yaml bytes — never from merged DEFAULT.
 
     Returns ``(mode, unresolved_reason)``. ``unresolved_reason`` is set when a
@@ -106,7 +108,11 @@ def _extract_paths(tool_name: str, args: Any) -> list[str]:
         return []
     key = _PATH_ARG.get(tool_name)
     if not key or key not in args:
-        if tool_name == "search_files" and isinstance(args.get("target"), str) and args["target"]:
+        if (
+            tool_name == "search_files"
+            and isinstance(args.get("target"), str)
+            and args["target"]
+        ):
             return [args["target"]]
         return []
     val = args[key]
@@ -137,7 +143,9 @@ def register(ctx) -> None:
         # Bind message before nested def — Python clears `exc` after the except suite.
         load_error = repr(exc)
 
-        def _closed(tool_name: str, args: dict, task_id: str, **kwargs: Any) -> Optional[dict]:
+        def _closed(
+            tool_name: str, args: dict, task_id: str, **kwargs: Any
+        ) -> dict | None:
             # E2/E3: decision-time mode; unknown mode → fail closed (not observe).
             mode_now, unresolved = resolve_capability_gate_mode()
             if unresolved:
@@ -156,7 +164,7 @@ def register(ctx) -> None:
         args: dict,
         task_id: str,
         **kwargs: Any,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         try:
             # E2/E3: mode at decision time from raw config — unknown → fail closed.
             mode, unresolved = resolve_capability_gate_mode()
@@ -186,7 +194,8 @@ def register(ctx) -> None:
                 return None
             if decision.verdict.value == "ask":
                 return _BLOCK(
-                    "requires human approval (Stage 3 not yet wired): " + decision.reason
+                    "requires human approval (Stage 3 not yet wired): "
+                    + decision.reason
                 )
             return _BLOCK(decision.reason)
         except Exception as exc:

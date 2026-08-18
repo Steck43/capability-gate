@@ -43,21 +43,40 @@ import json
 import os
 import re
 import time
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Iterable, Mapping, Sequence
-
 
 _TRACE_FIELDS = ("session_id", "turn_id", "task_id", "tool_call_id")
 
-_PATH_LIKE_KEYS = frozenset({
-    "path", "target", "workdir", "output_path", "workspace_path",
-    "file_path", "directory", "cwd",
-})
-_CONTENT_KEYS = frozenset({
-    "content", "file_content", "patch", "code", "command", "text",
-    "body", "message", "data", "stdout", "stderr", "output",
-})
+_PATH_LIKE_KEYS = frozenset(
+    {
+        "path",
+        "target",
+        "workdir",
+        "output_path",
+        "workspace_path",
+        "file_path",
+        "directory",
+        "cwd",
+    }
+)
+_CONTENT_KEYS = frozenset(
+    {
+        "content",
+        "file_content",
+        "patch",
+        "code",
+        "command",
+        "text",
+        "body",
+        "message",
+        "data",
+        "stdout",
+        "stderr",
+        "output",
+    }
+)
 
 
 def summarize_args(args: Mapping | None) -> dict:
@@ -145,6 +164,7 @@ class PolicyError(ValueError):
 
 # --- policy loading -------------------------------------------------------
 
+
 def load_policy(mapping: Mapping) -> Policy:
     if not isinstance(mapping, Mapping):
         raise PolicyError("policy root must be a mapping")
@@ -191,6 +211,7 @@ def load_policy(mapping: Mapping) -> Policy:
 # Small and readable on purpose, so the matching rule is auditable rather than
 # hidden inside a glob dependency.
 
+
 def _expand(path: str) -> str:
     return os.path.expandvars(os.path.expanduser(path))
 
@@ -202,12 +223,12 @@ def _glob_to_regex(glob: str) -> re.Pattern:
         c = glob[i]
         if c == "*":
             if i + 1 < n and glob[i + 1] == "*":
-                out.append(".*")   # ** crosses separators
+                out.append(".*")  # ** crosses separators
                 i += 2
                 if i < n and glob[i] == "/":
-                    i += 1          # collapse the slash after **
+                    i += 1  # collapse the slash after **
                 continue
-            out.append("[^/]*")     # * stays within a segment
+            out.append("[^/]*")  # * stays within a segment
         elif c == "?":
             out.append("[^/]")
         else:
@@ -224,18 +245,31 @@ def _path_allowed(path: str, globs: Iterable[str]) -> bool:
 
 # --- the decision ---------------------------------------------------------
 
+
 def _decide(policy: Policy, skill: str, tool: str, paths: Sequence[str]) -> Decision:
     ptuple = tuple(paths)
     rule = policy.skills.get(skill)
     if rule is None:
-        return Decision(Verdict.DENY, f"skill '{skill}' not in allowlist", skill, tool, ptuple)
+        return Decision(
+            Verdict.DENY, f"skill '{skill}' not in allowlist", skill, tool, ptuple
+        )
     if tool not in rule.tools:
-        return Decision(Verdict.DENY, f"tool '{tool}' not granted to '{skill}'", skill, tool, ptuple)
+        return Decision(
+            Verdict.DENY, f"tool '{tool}' not granted to '{skill}'", skill, tool, ptuple
+        )
     for p in paths:
         if not _path_allowed(p, rule.path_globs):
-            return Decision(Verdict.DENY, f"path '{p}' outside allowlist for '{skill}'", skill, tool, ptuple)
+            return Decision(
+                Verdict.DENY,
+                f"path '{p}' outside allowlist for '{skill}'",
+                skill,
+                tool,
+                ptuple,
+            )
     if tool in policy.require_approval:
-        return Decision(Verdict.ASK, f"tool '{tool}' requires human approval", skill, tool, ptuple)
+        return Decision(
+            Verdict.ASK, f"tool '{tool}' requires human approval", skill, tool, ptuple
+        )
     return Decision(Verdict.ALLOW, "allowed by policy", skill, tool, ptuple)
 
 
@@ -271,10 +305,17 @@ class Gate:
         norm_trace = _normalize_trace(trace)
         arg_summary = summarize_args(args)
         try:
-            decision = _decide(self._policy, str(skill), str(tool), [str(p) for p in paths])
+            decision = _decide(
+                self._policy, str(skill), str(tool), [str(p) for p in paths]
+            )
         except Exception as exc:  # any failure is a denial, on purpose
-            decision = Decision(Verdict.DENY, f"gate error, failing closed: {exc!r}",
-                                str(skill), str(tool), tuple(str(p) for p in paths))
+            decision = Decision(
+                Verdict.DENY,
+                f"gate error, failing closed: {exc!r}",
+                str(skill),
+                str(tool),
+                tuple(str(p) for p in paths),
+            )
         # observe mode records the true verdict but does not act on it
         decision = replace(decision, enforced=(self._mode == ENFORCE))
         self._log(decision, trace=norm_trace, arg_summary=arg_summary)

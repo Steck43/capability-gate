@@ -1,4 +1,5 @@
 """E2 Fix2 — mode cannot freeze stale at register()."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -13,7 +14,9 @@ import yaml
 # green suite red the moment this file shipped. This is the same guard
 # test_adapter.py already uses for the same dependency, so the suite now
 # behaves identically with or without Hermes present.
-pytest.importorskip("hermes_cli", reason="mode-staleness tests require a Hermes install")
+pytest.importorskip(
+    "hermes_cli", reason="mode-staleness tests require a Hermes install"
+)
 
 
 @pytest.fixture
@@ -52,7 +55,9 @@ def test_flip_to_enforce_without_reregister_blocks_deny(cg_home, monkeypatch):
     monkeypatch.setattr(hcfg, "load_config", _load)
 
     init_path = Path(__file__).resolve().parent / "__init__.py"
-    spec = importlib.util.spec_from_file_location("capability_gate_plugin_e2", init_path)
+    spec = importlib.util.spec_from_file_location(
+        "capability_gate_plugin_e2", init_path
+    )
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     sys.modules["capability_gate_plugin_e2"] = mod
@@ -74,7 +79,9 @@ def test_flip_to_enforce_without_reregister_blocks_deny(cg_home, monkeypatch):
     _flip_mode(cg_home, "enforce")
 
     out2 = pre("read_file", {"path": "/etc/passwd"}, "task-2")
-    assert out2 is not None, "fail-open: enforce reported but adapter returned None on deny"
+    assert out2 is not None, (
+        "fail-open: enforce reported but adapter returned None on deny"
+    )
     assert out2.get("action") == "block", out2
 
 
@@ -88,7 +95,9 @@ def test_mode_flip_idempotent_twice(cg_home, monkeypatch):
         lambda: yaml.safe_load((cg_home / "config.yaml").read_text(encoding="utf-8")),
     )
     init_path = Path(__file__).resolve().parent / "__init__.py"
-    spec = importlib.util.spec_from_file_location("capability_gate_plugin_e2b", init_path)
+    spec = importlib.util.spec_from_file_location(
+        "capability_gate_plugin_e2b", init_path
+    )
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     sys.modules["capability_gate_plugin_e2b"] = mod
@@ -117,7 +126,9 @@ def test_closed_hook_re_reads_mode_on_flip(cg_home, monkeypatch):
         lambda: yaml.safe_load((cg_home / "config.yaml").read_text(encoding="utf-8")),
     )
     init_path = Path(__file__).resolve().parent / "__init__.py"
-    spec = importlib.util.spec_from_file_location("capability_gate_plugin_e2_closed", init_path)
+    spec = importlib.util.spec_from_file_location(
+        "capability_gate_plugin_e2_closed", init_path
+    )
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     sys.modules["capability_gate_plugin_e2_closed"] = mod
@@ -129,7 +140,9 @@ def test_closed_hook_re_reads_mode_on_flip(cg_home, monkeypatch):
             hooks[name] = fn
 
     spec.loader.exec_module(mod)
-    monkeypatch.setattr(mod, "_build_gate", lambda mode: (_ for _ in ()).throw(RuntimeError("forced")))
+    monkeypatch.setattr(
+        mod, "_build_gate", lambda mode: (_ for _ in ()).throw(RuntimeError("forced"))
+    )
     mod.register(Ctx())
     pre = hooks["pre_tool_call"]
     assert pre("read_file", {"path": "/etc/passwd"}, "t0") is None

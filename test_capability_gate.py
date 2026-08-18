@@ -7,8 +7,7 @@ import os
 import pytest
 
 import capability_gate as cg
-from capability_gate import Gate, Verdict, load_policy, PolicyError, ENFORCE, OBSERVE
-
+from capability_gate import ENFORCE, OBSERVE, Gate, PolicyError, Verdict, load_policy
 
 POLICY_DICT = {
     "require_approval": ["execute_code", "delete_file"],
@@ -41,6 +40,7 @@ def home(rel):
 
 # --- deny by default ------------------------------------------------------
 
+
 def test_unknown_skill_denied(gate):
     d = gate.evaluate("unlisted-skill", "read_file", [home(".hermes/notes/a.md")])
     assert d.verdict is Verdict.DENY
@@ -62,6 +62,7 @@ def test_path_outside_allowlist_denied(gate):
 
 # --- allow on full match --------------------------------------------------
 
+
 def test_allow_on_match(gate):
     d = gate.evaluate("note-taker", "write_file", [home(".hermes/notes/2026/log.md")])
     assert d.verdict is Verdict.ALLOW
@@ -74,6 +75,7 @@ def test_allow_pathless_tool(gate):
 
 
 # --- ask (Stage 3 hook, Stage 1 adapter maps this to block) ---------------
+
 
 def test_require_approval_returns_ask(gate):
     d = gate.evaluate("cleaner", "delete_file", [home(".hermes/tmp/x")])
@@ -89,9 +91,11 @@ def test_approval_still_gated_by_path(gate):
 
 # --- fail closed ----------------------------------------------------------
 
+
 def test_fail_closed_on_internal_error(gate, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("simulated bug in decision path")
+
     monkeypatch.setattr(cg, "_decide", boom)
     d = gate.evaluate("note-taker", "read_file", [home(".hermes/notes/a.md")])
     assert d.verdict is Verdict.DENY
@@ -99,6 +103,7 @@ def test_fail_closed_on_internal_error(gate, monkeypatch):
 
 
 # --- log before act (write-ahead) -----------------------------------------
+
 
 def test_decision_logged_before_return(tmp_path):
     log = tmp_path / "decisions.jsonl"
@@ -116,6 +121,7 @@ def test_decision_logged_before_return(tmp_path):
 
 # --- glob semantics -------------------------------------------------------
 
+
 def test_doublestar_crosses_directories():
     r = cg._glob_to_regex("/a/**")
     assert r.match("/a/b/c/d.txt")
@@ -131,6 +137,7 @@ def test_singlestar_stays_in_segment():
 
 # --- load-time validation -------------------------------------------------
 
+
 def test_malformed_policy_raises_at_load():
     bad = {"skills": {"x": {"tools": "read_file", "paths": []}}}  # tools must be a list
     with pytest.raises(PolicyError):
@@ -141,12 +148,20 @@ def test_unresolved_var_raises_at_load(monkeypatch):
     # An unset variable must fail loudly at load, not silently deny at decision time.
     monkeypatch.delenv("HERMES_HOME", raising=False)
     with pytest.raises(PolicyError):
-        load_policy({
-            "skills": {"note-taker": {"tools": ["write_file"], "paths": ["$HERMES_HOME/notes/**"]}},
-        })
+        load_policy(
+            {
+                "skills": {
+                    "note-taker": {
+                        "tools": ["write_file"],
+                        "paths": ["$HERMES_HOME/notes/**"],
+                    }
+                },
+            }
+        )
 
 
 # --- mode: enforce is the default, and it acts -----------------------------
+
 
 def test_enforce_is_default_and_marks_enforced(tmp_path):
     g = Gate(load_policy(POLICY_DICT), log_path=str(tmp_path / "d.jsonl"))
@@ -162,6 +177,7 @@ def test_invalid_mode_raises_at_construction(tmp_path):
 
 # --- mode: observe decides and logs, but never acts ------------------------
 
+
 def test_observe_denies_in_verdict_but_not_enforced(tmp_path):
     log = tmp_path / "d.jsonl"
     g = Gate(load_policy(POLICY_DICT), log_path=str(log), mode=OBSERVE)
@@ -171,7 +187,11 @@ def test_observe_denies_in_verdict_but_not_enforced(tmp_path):
     # ... but it is not enforced, so the adapter will allow it through
     assert d.enforced is False
     rec = json.loads(log.read_text().strip().splitlines()[-1])
-    assert rec["verdict"] == "deny" and rec["mode"] == "observe" and rec["enforced"] is False
+    assert (
+        rec["verdict"] == "deny"
+        and rec["mode"] == "observe"
+        and rec["enforced"] is False
+    )
 
 
 def test_observe_allow_still_allows(tmp_path):
@@ -183,6 +203,7 @@ def test_observe_allow_still_allows(tmp_path):
 def test_observe_does_not_enforce_even_on_internal_error(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("bug during observe rollout")
+
     monkeypatch.setattr(cg, "_decide", boom)
     g = Gate(load_policy(POLICY_DICT), log_path=str(tmp_path / "d.jsonl"), mode=OBSERVE)
     d = g.evaluate("note-taker", "read_file", [home(".hermes/notes/a.md")])
@@ -193,12 +214,20 @@ def test_observe_does_not_enforce_even_on_internal_error(tmp_path, monkeypatch):
 
 # --- path expansion: ~ and $VARS, portable across Hermes homes -------------
 
+
 def test_env_var_in_path_expands_and_matches(tmp_path, monkeypatch):
     home = tmp_path / "hermes-home"
     monkeypatch.setenv("HERMES_HOME", str(home))
-    policy = load_policy({
-        "skills": {"note-taker": {"tools": ["write_file"], "paths": ["$HERMES_HOME/notes/**"]}},
-    })
+    policy = load_policy(
+        {
+            "skills": {
+                "note-taker": {
+                    "tools": ["write_file"],
+                    "paths": ["$HERMES_HOME/notes/**"],
+                }
+            },
+        }
+    )
     g = Gate(policy, log_path=str(tmp_path / "d.jsonl"))
     inside = str(home / "notes" / "day.md")
     outside = str(home / "secrets" / "key")
@@ -210,23 +239,39 @@ def test_unset_env_var_raises_at_load(monkeypatch):
     # HERMES_HOME not set: fail loudly at load rather than silently deny later.
     monkeypatch.delenv("HERMES_HOME", raising=False)
     with pytest.raises(PolicyError):
-        load_policy({
-            "skills": {"note-taker": {"tools": ["write_file"], "paths": ["$HERMES_HOME/notes/**"]}},
-        })
+        load_policy(
+            {
+                "skills": {
+                    "note-taker": {
+                        "tools": ["write_file"],
+                        "paths": ["$HERMES_HOME/notes/**"],
+                    }
+                },
+            }
+        )
 
 
 # --- skill-agnostic "*" bucket (Stage 1 fallback when skill id is absent) ---
 # Proves the skill-agnostic path is pure policy convention: a skill keyed "*"
 # plus the adapter passing skill="*". No core change. Deny-by-default holds.
 
+
 def test_star_bucket_is_pure_convention(tmp_path):
-    policy = load_policy({
-        "skills": {"*": {"tools": ["read_file", "write_file"], "paths": ["/work/**"]}},
-    })
+    policy = load_policy(
+        {
+            "skills": {
+                "*": {"tools": ["read_file", "write_file"], "paths": ["/work/**"]}
+            },
+        }
+    )
     g = Gate(policy, log_path=str(tmp_path / "d.jsonl"))
-    assert g.evaluate("*", "read_file", ["/work/a.md"]).verdict is Verdict.ALLOW      # granted
-    assert g.evaluate("*", "web_search", []).verdict is Verdict.DENY                   # tool not granted
-    assert g.evaluate("*", "read_file", ["/etc/passwd"]).verdict is Verdict.DENY       # path off-grant
+    assert (
+        g.evaluate("*", "read_file", ["/work/a.md"]).verdict is Verdict.ALLOW
+    )  # granted
+    assert g.evaluate("*", "web_search", []).verdict is Verdict.DENY  # tool not granted
+    assert (
+        g.evaluate("*", "read_file", ["/etc/passwd"]).verdict is Verdict.DENY
+    )  # path off-grant
 
 
 # --- identity protection by path shape, not blocklist ----------------------
@@ -236,12 +281,20 @@ def test_star_bucket_is_pure_convention(tmp_path):
 # Branch B "*" bucket, and cannot be gotten wrong the way a maintained
 # exclude-list can.
 
+
 def test_memory_subtree_shape_protects_identity(tmp_path, monkeypatch):
     home = tmp_path / "hermes-home"
     monkeypatch.setenv("HERMES_HOME", str(home))
-    policy = load_policy({
-        "skills": {"note-taking": {"tools": ["write_file"], "paths": ["$HERMES_HOME/memories/*/**"]}},
-    })
+    policy = load_policy(
+        {
+            "skills": {
+                "note-taking": {
+                    "tools": ["write_file"],
+                    "paths": ["$HERMES_HOME/memories/*/**"],
+                }
+            },
+        }
+    )
     g = Gate(policy, log_path=str(tmp_path / "d.jsonl"))
     subtree = str(home / "memories" / "notes" / "day.md")
     identity = str(home / "memories" / "USER.md")
@@ -255,11 +308,14 @@ def test_memory_subtree_shape_protects_identity(tmp_path, monkeypatch):
 # Trace fields reconstruct a session. arg_summary carries keys, path values,
 # and content byte lengths only. Raw content must never appear in the log.
 
+
 def test_log_includes_trace_and_safe_arg_summary(tmp_path):
     secret = "SUPERSECRET-PII-MUST-NOT-APPEAR-IN-LOG"
-    policy = load_policy({
-        "skills": {"*": {"tools": ["write_file"], "paths": ["/work/**"]}},
-    })
+    policy = load_policy(
+        {
+            "skills": {"*": {"tools": ["write_file"], "paths": ["/work/**"]}},
+        }
+    )
     log_path = tmp_path / "d.jsonl"
     g = Gate(policy, log_path=str(log_path))
     g.evaluate(
@@ -280,7 +336,9 @@ def test_log_includes_trace_and_safe_arg_summary(tmp_path):
     assert rec["turn_id"] == "turn-2"
     assert rec["task_id"] == "task-3"
     assert rec["tool_call_id"] == "tc-4"
-    assert rec["arg_summary"]["content_lengths"]["content"] == len(secret.encode("utf-8"))
+    assert rec["arg_summary"]["content_lengths"]["content"] == len(
+        secret.encode("utf-8")
+    )
     assert rec["arg_summary"]["paths"]["path"] == "/work/note.md"
     assert secret not in raw
     assert "content" not in rec["arg_summary"]

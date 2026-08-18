@@ -12,9 +12,10 @@ import argparse
 import json
 import os
 from collections import Counter
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 try:
     import yaml
@@ -141,7 +142,8 @@ def format_report(stats: dict[str, Any]) -> str:
     lines.append("")
     lines.append(
         f"current grant ({len(stats['granted_tools'])} tools): "
-        + ", ".join(stats["granted_tools"]) or "(none parsed)"
+        + ", ".join(stats["granted_tools"])
+        or "(none parsed)"
     )
     lines.append("")
 

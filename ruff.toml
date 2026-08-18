@@ -1,0 +1,12 @@
+# Floor baseline allow-boundary (2026-08-18). Intentional patterns stay ignored;
+# do not widen without a Landen call. Auto-fixed noise was scrubbed same day.
+[lint]
+ignore = [
+  "N999",   # roof package dir is hyphenated capability-gate
+  "BLE001", # fail-closed Exception catches are deliberate
+  "S102",   # test_adapter loads plugin source via exec
+  "TRY203", # re-raise after audit-write failure is deliberate
+  "SIM102", # nested path-key checks stay readable
+  "SIM118", # args.keys() enumeration is intentional shape
+  "F402",   # loop var name field shadows import in _TRACE_FIELDS walk
+]

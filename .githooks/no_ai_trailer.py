@@ -19,6 +19,7 @@ removing it costs a rewrite instead of an edit.
 
 Exit 0 = clean. Exit 1 = trailer present, commit blocked.
 """
+
 from __future__ import annotations
 
 import re
@@ -29,15 +30,30 @@ from pathlib import Path
 # positive here costs one `--no-verify`; a false negative costs a history
 # rewrite on a public repo.
 PATTERNS = [
-    (re.compile(r"^\s*co-authored-by:.*"
-                r"(claude|cursor|copilot|gpt|chatgpt|gemini|assistant|\bbot\b|\bai\b)",
-                re.I | re.M), "AI co-author trailer"),
-    (re.compile(r"generated with .{0,40}(claude|cursor|copilot|chatgpt|gemini)",
-                re.I), "generated-with attribution"),
+    (
+        re.compile(
+            r"^\s*co-authored-by:.*"
+            r"(claude|cursor|copilot|gpt|chatgpt|gemini|assistant|\bbot\b|\bai\b)",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+        "AI co-author trailer",
+    ),
+    (
+        re.compile(
+            r"generated with .{0,40}(claude|cursor|copilot|chatgpt|gemini)",
+            re.IGNORECASE,
+        ),
+        "generated-with attribution",
+    ),
     (re.compile(r"\U0001F916"), "robot emoji (🤖) - reads as AI attribution"),
-    (re.compile(r"^\s*(assisted|authored)[- ]by:.*"
-                r"(claude|cursor|copilot|gpt|gemini)", re.I | re.M),
-     "AI assistance trailer"),
+    (
+        re.compile(
+            r"^\s*(assisted|authored)[- ]by:.*"
+            r"(claude|cursor|copilot|gpt|gemini)",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+        "AI assistance trailer",
+    ),
 ]
 
 

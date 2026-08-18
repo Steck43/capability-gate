@@ -1,4 +1,5 @@
 """E3 — unknown mode resolves to fail-closed block, never observe."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -89,7 +90,12 @@ def test_corrupt_config_blocks_with_fail_closed_reason(env_home):
 def test_missing_mode_key_blocks_with_fail_closed_reason(env_home):
     _write_cfg(
         env_home,
-        {"plugins": {"enabled": ["capability-gate"], "entries": {"capability-gate": {}}}},
+        {
+            "plugins": {
+                "enabled": ["capability-gate"],
+                "entries": {"capability-gate": {}},
+            }
+        },
     )
     pre = _register_pre(_load_adapter())
     _assert_fail_closed(_deny_call(pre), "missing")
@@ -153,7 +159,10 @@ def test_fail_closed_reason_distinct_from_policy_deny(env_home):
     policy = _deny_call(pre2)
     assert REASON_PREFIX in str(unresolved.get("message", ""))
     assert REASON_PREFIX not in str(policy.get("message", ""))
-    assert "outside allowlist" in str(policy.get("message", "")).lower() or policy.get("action") == "block"
+    assert (
+        "outside allowlist" in str(policy.get("message", "")).lower()
+        or policy.get("action") == "block"
+    )
 
 
 def test_utf8_corrupt_blocks_with_fail_closed_reason(env_home):
@@ -191,7 +200,6 @@ def test_exception_path_reconfirms_mode_before_none(env_home, monkeypatch):
     mod = _load_adapter()
     pre = _register_pre(mod)
     n = {"c": 0}
-    real_eval = None
 
     # Break evaluate after first mode resolve by replacing gate.evaluate
     # Access gate via closure is hard; instead make _extract_paths explode after mode set
