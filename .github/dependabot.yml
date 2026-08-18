@@ -1,0 +1,21 @@
+# pip looks for requirements.txt / pyproject.toml / setup.py.
+# Roofs that only ship requirements-dev.txt may get a no-op until a lockfile exists.
+# Dependabot PRs pass the floor; no bypass actor.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
