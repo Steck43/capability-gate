@@ -11,4 +11,5 @@ ignore = [
   "F402",   # loop var name field shadows import in _TRACE_FIELDS walk
   "EXE001", # shebang vs +x differs across WSL/checkout
   "EXE002", # git filemode +x noise from WSL clones
+  "FURB167", # re.I / re.M aliases fine in hook pattern banks
 ]

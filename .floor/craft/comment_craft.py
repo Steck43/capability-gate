@@ -7,6 +7,7 @@ the list\"). This gate fails those shapes in the diff hunk.
 
 Exit 0 = clean. Exit 2 = hit(s) or measurement failure.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,7 +57,12 @@ NARRATION = [
 def _run(cmd: list[str]) -> str:
     try:
         r = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
         )
     except OSError as exc:
         print(f"comment_craft: measurement failure: {exc}", file=sys.stderr)
@@ -96,7 +102,7 @@ def added_comment_lines(diff: str) -> list[tuple[str, int, str]]:
             new_line += 1
             line = raw[1:]
             stripped = line.lstrip()
-            if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("'''"):
+            if stripped.startswith(("#", '"""', "'''")):
                 out.append((path, new_line, line))
         elif raw.startswith("-"):
             continue

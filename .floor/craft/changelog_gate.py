@@ -6,6 +6,7 @@ CHANGELOG file while user-facing paths change is a fail.
 
 Exit 0 = ok. Exit 2 = mismatch or measurement failure.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,7 +32,12 @@ KEEP_A_CHANGELOG = re.compile(
 def _run(cmd: list[str]) -> tuple[int, str, str]:
     try:
         r = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
         )
     except OSError as exc:
         print(f"changelog_gate: measurement failure: {exc}", file=sys.stderr)
@@ -110,7 +116,11 @@ def main() -> int:
         )
         return EXIT_FAIL
 
-    cl_changed = any(Path(f).name in CHANGELOG_NAMES or f.endswith(n) for f in files for n in CHANGELOG_NAMES)
+    cl_changed = any(
+        Path(f).name in CHANGELOG_NAMES or f.endswith(n)
+        for f in files
+        for n in CHANGELOG_NAMES
+    )
     # Also accept path equal to changelog relative
     cl_rel = str(cl.relative_to(root)).replace("\\", "/")
     if cl_rel in files or any(f.replace("\\", "/") == cl_rel for f in files):

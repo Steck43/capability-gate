@@ -7,6 +7,7 @@ public prose so agent dumps do not pass required CI.
 
 Exit 0 = clean. Exit 2 = hit(s) or measurement failure.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -95,7 +96,12 @@ RULES: list[tuple[str, str, re.Pattern[str], str, str]] = [
 def _run(cmd: list[str]) -> str:
     try:
         r = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
         )
     except OSError as exc:
         print(f"voice_lint: measurement failure: {exc}", file=sys.stderr)
@@ -214,7 +220,10 @@ def main() -> int:
     if paths:
         hits.extend(scan_paths(paths, fail_on_warn=fail_on_warn))
     if not args.commits and not paths:
-        print("voice_lint: nothing to scan (pass --commits and/or --prose/--paths)", file=sys.stderr)
+        print(
+            "voice_lint: nothing to scan (pass --commits and/or --prose/--paths)",
+            file=sys.stderr,
+        )
         return EXIT_FAIL
     for h in hits:
         print(h, file=sys.stderr)
