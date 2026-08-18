@@ -20,3 +20,9 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Point-in-time backups of the live allowlist. Never track: this repo is
+# public, and one "git add -A" would publish operational snapshots.
+# Scanned 2026-08-17, no credentials present - policy, not incident.
+allowlist.yaml.bak-*
+*.bak-2[0-9][0-9][0-9]*
