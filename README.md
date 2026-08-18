@@ -1,5 +1,10 @@
 # capability-gate
 
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Steck43/capability-gate/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Steck43/capability-gate)
+[![floor](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml/badge.svg)](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml)
+[![License: MIT](https://img.shields.io/github/license/Steck43/capability-gate)](LICENSE)
+
+
 A deny-by-default capability gate for agent tool calls. A Hermes plugin.
 
 An agent thinks and it acts. Thinking is text and it is harmless. Acting is a tool call, and every real consequence runs through one. In most setups the line from thought to action is unbroken. The model decides to read a file, write a file, run a command, and the runtime obeys. This closes that line. The agent does not run the tool. It asks the gate, and the gate answers allow, deny, or ask. The model proposes. The gate disposes.
