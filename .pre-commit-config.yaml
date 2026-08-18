@@ -78,3 +78,17 @@ repos:
         entry: python .githooks/no_ai_trailer.py
         language: system
         stages: [commit-msg]
+
+      - id: craft-voice-prose
+        name: craft voice (prose files)
+        entry: python .floor/craft/voice_lint.py --prose --fail-on-warn
+        language: system
+        pass_filenames: false
+        files: '(CHANGELOG|README|\.md)$'
+
+      - id: craft-comments-staged
+        name: craft comments (staged py diff)
+        entry: python .floor/craft/comment_craft_staged.py
+        language: system
+        pass_filenames: false
+        types: [python]
