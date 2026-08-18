@@ -8,6 +8,13 @@ from pathlib import Path
 import pytest
 import yaml
 
+# These three tests drive the real hermes_cli config path. Without a Hermes
+# install they raise ModuleNotFoundError rather than skipping, which turned a
+# green suite red the moment this file shipped. This is the same guard
+# test_adapter.py already uses for the same dependency, so the suite now
+# behaves identically with or without Hermes present.
+pytest.importorskip("hermes_cli", reason="mode-staleness tests require a Hermes install")
+
 
 @pytest.fixture
 def cg_home(tmp_path, monkeypatch):
