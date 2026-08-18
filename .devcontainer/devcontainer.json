@@ -1,0 +1,11 @@
+{
+  "name": "capability-gate",
+  "image": "mcr.microsoft.com/devcontainers/python@sha256:7876580dc67fd460fd962f004cbeb480027e9bbc0657096f1087db11f9eaff39",
+  "postCreateCommand": "python -m pip install --upgrade pip && if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi && pip install pre-commit ruff && curl -sSfL -o /tmp/gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz && echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz' | sha256sum -c && sudo tar -xz -C /usr/local/bin -f /tmp/gitleaks.tgz gitleaks && python -m pre_commit install && python -m pre_commit install --hook-type commit-msg && python -m pre_commit install --hook-type pre-push",
+  "customizations": {
+    "vscode": {
+      "extensions": ["charliermarsh.ruff", "ms-python.python"]
+    }
+  },
+  "remoteUser": "vscode"
+}
