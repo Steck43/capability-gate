@@ -9,4 +9,6 @@ ignore = [
   "SIM102", # nested path-key checks stay readable
   "SIM118", # args.keys() enumeration is intentional shape
   "F402",   # loop var name field shadows import in _TRACE_FIELDS walk
+  "EXE001", # shebang vs +x differs across WSL/checkout
+  "EXE002", # git filemode +x noise from WSL clones
 ]

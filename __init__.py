@@ -151,6 +151,14 @@ def register(ctx) -> None:
             if unresolved:
                 return _BLOCK(unresolved)
             if mode_now == "observe":
+                # E3: reconfirm before observe fail-open when gate failed to load.
+                mode2, unresolved2 = resolve_capability_gate_mode()
+                if unresolved2:
+                    return _BLOCK(unresolved2)
+                if mode2 == "enforce":
+                    return _BLOCK(
+                        f"capability-gate failed to load, failing closed: {load_error}"
+                    )
                 return None
             return _BLOCK(
                 f"capability-gate failed to load, failing closed: {load_error}"
@@ -182,6 +190,22 @@ def register(ctx) -> None:
                 args=args if isinstance(args, dict) else None,
             )
             if decision.verdict.value == "allow":
+                # E3: reconfirm before observe allow-passthrough (same TOCTOU as deny).
+                if mode == "observe":
+                    mode2, unresolved2 = resolve_capability_gate_mode()
+                    if unresolved2:
+                        return _BLOCK(unresolved2)
+                    if mode2 == "enforce":
+                        gate.set_mode(mode2)
+                        decision2 = gate.evaluate(
+                            skill,
+                            tool_name,
+                            paths,
+                            trace=_extract_trace(kwargs, task_id),
+                            args=args if isinstance(args, dict) else None,
+                        )
+                        if decision2.verdict.value != "allow":
+                            return _BLOCK(decision2.reason)
                 return None
             if not decision.enforced:
                 # E3: reconfirm before observe passthrough — close mid-call enforce flip.
