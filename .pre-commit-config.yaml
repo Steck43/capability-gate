@@ -1,0 +1,80 @@
+# Repo floor - local layer.
+#
+# This is the FAST layer, not the enforcing one. `git commit --no-verify`
+# bypasses every hook here, so nothing in this file is a control. It exists to
+# catch the 95% cheaply, at the moment a mistake is made, when it costs seconds
+# to fix instead of a history rewrite.
+#
+# The actual floor is .github/workflows/floor.yml, which cannot be bypassed by
+# the person committing. Same argument as the capability gate: the thing being
+# guarded must not be the thing deciding.
+#
+# Install into a repo:
+#   python -m pre_commit install
+#   python -m pre_commit install --hook-type commit-msg
+#   python -m pre_commit install --hook-type pre-push
+#
+# NETWORK NOTE, measured 2026-08-18. The upstream hook repos build their tools
+# from source on first run. On this host that fails: the gitleaks hook compiles
+# Go and every module fetch to proxy.golang.org times out against the egress
+# rules. Worse, the failure exited 0 through a pipe, so a broken install looked
+# like a successful one - a false green inside the thing built to stop false
+# greens.
+#
+# So the tools below are invoked as SYSTEM binaries that are already installed
+# and version-checked, not built on demand. Verified present on this host:
+#   gitleaks 8.30.1, ruff 0.15.15 (module only - invoked as `python -m ruff`,
+#   the bare `ruff` executable is NOT on PATH here), mypy 2.1.0, pytest 9.0.3
+#
+# FALSE GREEN, measured 2026-08-18: `gitleaks protect --staged` reads the index.
+# `pre-commit run --all-files` stages nothing → 0 bytes scanned, exit 0. The
+# pre-push `gitleaks dir .` hook closes that for the push path. CI full-history
+# remains the control.
+
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks-system
+        name: gitleaks (staged changes)
+        entry: gitleaks protect --staged --redact --no-banner
+        language: system
+        pass_filenames: false
+
+      - id: gitleaks-dir-pre-push
+        name: gitleaks (working tree on push)
+        entry: gitleaks dir . --redact --no-banner
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: ruff-system
+        name: ruff check
+        entry: python3 -m ruff check --fix
+        language: system
+        types: [python]
+
+      - id: ruff-format-system
+        name: ruff format
+        entry: python3 -m ruff format
+        language: system
+        types: [python]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=5000]
+      - id: fix-byte-order-marker
+      - id: check-yaml
+      - id: check-json
+
+  - repo: local
+    hooks:
+      - id: no-ai-trailer
+        name: no AI authorship trailer
+        entry: python .githooks/no_ai_trailer.py
+        language: system
+        stages: [commit-msg]
