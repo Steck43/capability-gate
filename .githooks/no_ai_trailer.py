@@ -34,14 +34,13 @@ PATTERNS = [
         re.compile(
             r"^\s*co-authored-by:.*"
             r"(claude|cursor|copilot|gpt|chatgpt|gemini|assistant|\bbot\b|\bai\b)",
-            re.IGNORECASE | re.MULTILINE,
+            re.I | re.M,
         ),
         "AI co-author trailer",
     ),
     (
         re.compile(
-            r"generated with .{0,40}(claude|cursor|copilot|chatgpt|gemini)",
-            re.IGNORECASE,
+            r"generated with .{0,40}(claude|cursor|copilot|chatgpt|gemini)", re.I
         ),
         "generated-with attribution",
     ),
@@ -50,7 +49,7 @@ PATTERNS = [
         re.compile(
             r"^\s*(assisted|authored)[- ]by:.*"
             r"(claude|cursor|copilot|gpt|gemini)",
-            re.IGNORECASE | re.MULTILINE,
+            re.I | re.M,
         ),
         "AI assistance trailer",
     ),
