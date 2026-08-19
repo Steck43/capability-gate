@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Senior craft floor: craft (voice), craft (changelog), craft (comments) required CI jobs.
+- `.gitattributes` so text files stay LF and Windows scripts stay CRLF.
+- Weekly Dependabot for GitHub Actions and pip, with a 7-day cooldown. Dependabot PRs still pass the floor; no bypass actor.
+- SECURITY.md. Reports go through GitHub private vulnerability reporting, not a public issue.
 - Workflow lint job: zizmor (SHA-pinned) plus actionlint 1.7.12 with a baked checksum.
 
 ### Changed
