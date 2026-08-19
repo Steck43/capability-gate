@@ -7,22 +7,33 @@ That skip is not a BREAK. This job is the named empty-diff BREAK:
   workflow job: craft (empty-diff)
   python:       .floor/craft/empty_diff_gate.py
 
+Scope: pull requests only. On push, schedule and workflow_dispatch there is no
+meaningful base — BASE resolves to origin/main, which on a push to main is head, so
+the range is empty by definition rather than by defect. The workflow guards this job
+with `if: github.event_name == 'pull_request'` for that reason. Not-applicable and
+violated are different states, and a gate that cannot tell them apart goes red on
+everything, which is as useless as green on nothing.
+
 Exit 0 = range has at least one path. Exit 2 = empty diff or measurement failure.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
+import pathlib
 import subprocess
 import sys
+import tempfile
 
 EXIT_FAIL = 2
 
 
-def _run(cmd: list[str]) -> tuple[int, str, str]:
+def _run(cmd: list[str], *, cwd: str | None = None) -> tuple[int, str, str]:
     try:
         r = subprocess.run(
             cmd,
+            cwd=cwd,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -35,19 +46,80 @@ def _run(cmd: list[str]) -> tuple[int, str, str]:
     return r.returncode, r.stdout or "", r.stderr or ""
 
 
-def changed_files(base: str, head: str) -> list[str]:
-    rc, out, err = _run(["git", "diff", "--name-only", f"{base}...{head}"])
+def changed_files(base: str, head: str) -> tuple[list[str], str]:
+    """Return (paths, range_actually_used).
+
+    Three-dot is tried first and two-dot is the fallback. The caller reports which one
+    produced the answer, because naming a range that was not used misleads exactly the
+    person reading a failure.
+    """
+    rng = f"{base}...{head}"
+    rc, out, err = _run(["git", "diff", "--name-only", rng])
     if rc != 0:
-        rc, out, err = _run(["git", "diff", "--name-only", f"{base}..{head}"])
+        rng = f"{base}..{head}"
+        rc, out, err = _run(["git", "diff", "--name-only", rng])
     if rc != 0:
         print(f"empty_diff_gate: cannot list changed files: {err}", file=sys.stderr)
         raise SystemExit(EXIT_FAIL)
-    return [line.strip() for line in out.splitlines() if line.strip()]
+    return [line.strip() for line in out.splitlines() if line.strip()], rng
 
 
 def selftest() -> int:
-    print("ok empty_diff_gate selftest (no git range)")
-    return 0
+    """Forced-red and must-not-fire cases against a throwaway repository.
+
+    A gate whose selftest only prints ok is the shape this gate exists to catch. It has
+    to be made to fail on purpose, and it has to stay quiet when a range legitimately
+    contains changes. Both cases run the CLI (`main` via this file) so a PASS is an
+    exit code, not an empty list from a helper.
+    """
+    failures = 0
+    script = str(pathlib.Path(__file__).resolve())
+    with tempfile.TemporaryDirectory() as repo:
+
+        def git(*args: str) -> tuple[int, str, str]:
+            rc, out, err = _run(["git", "-C", repo, *args])
+            if rc != 0:
+                print(
+                    f"empty_diff_gate selftest: git {' '.join(args)} failed: {err}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(EXIT_FAIL)
+            return rc, out, err
+
+        git("init", "-q", "-b", "main")
+        git("config", "user.email", "selftest@local")
+        git("config", "user.name", "selftest")
+        pathlib.Path(repo, "a.txt").write_text("one" + os.linesep, encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-q", "-m", "base")
+        base = git("rev-parse", "HEAD")[1].strip()
+
+        pathlib.Path(repo, "b.txt").write_text("two" + os.linesep, encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-q", "-m", "change")
+        head = git("rev-parse", "HEAD")[1].strip()
+
+        def run_gate(*args: str) -> tuple[int, str, str]:
+            return _run([sys.executable, script, *args], cwd=repo)
+
+        rc, out, _err = run_gate("--base", base, "--head", "HEAD")
+        ok = rc == 0
+        failures += 0 if ok else 1
+        print(
+            f"  {'ok  ' if ok else 'FAIL'} must-not-fire: real change CLI exit {rc} "
+            f"(want 0) {out.strip()}"
+        )
+
+        rc, _out, err = run_gate("--base", head, "--head", "HEAD")
+        red = rc == EXIT_FAIL
+        failures += 0 if red else 1
+        print(
+            f"  {'ok  ' if red else 'FAIL'} forced-red: base==head CLI exit {rc} "
+            f"(want {EXIT_FAIL}) {err.strip()}"
+        )
+
+    print(f"\n{2 - failures}/2 selftest cases correct")
+    return 0 if failures == 0 else EXIT_FAIL
 
 
 def main() -> int:
@@ -59,15 +131,15 @@ def main() -> int:
     if args.selftest:
         return selftest()
 
-    files = changed_files(args.base, args.head)
+    files, rng = changed_files(args.base, args.head)
     if not files:
         print(
             "empty_diff_gate: FAIL empty diff "
-            f"({args.base}...{args.head}). changelog_gate skip-green is not this job.",
+            f"({rng}). changelog_gate skip-green is not this job.",
             file=sys.stderr,
         )
         return EXIT_FAIL
-    print(f"empty_diff_gate: ok ({len(files)} paths)")
+    print(f"empty_diff_gate: ok ({len(files)} paths, {rng})")
     return 0
 
 
