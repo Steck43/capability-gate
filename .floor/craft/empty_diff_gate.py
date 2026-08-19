@@ -72,6 +72,7 @@ def selftest() -> int:
     """
     failures = 0
     with tempfile.TemporaryDirectory() as repo:
+
         def git(*args: str) -> tuple[int, str, str]:
             return _run(["git", "-C", repo, *args])
 
@@ -95,14 +96,18 @@ def selftest() -> int:
             files, rng = changed_files(base, "HEAD")
             ok = bool(files)
             failures += 0 if ok else 1
-            print(f"  {'ok  ' if ok else 'FAIL'} must-not-fire: real change reports "
-                  f"{len(files)} path(s) [{rng}]")
+            print(
+                f"  {'ok  ' if ok else 'FAIL'} must-not-fire: real change reports "
+                f"{len(files)} path(s) [{rng}]"
+            )
 
             files, rng = changed_files(head, "HEAD")
             red = not files
             failures += 0 if red else 1
-            print(f"  {'ok  ' if red else 'FAIL'} forced-red: base==head reports empty "
-                  f"[{rng}], gate returns {EXIT_FAIL}")
+            print(
+                f"  {'ok  ' if red else 'FAIL'} forced-red: base==head reports empty "
+                f"[{rng}], gate returns {EXIT_FAIL}"
+            )
         finally:
             os.chdir(cwd)
 
