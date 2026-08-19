@@ -1,0 +1,17 @@
+{
+  "title": "capability-gate",
+  "upload_type": "software",
+  "creators": [
+    {
+      "name": "Stecker, Landen"
+    }
+  ],
+  "license": "MIT",
+  "keywords": [
+    "capability gate",
+    "agent security",
+    "least privilege",
+    "hermes"
+  ],
+  "description": "A deny-by-default capability gate for agent tool calls. The model proposes; deterministic code decides allow, deny, or ask."
+}
