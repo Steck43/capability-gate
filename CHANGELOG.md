@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Test fixtures no longer carry the author's home directory. `test_report.py` used a real home path as sample data and now uses a neutral one under `/home/agent/`. A home directory is not a credential, so `gitleaks` was green on it; the estate publish gate treats host paths as their own class. A changelog that quotes the removed string republishes it, so this entry names the change without reproducing the path.
+
 ### Added
 
 - Named empty-diff BREAK: CI job `craft (empty-diff)` runs `.floor/craft/empty_diff_gate.py`. An empty `base...head` range fails. `changelog_gate` skip-green on non-user-facing ranges is a different job and is not this BREAK. The job runs on pull requests only: on push, schedule and workflow_dispatch the base resolves to `origin/main`, which on a push to main is head, so the range is empty by definition rather than by defect. Its selftest carries a forced-red case and a must-not-fire case.
