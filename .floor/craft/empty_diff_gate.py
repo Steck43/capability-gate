@@ -29,10 +29,11 @@ import tempfile
 EXIT_FAIL = 2
 
 
-def _run(cmd: list[str]) -> tuple[int, str, str]:
+def _run(cmd: list[str], *, cwd: str | None = None) -> tuple[int, str, str]:
     try:
         r = subprocess.run(
             cmd,
+            cwd=cwd,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -68,13 +69,22 @@ def selftest() -> int:
 
     A gate whose selftest only prints ok is the shape this gate exists to catch. It has
     to be made to fail on purpose, and it has to stay quiet when a range legitimately
-    contains changes.
+    contains changes. Both cases run the CLI (`main` via this file) so a PASS is an
+    exit code, not an empty list from a helper.
     """
     failures = 0
+    script = str(pathlib.Path(__file__).resolve())
     with tempfile.TemporaryDirectory() as repo:
 
         def git(*args: str) -> tuple[int, str, str]:
-            return _run(["git", "-C", repo, *args])
+            rc, out, err = _run(["git", "-C", repo, *args])
+            if rc != 0:
+                print(
+                    f"empty_diff_gate selftest: git {' '.join(args)} failed: {err}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(EXIT_FAIL)
+            return rc, out, err
 
         git("init", "-q", "-b", "main")
         git("config", "user.email", "selftest@local")
@@ -89,27 +99,24 @@ def selftest() -> int:
         git("commit", "-q", "-m", "change")
         head = git("rev-parse", "HEAD")[1].strip()
 
-        cwd = os.getcwd()
-        try:
-            os.chdir(repo)
+        def run_gate(*args: str) -> tuple[int, str, str]:
+            return _run([sys.executable, script, *args], cwd=repo)
 
-            files, rng = changed_files(base, "HEAD")
-            ok = bool(files)
-            failures += 0 if ok else 1
-            print(
-                f"  {'ok  ' if ok else 'FAIL'} must-not-fire: real change reports "
-                f"{len(files)} path(s) [{rng}]"
-            )
+        rc, out, _err = run_gate("--base", base, "--head", "HEAD")
+        ok = rc == 0
+        failures += 0 if ok else 1
+        print(
+            f"  {'ok  ' if ok else 'FAIL'} must-not-fire: real change CLI exit {rc} "
+            f"(want 0) {out.strip()}"
+        )
 
-            files, rng = changed_files(head, "HEAD")
-            red = not files
-            failures += 0 if red else 1
-            print(
-                f"  {'ok  ' if red else 'FAIL'} forced-red: base==head reports empty "
-                f"[{rng}], gate returns {EXIT_FAIL}"
-            )
-        finally:
-            os.chdir(cwd)
+        rc, _out, err = run_gate("--base", head, "--head", "HEAD")
+        red = rc == EXIT_FAIL
+        failures += 0 if red else 1
+        print(
+            f"  {'ok  ' if red else 'FAIL'} forced-red: base==head CLI exit {rc} "
+            f"(want {EXIT_FAIL}) {err.strip()}"
+        )
 
     print(f"\n{2 - failures}/2 selftest cases correct")
     return 0 if failures == 0 else EXIT_FAIL
