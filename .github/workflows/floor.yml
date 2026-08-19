@@ -11,16 +11,24 @@
 # Action pins are commit SHAs (Hermes / estate supply-chain policy). Bump by
 # resolving a release tag to its peeled commit, then editing both the SHA and
 # the trailing version comment.
+#
+# Craft BASE (2026-08-18): on pull_request use the PR base SHA; on push use
+# github.event.before. Never fall back to the root commit. Empty range
+# (BASE == HEAD) exits 3 — that is "nothing in scope", not success.
 
 name: floor
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
   schedule:
     - cron: "17 9 * * 1"
+
+concurrency:
+  group: floor-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -28,22 +36,26 @@ permissions:
 jobs:
   secrets:
     name: secrets (gitleaks)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   authorship:
     name: authorship (no AI trailers)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: check commit messages in history
         run: |
           if git log --all --format=%B | grep -inE \
@@ -55,6 +67,7 @@ jobs:
 
   tests:
     name: tests
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -62,16 +75,29 @@ jobs:
         python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python }}
       - name: install
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
-          if [ -f pyproject.toml ]; then pip install -e . || true; fi
+          INSTALLED=
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+            INSTALLED="${INSTALLED}+requirements"
+          fi
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+            INSTALLED="${INSTALLED}+requirements-dev"
+          fi
+          if [ -f pyproject.toml ]; then
+            pip install -e .
+            INSTALLED="${INSTALLED}+pyproject"
+          fi
           pip install pytest
+          echo "install-branch: ${INSTALLED:-none-only-pytest}"
       - name: pytest
         # Do NOT add a step that installs the host agent to make skipped tests
         # run. On capability-gate that turns a green 37-passed/2-skipped suite
@@ -81,9 +107,12 @@ jobs:
 
   lint:
     name: lint (ruff)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
@@ -93,15 +122,21 @@ jobs:
 
   craft-voice:
     name: craft (voice)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: voice lint (commits + prose)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           if [ -f .floor/craft/voice_lint.py ]; then V=.floor/craft/voice_lint.py
           elif [ -f craft/voice_lint.py ]; then V=craft/voice_lint.py
@@ -109,21 +144,50 @@ jobs:
             echo "::error::voice_lint.py missing from roof (install_floor craft pack)"
             exit 1
           fi
-          BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
-          git rev-parse --verify "$BASE" >/dev/null 2>&1 || BASE="$(git rev-list --max-parents=0 HEAD | tail -1)"
+          ZERO=0000000000000000000000000000000000000000
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$PR_BASE" ]; then
+            BASE="$PR_BASE"
+          elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ]; then
+            BASE="$PUSH_BEFORE"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "schedule" ]; then
+            if git rev-parse --verify origin/main >/dev/null 2>&1; then
+              BASE=origin/main
+            else
+              echo "::error::cannot determine BASE"
+              exit 3
+            fi
+          else
+            echo "::error::cannot determine BASE event=$EVENT_NAME"
+            exit 3
+          fi
+          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+            echo "::error::BASE does not resolve: $BASE"
+            exit 3
+          fi
+          if [ "$(git rev-parse "$BASE")" = "$(git rev-parse HEAD)" ]; then
+            echo "::error::empty range BASE==HEAD; craft would inspect nothing"
+            exit 3
+          fi
+          echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
           python "$V" --commits --base "$BASE" --head HEAD --prose --fail-on-warn
 
   craft-changelog:
     name: craft (changelog)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: changelog gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           if [ -f .floor/craft/changelog_gate.py ]; then C=.floor/craft/changelog_gate.py
           elif [ -f craft/changelog_gate.py ]; then C=craft/changelog_gate.py
@@ -131,21 +195,50 @@ jobs:
             echo "::error::changelog_gate.py missing from roof"
             exit 1
           fi
-          BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
-          git rev-parse --verify "$BASE" >/dev/null 2>&1 || BASE="$(git rev-list --max-parents=0 HEAD | tail -1)"
+          ZERO=0000000000000000000000000000000000000000
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$PR_BASE" ]; then
+            BASE="$PR_BASE"
+          elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ]; then
+            BASE="$PUSH_BEFORE"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "schedule" ]; then
+            if git rev-parse --verify origin/main >/dev/null 2>&1; then
+              BASE=origin/main
+            else
+              echo "::error::cannot determine BASE"
+              exit 3
+            fi
+          else
+            echo "::error::cannot determine BASE event=$EVENT_NAME"
+            exit 3
+          fi
+          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+            echo "::error::BASE does not resolve: $BASE"
+            exit 3
+          fi
+          if [ "$(git rev-parse "$BASE")" = "$(git rev-parse HEAD)" ]; then
+            echo "::error::empty range BASE==HEAD; craft would inspect nothing"
+            exit 3
+          fi
+          echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
           python "$C" --base "$BASE" --head HEAD
 
   craft-comments:
     name: craft (comments)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: comment craft
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           if [ -f .floor/craft/comment_craft.py ]; then C=.floor/craft/comment_craft.py
           elif [ -f craft/comment_craft.py ]; then C=craft/comment_craft.py
@@ -153,12 +246,36 @@ jobs:
             echo "::error::comment_craft.py missing from roof"
             exit 1
           fi
-          BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
-          git rev-parse --verify "$BASE" >/dev/null 2>&1 || BASE="$(git rev-list --max-parents=0 HEAD | tail -1)"
+          ZERO=0000000000000000000000000000000000000000
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$PR_BASE" ]; then
+            BASE="$PR_BASE"
+          elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ]; then
+            BASE="$PUSH_BEFORE"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "schedule" ]; then
+            if git rev-parse --verify origin/main >/dev/null 2>&1; then
+              BASE=origin/main
+            else
+              echo "::error::cannot determine BASE"
+              exit 3
+            fi
+          else
+            echo "::error::cannot determine BASE event=$EVENT_NAME"
+            exit 3
+          fi
+          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+            echo "::error::BASE does not resolve: $BASE"
+            exit 3
+          fi
+          if [ "$(git rev-parse "$BASE")" = "$(git rev-parse HEAD)" ]; then
+            echo "::error::empty range BASE==HEAD; craft would inspect nothing"
+            exit 3
+          fi
+          echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
           python "$C" --base "$BASE" --head HEAD
 
   craft-empty-diff:
     name: craft (empty-diff)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     # Pull requests only. On push/schedule/dispatch there is no meaningful base:
     # BASE resolves to origin/main, which on a push to main IS head, so the range is
@@ -170,6 +287,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
@@ -184,3 +302,25 @@ jobs:
           BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
           git rev-parse --verify "$BASE" >/dev/null 2>&1 || BASE="$(git rev-list --max-parents=0 HEAD | tail -1)"
           python "$C" --base "$BASE" --head HEAD
+
+  workflow-lint:
+    name: workflow (zizmor + actionlint)
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: zizmor
+        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
+        with:
+          advanced-security: false
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          curl -sSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o /tmp/actionlint.tgz
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz" | sha256sum -c -
+          tar -C /tmp -xzf /tmp/actionlint.tgz actionlint
+          /tmp/actionlint -color

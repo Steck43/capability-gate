@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+title: capability-gate
+message: If you use this software, please cite it as below.
+type: software
+authors:
+  - family-names: Stecker
+    given-names: Landen
+license: MIT
+repository-code: https://github.com/Steck43/capability-gate
+abstract: >
+  A deny-by-default capability gate for agent tool calls. The model proposes;
+  deterministic code decides allow, deny, or ask.
+keywords:
+  - capability gate
+  - agent security
+  - least privilege
+  - hermes
