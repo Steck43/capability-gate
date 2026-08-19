@@ -160,6 +160,12 @@ jobs:
   craft-empty-diff:
     name: craft (empty-diff)
     runs-on: ubuntu-latest
+    # Pull requests only. On push/schedule/dispatch there is no meaningful base:
+    # BASE resolves to origin/main, which on a push to main IS head, so the range is
+    # empty by definition rather than by defect. Running this job there would make the
+    # floor permanently red on the default branch, which trains people to ignore it.
+    # Not-applicable and violated are different states.
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
