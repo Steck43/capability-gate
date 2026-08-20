@@ -186,7 +186,7 @@ def scan_emdash(label: str, text: str) -> list[str]:
             if stripped in ("---", "..."):
                 in_frontmatter = False
             continue
-        if stripped.startswith("```") or stripped.startswith("~~~"):
+        if stripped.startswith(("```", "~~~")):
             in_fence = not in_fence
             continue
         if in_fence or EMDASH not in line:
@@ -239,7 +239,7 @@ def mask_non_prose(text: str) -> str:
                 in_frontmatter = False
             out.append(_blank(line))
             continue
-        if stripped.startswith("```") or stripped.startswith("~~~"):
+        if stripped.startswith(("```", "~~~")):
             in_fence = not in_fence
             out.append(_blank(line))
             continue
@@ -325,7 +325,7 @@ def selftest() -> int:
     )
     expect(
         "ok-vocab-in-code-span",
-        "Plant `Additionally, this pivotal landscape` in a README to prove it goes red.",
+        "Plant `Additionally, this pivotal landscape` in a README to prove it reds.",
         False,
     )
     expect(
