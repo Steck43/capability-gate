@@ -12,10 +12,16 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from comment_craft import scan_diff  # noqa: E402
-
 
 def main() -> int:
+    # Imported here rather than at module level because it only resolves after
+    # the sys.path insert above. At module level it needs a `noqa: E402`, and a
+    # suppression is a claim about which rules a roof enables: capability-gate
+    # reported RUF100 on that exact directive because E402 is not enabled in
+    # its config, so the shipped file linted clean on four roofs and red on the
+    # fifth. A local import needs no suppression and is right everywhere.
+    from comment_craft import scan_diff
+
     diff = (
         subprocess.run(
             ["git", "diff", "--cached", "-U3"],
