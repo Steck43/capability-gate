@@ -10,3 +10,12 @@
 *.bat  text eol=crlf
 *.png  binary
 *.pdf  binary
+
+# Evidence is bytes, not text. Everything above normalises line endings on
+# commit, which silently rewrites a file after it was produced: a receipt
+# hashed at generation time would then no longer match the bytes git stores.
+# That is the SHA256SUMS defect one layer down. `-text` passes the bytes
+# through untouched. owasp-dual-top10-lab reached this first, for
+# evidence/receipts/live; the pattern is widened here because aegis-atoms and
+# newwave publish receipts under evidence/ too.
+evidence/**/*.json -text

@@ -30,7 +30,7 @@ Local mirrors: pre-commit hooks calling the same scripts (convenience only; CI i
 
 ## Negative controls
 
-1. Plant “Additionally, this pivotal landscape…” in a README → `craft (voice)` red.
+1. Plant `Additionally, this pivotal landscape…` in a README → `craft (voice)` red.
 2. Touch `src/` without CHANGELOG delta → `craft (changelog)` red.
 3. Add `# This function reads the file` above a def → `craft (comments)` red.
 4. Clean senior-style why-comment + CHANGELOG entry → all green.
