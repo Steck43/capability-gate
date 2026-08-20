@@ -149,6 +149,15 @@ jobs:
             BASE="$PR_BASE"
           elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ]; then
             BASE="$PUSH_BEFORE"
+          elif [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" = "$ZERO" ]; then
+            if git rev-parse --verify origin/HEAD >/dev/null 2>&1; then
+              BASE=$(git rev-parse origin/HEAD)
+            elif git rev-parse --verify origin/main >/dev/null 2>&1; then
+              BASE=origin/main
+            else
+              echo "::error::first push of a new branch and no origin default"
+              exit 3
+            fi
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "schedule" ]; then
             if git rev-parse --verify origin/main >/dev/null 2>&1; then
               BASE=origin/main
@@ -200,6 +209,15 @@ jobs:
             BASE="$PR_BASE"
           elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ]; then
             BASE="$PUSH_BEFORE"
+          elif [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" = "$ZERO" ]; then
+            if git rev-parse --verify origin/HEAD >/dev/null 2>&1; then
+              BASE=$(git rev-parse origin/HEAD)
+            elif git rev-parse --verify origin/main >/dev/null 2>&1; then
+              BASE=origin/main
+            else
+              echo "::error::first push of a new branch and no origin default"
+              exit 3
+            fi
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "schedule" ]; then
             if git rev-parse --verify origin/main >/dev/null 2>&1; then
               BASE=origin/main
@@ -251,6 +269,15 @@ jobs:
             BASE="$PR_BASE"
           elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ]; then
             BASE="$PUSH_BEFORE"
+          elif [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" = "$ZERO" ]; then
+            if git rev-parse --verify origin/HEAD >/dev/null 2>&1; then
+              BASE=$(git rev-parse origin/HEAD)
+            elif git rev-parse --verify origin/main >/dev/null 2>&1; then
+              BASE=origin/main
+            else
+              echo "::error::first push of a new branch and no origin default"
+              exit 3
+            fi
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "schedule" ]; then
             if git rev-parse --verify origin/main >/dev/null 2>&1; then
               BASE=origin/main
