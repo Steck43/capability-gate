@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- First push of a new branch resolves craft BASE to the origin default, so required craft jobs do not fail on an all-zero `github.event.before`.
 - Test fixtures no longer carry the author's home directory. `test_report.py` used a real home path as sample data and now uses a neutral one under `/home/agent/`. A home directory is not a credential, so `gitleaks` was green on it; the estate publish gate treats host paths as their own class. A changelog that quotes the removed string republishes it, so this entry names the change without reproducing the path.
 
 ### Added
