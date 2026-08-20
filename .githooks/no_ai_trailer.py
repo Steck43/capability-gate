@@ -78,7 +78,9 @@ def main(argv: list[str]) -> int:
         return 1
 
     # Ignore the comment block git appends; it is not part of the message.
-    body = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+    body = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
 
     hits = check(body)
     if not hits:

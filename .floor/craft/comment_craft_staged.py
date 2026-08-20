@@ -12,7 +12,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from comment_craft import scan_diff
+from comment_craft import scan_diff  # noqa: E402
 
 
 def main() -> int:
