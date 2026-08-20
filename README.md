@@ -5,9 +5,7 @@
 [![License: MIT](https://img.shields.io/github/license/Steck43/capability-gate)](LICENSE)
 
 
-A deny-by-default capability gate for agent tool calls. A Hermes plugin.
-
-An agent thinks and it acts. Thinking is text and it is harmless. Acting is a tool call, and every real consequence runs through one. In most setups the line from thought to action is unbroken. The model decides to read a file, write a file, run a command, and the runtime obeys. This closes that line. The agent does not run the tool. It asks the gate, and the gate answers allow, deny, or ask. The model proposes. The gate disposes.
+A deny-by-default capability gate sits on the Hermes `pre_tool_call` hook and answers allow, deny, or ask before a tool runs. An agent thinks in text, and every real consequence is a tool call; in most setups that line is unbroken, because the model decides to read, write, or run, and the runtime obeys. This repository closes that line: the agent does not run the tool, it asks the gate, and the model proposes while the gate disposes.
 
 ## Why
 
@@ -28,9 +26,7 @@ The gate sits on the Hermes `pre_tool_call` hook and enforces one file: an allow
 
 ## Rollout
 
-Two modes make rollout safe. Observe decides and logs exactly as it would, and blocks nothing. Enforce acts on the decision.
-
-The intended rollout is observe first. Run observe. Read the log. Write the grants to match what the agent actually does. Adjudicate would-denies. Then flip to enforce. `report.py` reads the decision log and surfaces the grant gap, the tools and paths used but not yet granted, so the enforce allowlist is distilled from real behavior instead of guessed. Observe protects nothing by design. Protection is an enforce-mode property. Do not lean on observe.
+Two modes make rollout safe. Observe decides and logs exactly as it would, and blocks nothing. Enforce acts on the decision. The intended rollout is observe first: run observe, read the log, write the grants to match what the agent actually does, adjudicate would-denies, then flip to enforce. `report.py` reads the decision log and surfaces the grant gap, the tools and paths used but not yet granted, so the enforce allowlist is distilled from real behavior instead of guessed. Observe protects nothing by design. Protection is an enforce-mode property.
 
 The allowlist is not frozen at the flip. After enforce, grants can keep training from live behavior under the same deny-by-default rule.
 

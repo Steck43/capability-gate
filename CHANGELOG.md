@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- README leads with the unbroken thought-to-action line and drops the supervisory observe order. The Why section is unchanged.
 - Floor push trigger is `main` only, with a concurrency group that cancels in-progress runs.
 - Craft jobs resolve BASE from the PR base SHA or `github.event.before`. Empty range exits 3 instead of passing on nothing. Root-commit fallback removed.
 
