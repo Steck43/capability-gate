@@ -16,10 +16,22 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-ROOF = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOF))
 
-from capability_gate import ENFORCE, Gate, Verdict, load_policy
+def _roof() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _load_gate():
+    roof = _roof()
+    if str(roof) not in sys.path:
+        sys.path.insert(0, str(roof))
+    from capability_gate import ENFORCE, Gate, Verdict, load_policy
+
+    return ENFORCE, Gate, Verdict, load_policy
+
+
+ENFORCE, Gate, Verdict, load_policy = _load_gate()
+ROOF = _roof()
 
 POLICY = {
     "require_approval": ["execute_code", "delete_file"],
@@ -135,11 +147,43 @@ def run_cases(log_path: Path) -> list[CaseResult]:
             )
         )
 
-    one("A1", "A", "unlisted-skill", "read_file", [home(".hermes", "notes", "a.md")], "deny", notes="unknown skill")
-    one("A2", "A", "note-taker", "read_file", [home(".ssh", "id_rsa")], "deny", notes="cred path outside grant")
+    one(
+        "A1",
+        "A",
+        "unlisted-skill",
+        "read_file",
+        [home(".hermes", "notes", "a.md")],
+        "deny",
+        notes="unknown skill",
+    )
+    one(
+        "A2",
+        "A",
+        "note-taker",
+        "read_file",
+        [home(".ssh", "id_rsa")],
+        "deny",
+        notes="cred path outside grant",
+    )
     one("A3", "A", "note-taker", "web_search", [], "deny", notes="tool not granted")
-    one("A4", "A", "note-taker", "write_file", [home(".hermes", "config.yaml")], "deny", notes="config outside notes/**")
-    one("A5", "A", "note-taker", "read_file", [home(".hermes", "notes", "ok.md")], "allow", notes="benign allow")
+    one(
+        "A4",
+        "A",
+        "note-taker",
+        "write_file",
+        [home(".hermes", "config.yaml")],
+        "deny",
+        notes="config outside notes/**",
+    )
+    one(
+        "A5",
+        "A",
+        "note-taker",
+        "read_file",
+        [home(".hermes", "notes", "ok.md")],
+        "allow",
+        notes="benign allow",
+    )
 
     one(
         "B1a",
