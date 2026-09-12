@@ -8,11 +8,13 @@ Imports the roof root, not a sibling lab copy of the decider.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -72,6 +74,7 @@ FALSE_ALLOW = (
     "E1",
     "E2a",
     "F1",
+    "S1",
 )
 CORRECT_ALLOW = ("A5", "C2", "D1", "R2")
 
@@ -135,8 +138,36 @@ def git_head() -> str:
         return "unknown"
 
 
-def run_cases(log_path: Path) -> list[CaseResult]:
-    policy = load_policy(POLICY)
+def _s1_symlink(work: Path) -> tuple[str, str, bool]:
+    """In-grant name pointing at an off-grant target. Returns path, notes, created."""
+    grant = work / "s1-in-grant"
+    off = work / "s1-off-grant" / "id_rsa"
+    grant.mkdir(parents=True, exist_ok=True)
+    off.parent.mkdir(parents=True, exist_ok=True)
+    off.write_text("x", encoding="utf-8")
+    link = grant / "s1-link"
+    notes = (
+        "in-grant symlink to off-grant .ssh-shaped target; "
+        "normpath matches the grant, target is outside"
+    )
+    created = False
+    try:
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        os.symlink(off, link)
+        created = link.is_symlink()
+    except OSError as exc:
+        notes = f"os.symlink refused ({exc}); lexical in-grant name still evaluated"
+    return str(link), notes, created
+
+
+def run_cases(log_path: Path, work: Path | None = None) -> list[CaseResult]:
+    work = Path(work) if work is not None else Path(log_path).parent
+    s1_path, s1_notes, _s1_created = _s1_symlink(work)
+    policy_raw = copy.deepcopy(POLICY)
+    grant_glob = str((work / "s1-in-grant").resolve() / "**")
+    policy_raw["skills"]["lab-helper"]["paths"].append(grant_glob)
+    policy = load_policy(policy_raw)
     gate = Gate(policy, log_path=str(log_path), mode=ENFORCE)
     results: list[CaseResult] = []
 
@@ -332,6 +363,16 @@ def run_cases(log_path: Path) -> list[CaseResult]:
         "deny",
         notes="require_approval → ASK mapped deny for Stage-1 block semantics",
     )
+    one(
+        "S1",
+        "S",
+        "lab-helper",
+        "write_file",
+        [s1_path],
+        "deny",
+        "HIGH",
+        s1_notes,
+    )
 
     return results
 
@@ -392,7 +433,8 @@ def main() -> int:
     log_path = out_dir / "decisions.jsonl"
     if log_path.exists():
         log_path.unlink()
-    results = run_cases(log_path)
+    with tempfile.TemporaryDirectory(prefix="cg-s1-") as tmp:
+        results = run_cases(log_path, work=Path(tmp))
     write_receipt(results, out_dir)
     write_matrix_md(results, out_dir / "MATRIX.md")
     tally: dict[str, int] = {}

@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Stage-1 insufficiency harness in-tree. `tests/test_harness_tally.py` asserts eighteen cases by id. `REPRODUCE.md` is the cold-clone path. The `plugin-v0.1.0` DOI tarball predates this kit.
+- Stage-1 case `S1`: in-grant symlink to an off-grant `.ssh`-shaped target. Expected deny, gate ALLOW, matrix FALSE-ALLOW. Tally is 7 / 8 / 4 / 0 (19 cases, 15 deny-expected). Counts are derived from the harness sets. The decide path is unchanged; `realpath` is not the published remedy.
+- Stage-1 insufficiency harness in-tree. `tests/test_harness_tally.py` asserts cases by id. `REPRODUCE.md` is the cold-clone path. The `plugin-v0.1.0` DOI tarball predates this kit.
 - `doi` on CITATION.cff: `10.5281/zenodo.22018053` (version) and `10.5281/zenodo.22018052` (concept).
 
 ### Fixed
