@@ -64,9 +64,7 @@ def run_d15(tmp: Path) -> dict:
     (home / "logs").mkdir(parents=True)
     cfg = home / "config.yaml"
     cfg.write_text(
-        yaml.dump(
-            {"plugins": {"entries": {"capability-gate": {"mode": "enforce"}}}}
-        ),
+        yaml.dump({"plugins": {"entries": {"capability-gate": {"mode": "enforce"}}}}),
         encoding="utf-8",
     )
     os.environ["HERMES_HOME"] = str(home)

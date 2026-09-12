@@ -32,7 +32,8 @@ def test_resolve_then_reopen_by_name_still_allows(tmp_path: Path) -> None:
                 **POLICY["skills"],
                 "lab-helper": {
                     **POLICY["skills"]["lab-helper"],
-                    "paths": list(POLICY["skills"]["lab-helper"]["paths"]) + [grant_glob],
+                    "paths": list(POLICY["skills"]["lab-helper"]["paths"])
+                    + [grant_glob],
                 },
             },
         }
