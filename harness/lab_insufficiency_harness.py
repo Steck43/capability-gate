@@ -437,6 +437,9 @@ def main() -> int:
         results = run_cases(log_path, work=Path(tmp))
     write_receipt(results, out_dir)
     write_matrix_md(results, out_dir / "MATRIX.md")
+    from cases_table import write_cases
+
+    write_cases(out_dir / "CASES.md")
     tally: dict[str, int] = {}
     for r in results:
         tally[r.matrix_verdict] = tally.get(r.matrix_verdict, 0) + 1

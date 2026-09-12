@@ -174,13 +174,13 @@ jobs:
             echo "::error::BASE does not resolve: $BASE"
             exit 3
           fi
-          if [ "$(git rev-parse "$BASE")" = "$(git rev-parse HEAD)" ]; then
-            if [ "$EVENT_NAME" = "schedule" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-              echo "skip: empty range BASE==HEAD on $EVENT_NAME"
-              exit 0
-            fi
-            echo "::error::empty range BASE==HEAD; craft would inspect nothing"
-            exit 3
+          set +e
+          python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"
+          ERC=$?
+          set -e
+          if [ "$ERC" != "0" ]; then
+            echo "::error::empty range BASE==HEAD; craft would inspect nothing (empty_range.py=$ERC)"
+            exit "$ERC"
           fi
           echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
           python "$V" --commits --base "$BASE" --head HEAD --prose --fail-on-warn
@@ -238,13 +238,13 @@ jobs:
             echo "::error::BASE does not resolve: $BASE"
             exit 3
           fi
-          if [ "$(git rev-parse "$BASE")" = "$(git rev-parse HEAD)" ]; then
-            if [ "$EVENT_NAME" = "schedule" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-              echo "skip: empty range BASE==HEAD on $EVENT_NAME"
-              exit 0
-            fi
-            echo "::error::empty range BASE==HEAD; craft would inspect nothing"
-            exit 3
+          set +e
+          python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"
+          ERC=$?
+          set -e
+          if [ "$ERC" != "0" ]; then
+            echo "::error::empty range BASE==HEAD; craft would inspect nothing (empty_range.py=$ERC)"
+            exit "$ERC"
           fi
           echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
           python "$C" --base "$BASE" --head HEAD
@@ -302,13 +302,13 @@ jobs:
             echo "::error::BASE does not resolve: $BASE"
             exit 3
           fi
-          if [ "$(git rev-parse "$BASE")" = "$(git rev-parse HEAD)" ]; then
-            if [ "$EVENT_NAME" = "schedule" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-              echo "skip: empty range BASE==HEAD on $EVENT_NAME"
-              exit 0
-            fi
-            echo "::error::empty range BASE==HEAD; craft would inspect nothing"
-            exit 3
+          set +e
+          python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"
+          ERC=$?
+          set -e
+          if [ "$ERC" != "0" ]; then
+            echo "::error::empty range BASE==HEAD; craft would inspect nothing (empty_range.py=$ERC)"
+            exit "$ERC"
           fi
           echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
           python "$C" --base "$BASE" --head HEAD

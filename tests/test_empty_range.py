@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".floor" / "craft"))
 
-from empty_range import blocked_exit
+from empty_range import blocked_exit, main
 
 
 def test_schedule_same_sha_skips():
@@ -66,3 +66,11 @@ def test_real_range_ok():
         )
         == 0
     )
+
+
+def test_cli_push_empty_is_3():
+    assert main(["--base", "abc", "--head", "abc", "--event", "push"]) == 3
+
+
+def test_cli_schedule_empty_skips():
+    assert main(["--base", "abc", "--head", "abc", "--event", "schedule"]) == 0
