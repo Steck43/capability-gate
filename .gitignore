@@ -9,6 +9,10 @@ logs/
 _internal/
 .cursor/
 
+# one-shot harness probes
+_tmp_*
+_tmp_lab_out_head/
+
 # python
 __pycache__/
 *.pyc
