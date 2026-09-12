@@ -7,6 +7,14 @@ authors:
     given-names: Landen
 license: MIT
 repository-code: https://github.com/Steck43/capability-gate
+doi: 10.5281/zenodo.22018053
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22018053
+    description: This version (plugin-v0.1.0)
+  - type: doi
+    value: 10.5281/zenodo.22018052
+    description: All versions (concept DOI)
 abstract: >
   A deny-by-default capability gate for agent tool calls. The model proposes;
   deterministic code decides allow, deny, or ask.

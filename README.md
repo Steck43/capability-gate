@@ -2,6 +2,7 @@
 
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Steck43/capability-gate/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Steck43/capability-gate)
 [![floor](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml/badge.svg)](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22018053.svg)](https://doi.org/10.5281/zenodo.22018053)
 [![License: MIT](https://img.shields.io/github/license/Steck43/capability-gate)](LICENSE)
 
 
@@ -46,8 +47,8 @@ Honest about what runs versus what is planned.
 
 - **Working, tested.** Stage 1, the decider: deny-by-default allowlist enforcement over tool and path, fail-closed, fail-loud on unresolved policy, log-before-act, observe and enforce modes. The decision core is runtime-agnostic and covered by tests. Fresh clone: `python -m pytest -q` passes (Hermes adapter tests skip without Hermes).
 - **Live.** On a Hermes profile this gate is configured in **enforce**. The chain to get there is documented: observe first, then a would-deny review, then adjudication, then the flip, with a named rollback path. The observe study covered the calls the gate saw across a one-month window, which was a small fraction of that agent's total tool traffic in the period, because the plugin was not resident throughout. The allowlist was distilled from what it did see, and it continued to train after the flip. Enforce does not mean a frozen grant set.
-- **Known limits (published).** Path matching is lexical, `normpath` after expand. Symlink resolution is not on the decide path, so a symlink to an off-allowlist target is not caught today. An 18-case adversarial lab was run against the decider at `3a61d7e`. Fourteen of those cases had a ground truth of deny. The gate denied seven. The seven that got through are not all composition: context-blindness and argument-level intent appear as well. One of the seven denials is an `ask` mapped to Stage-1 block semantics rather than a hard deny. Harness and receipt live outside this repository.
-- **This repository is one layer.** Sibling isolation and adjudication work live elsewhere and are not consumed by this gate. This README does not claim them.
+- **Known limits (written up in the repo).** Path matching is lexical, `normpath` after expand. Symlink resolution is not on the decide path, so a symlink to an off-allowlist target is not caught today. The CG Stage-1 lab lives in this roof (`harness/lab_insufficiency_harness.py`, `harness/evidence_receipt.json`). `tests/test_harness_tally.py` asserts eighteen cases by id against `capability_gate.py`: 14 deny-expected, 7 CAUGHT-NAIVE, 7 FALSE-ALLOW, 4 CORRECT-ALLOW, 0 FALSE-DENY. The seven that get through are not all composition: context-blindness and argument-level intent appear as well. One of the seven denials is an `ask` mapped to Stage-1 block semantics rather than a hard deny. Reproduce: [REPRODUCE.md](REPRODUCE.md). The Zenodo record `plugin-v0.1.0` (`10.5281/zenodo.22018053`) predates this kit; the concept DOI `10.5281/zenodo.22018052` resolves to the latest release.
+- **This repository is one layer.** Sibling work: [aegis-atoms](https://github.com/Steck43/aegis-atoms), [isolation-layer](https://github.com/Steck43/isolation-layer), [owasp-dual-top10-lab](https://github.com/Steck43/owasp-dual-top10-lab). This gate does not consume them.
 
 This is a capability gate for one agent, not an operating system. The isolation idea it is built on is the same one that runs underneath every OS: let untrusted programs run on a machine without letting them wreck it or each other.
 

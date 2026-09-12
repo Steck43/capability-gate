@@ -19,7 +19,11 @@ except ImportError:
     from capability_gate import Gate, load_policy
 
 _HERE = os.path.dirname(__file__)
-_BLOCK = lambda msg: {"action": "block", "message": msg}
+
+
+def _BLOCK(msg: str) -> dict[str, str]:
+    return {"action": "block", "message": msg}
+
 
 # Path-mediatable tools only (registry: file_tools.py). Opaque tools are
 # require_approval, not path-mapped. web_search has no path arg.
