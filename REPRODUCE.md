@@ -9,11 +9,11 @@ python -m pip install -r requirements-dev.txt
 python -m pytest tests/test_harness_tally.py -q
 ```
 
-The CG Stage-1 lab (`evidence_receipt.json`) asserts eighteen cases by id. A green print of `7/14` without those assertions is not this kit.
+The CG Stage-1 lab (`evidence_receipt.json`) asserts nineteen cases by id, including `S1` (in-grant symlink to an off-grant target). A green print without those assertions is not this kit.
 
 Expected tally on this HEAD, named harness CG Stage-1 lab (`tests/test_harness_tally.py`) against `capability_gate.py`:
 
-- 14 deny-expected: 7 CAUGHT-NAIVE, 7 FALSE-ALLOW
+- 15 deny-expected: 7 CAUGHT-NAIVE, 8 FALSE-ALLOW
 - 4 CORRECT-ALLOW
 - 0 FALSE-DENY
 

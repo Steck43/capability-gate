@@ -9,7 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Stage-1 insufficiency harness in-tree. `tests/test_harness_tally.py` asserts eighteen cases by id. `REPRODUCE.md` is the cold-clone path. The `plugin-v0.1.0` DOI tarball predates this kit.
+- Stage-1 case `S1`: in-grant symlink to an off-grant `.ssh`-shaped target. Expected deny, gate ALLOW, matrix FALSE-ALLOW. Tally is 7 / 8 / 4 / 0 (19 cases, 15 deny-expected). Counts are derived from the harness sets. The decide path is unchanged; `realpath` is not the published remedy.
+- `harness/CASES.md` is generated from those same sets. `tests/test_cases_table.py` fails if a human retypes the counts.
+- D15: the same nineteen cases through the live `pre_tool_call` hook (`harness/d15_hermes_faithful.py`). Grade is NON-TRANSFER because the adapter resolves skill as `*`. Public CI does not install Hermes to unskip adapter tests.
+- §8.2 distinguish: after S1 ALLOW, reopen by the name given still ALLOWs; the resolved target DENYs (`tests/test_s1_distinguish.py`).
+- Alias class S2–S5 (hardlink, junction, `/proc/self/root`, bind-mount) as their own ids. Skip only if the OS refuses the alias. They do not change the Stage-1 tally.
+- Plugin-not-loaded liveness and FIG-1 (`evaluate` does not call the box).
+- Craft jobs call `.floor/craft/empty_range.py` instead of an inline BASE==HEAD bash.
+- Stage-1 insufficiency harness in-tree. `tests/test_harness_tally.py` asserts cases by id. `REPRODUCE.md` is the cold-clone path. The `plugin-v0.1.0` DOI tarball predates this kit.
 - `doi` on CITATION.cff: `10.5281/zenodo.22018053` (version) and `10.5281/zenodo.22018052` (concept).
 
 ### Fixed

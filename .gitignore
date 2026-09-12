@@ -12,6 +12,8 @@ _internal/
 # one-shot harness probes
 _tmp_*
 _tmp_lab_out_head/
+harness/s1-in-grant/
+harness/s1-off-grant/
 
 # python
 __pycache__/

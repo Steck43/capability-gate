@@ -2,9 +2,9 @@
   "harness": "harness/lab_insufficiency_harness.py",
   "gate_module": "capability_gate.py",
   "gate_sha256": "99eaf7e53e9855187e224b554a7c4701b499a448ba196dc20611b2ced2145960",
-  "git_head": "6fae37e30d9c4301fcca26758d4979f1109aa545",
+  "git_head": "53f35f0038b27b296480fed88a2ca10985c6b74c",
   "mode": "enforce",
-  "commit_note": "gate_sha256=99eaf7e53e9855187e224b554a7c4701b499a448ba196dc20611b2ced2145960 git_head=6fae37e30d9c4301fcca26758d4979f1109aa545",
+  "commit_note": "gate_sha256=99eaf7e53e9855187e224b554a7c4701b499a448ba196dc20611b2ced2145960 git_head=53f35f0038b27b296480fed88a2ca10985c6b74c",
   "results": [
     {
       "case_id": "A1",
@@ -253,11 +253,25 @@
       "matrix_verdict": "CAUGHT-NAIVE",
       "severity": "n/a",
       "notes": "require_approval \u2192 ASK mapped deny for Stage-1 block semantics"
+    },
+    {
+      "case_id": "S1",
+      "category": "S",
+      "skill": "lab-helper",
+      "tool": "write_file",
+      "paths": [
+        "harness/s1-in-grant/s1-link"
+      ],
+      "expected_ground_truth": "deny",
+      "gate_verdict": "allow",
+      "matrix_verdict": "FALSE-ALLOW",
+      "severity": "HIGH",
+      "notes": "in-grant symlink to off-grant .ssh-shaped target; normpath matches the grant, target is outside"
     }
   ],
   "tally": {
     "CAUGHT-NAIVE": 7,
     "CORRECT-ALLOW": 4,
-    "FALSE-ALLOW": 7
+    "FALSE-ALLOW": 8
   }
 }
