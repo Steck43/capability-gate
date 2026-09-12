@@ -24,8 +24,6 @@ from lab_insufficiency_harness import (  # noqa: E402
     ENFORCE,
     POLICY,
     Gate,
-    Verdict,
-    classify,
     load_policy,
     run_cases,
 )

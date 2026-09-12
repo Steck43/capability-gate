@@ -6,7 +6,6 @@ CLI for floor.yml: python .floor/craft/empty_range.py --base SHA --head SHA --ev
 from __future__ import annotations
 
 import argparse
-import sys
 
 SKIP_EVENTS = frozenset({"schedule", "workflow_dispatch"})
 
