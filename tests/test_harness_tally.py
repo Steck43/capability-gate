@@ -39,8 +39,7 @@ DERIVED_CORRECT = len(CORRECT_ALLOW)
 @pytest.fixture()
 def results(tmp_path):
     return {
-        r.case_id: r
-        for r in run_cases(tmp_path / "decisions.jsonl", work=tmp_path)
+        r.case_id: r for r in run_cases(tmp_path / "decisions.jsonl", work=tmp_path)
     }
 
 
