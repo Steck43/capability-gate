@@ -94,6 +94,17 @@ def home(*parts: str) -> str:
     return os.path.join(os.path.expanduser("~"), *parts)
 
 
+def portable_path(p: str) -> str:
+    text = str(p)
+    roof = str(ROOF.resolve())
+    if text.startswith(roof):
+        return Path(text[len(roof) :].lstrip("\\/")).as_posix() or "capability_gate.py"
+    home_dir = os.path.expanduser("~")
+    if text.startswith(home_dir):
+        return "~/" + Path(text[len(home_dir) :].lstrip("\\/")).as_posix()
+    return Path(text).as_posix()
+
+
 def classify(expected: str, verdict: Verdict) -> str:
     got = "allow" if verdict is Verdict.ALLOW else "deny"
     if verdict is Verdict.ASK:
@@ -329,14 +340,19 @@ def write_receipt(results: list[CaseResult], out_dir: Path) -> Path:
     tally: dict[str, int] = {}
     for r in results:
         tally[r.matrix_verdict] = tally.get(r.matrix_verdict, 0) + 1
+    rows = []
+    for r in results:
+        row = asdict(r)
+        row["paths"] = [portable_path(p) for p in r.paths]
+        rows.append(row)
     receipt = {
         "harness": "harness/lab_insufficiency_harness.py",
-        "gate_module": str((ROOF / "capability_gate.py").resolve()),
+        "gate_module": "capability_gate.py",
         "gate_sha256": gate_sha256(),
         "git_head": git_head(),
         "mode": ENFORCE,
         "commit_note": f"gate_sha256={gate_sha256()} git_head={git_head()}",
-        "results": [asdict(r) for r in results],
+        "results": rows,
         "tally": tally,
     }
     out_dir.mkdir(parents=True, exist_ok=True)
