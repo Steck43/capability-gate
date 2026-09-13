@@ -119,6 +119,10 @@ def test_wrong_type_mode_blocks_with_fail_closed_reason(env_home):
     _assert_fail_closed(_deny_call(pre), "invalid")
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="chmod(0) is not POSIX unreadable on Windows; utf8-corrupt covers the prefix",
+)
 def test_unreadable_file_blocks_with_fail_closed_reason(env_home):
     path = env_home / "config.yaml"
     _write_cfg(env_home, _cfg_with_mode("enforce"))
