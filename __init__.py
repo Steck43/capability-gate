@@ -1,8 +1,8 @@
 """Hermes plugin adapter for capability-gate (Stage 1, Branch B).
 
-Skill identity is not available on the pre_tool_call dispatch path on Hermes
-0.16.0, so enforcement uses the skill-agnostic "*" bucket until skill tracking
-lands.
+Hermes 0.18.0 ``get_pre_tool_call_block_message`` still has no skill argument
+(dest-read 2026-09-13). ``_resolve_skill`` uses a real field when one is
+present. Otherwise it stays ``*``. Do not invent a skill for the lab.
 """
 
 from __future__ import annotations
@@ -92,7 +92,19 @@ def _read_mode_from_config(default: str = "observe") -> str:
     return mode
 
 
+_SKILL_KEYS = ("skill", "skill_name", "active_skill")
+
+
 def _resolve_skill(kwargs: dict) -> str:
+    """Use a skill field Hermes actually passed. Missing field stays ``*``."""
+    if not isinstance(kwargs, dict):
+        return "*"
+    for key in _SKILL_KEYS:
+        val = kwargs.get(key)
+        if isinstance(val, str):
+            name = val.strip()
+            if name and name != "*":
+                return name
     return "*"
 
 

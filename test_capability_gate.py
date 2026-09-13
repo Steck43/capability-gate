@@ -342,3 +342,21 @@ def test_log_includes_trace_and_safe_arg_summary(tmp_path):
     assert rec["arg_summary"]["paths"]["path"] == "/work/note.md"
     assert secret not in raw
     assert "content" not in rec["arg_summary"]
+
+
+def test_checked_log_record_rejects_unknown_keys() -> None:
+    with pytest.raises(ValueError, match="unknown jsonl keys"):
+        cg.checked_log_record({"ts": 1, "mode": "enforce", "machine_id": "nope"})
+
+
+def test_log_optional_run_id(tmp_path, monkeypatch) -> None:
+    policy = load_policy(
+        {"skills": {"*": {"tools": ["write_file"], "paths": ["/work/**"]}}}
+    )
+    log_path = tmp_path / "d.jsonl"
+    monkeypatch.setenv("SITTING_RUN_ID", "sit-1")
+    g = Gate(policy, log_path=str(log_path))
+    g.evaluate("*", "write_file", ["/work/note.md"])
+    rec = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert rec["run_id"] == "sit-1"
+    cg.checked_log_record(rec)

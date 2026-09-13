@@ -48,6 +48,42 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 
 _TRACE_FIELDS = ("session_id", "turn_id", "task_id", "tool_call_id")
+_LOG_ALLOWED = frozenset(
+    {
+        "ts",
+        "mode",
+        "verdict",
+        "reason",
+        "skill",
+        "tool",
+        "paths",
+        "enforced",
+        "session_id",
+        "turn_id",
+        "task_id",
+        "tool_call_id",
+        "arg_summary",
+        "trace_id",
+        "span_id",
+        "parent",
+        "start",
+        "end",
+        "input",
+        "output",
+        "score",
+        "run_id",
+    }
+)
+
+
+def checked_log_record(record: Mapping) -> dict:
+    """Unknown JSONL keys fail closed. Sitting run_id is optional."""
+    out = dict(record)
+    extra = sorted(k for k in out if k not in _LOG_ALLOWED)
+    if extra:
+        raise ValueError("unknown jsonl keys: " + ", ".join(extra))
+    return out
+
 
 _PATH_LIKE_KEYS = frozenset(
     {
@@ -335,6 +371,10 @@ class Gate:
                     record[field] = trace[field]
         if arg_summary:
             record["arg_summary"] = dict(arg_summary)
+        run_id = os.environ.get("SITTING_RUN_ID", "").strip()
+        if run_id:
+            record["run_id"] = run_id
+        record = checked_log_record(record)
         line = json.dumps(record, sort_keys=True) + "\n"
         try:
             os.makedirs(os.path.dirname(self._log_path) or ".", exist_ok=True)
