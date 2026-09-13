@@ -52,7 +52,7 @@ Honest about what runs versus what is planned.
 
 This is a capability gate for one agent, not an operating system. The isolation idea it is built on is the same one that runs underneath every OS: let untrusted programs run on a machine without letting them wreck it or each other. Capability is what the model has. Freedom is what the system permits. Containment is the precondition for scale: more floor, more freedom, less residual risk. Authority only narrows down the tree. Kubernetes is not the scale story.
 
-The Stage-1 table is `Gate.evaluate` on named skills. The live Hermes hook resolves skill as `*` (`harness/d15_hermes_faithful.py`). That transfer is NON-TRANSFER; do not read the lab table as "the gate does." After an S1 ALLOW, reopen by the name Hermes was given still ALLOWs (`tests/test_s1_distinguish.py`). Realpath is not the published remedy. Alias ids S2–S5 (hardlink, junction, `/proc/self/root`, bind-mount) are a separate class; they do not ride on S1.
+The Stage-1 table is `Gate.evaluate` on named skills. The live Hermes hook resolves skill as `*` (`harness/d15_hermes_faithful.py`). That transfer is NON-TRANSFER; do not read the lab table as "the gate does." After an S1 ALLOW, reopen by the name Hermes was given still ALLOWs (`tests/test_s1_distinguish.py`). Realpath is not the written-up remedy. Alias ids S2–S5 (hardlink, junction, `/proc/self/root`, bind-mount) are a separate class; they do not ride on S1.
 
 ## Requirements
 
