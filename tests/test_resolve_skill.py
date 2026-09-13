@@ -38,4 +38,6 @@ def test_real_field_is_used() -> None:
     adapter = _adapter()
     assert adapter._resolve_skill({"skill": "lab-helper"}) == "lab-helper"
     assert adapter._resolve_skill({"skill_name": "note-taker"}) == "note-taker"
-    assert adapter._resolve_skill({"active_skill": "web-researcher"}) == "web-researcher"
+    assert (
+        adapter._resolve_skill({"active_skill": "web-researcher"}) == "web-researcher"
+    )

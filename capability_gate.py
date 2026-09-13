@@ -84,6 +84,7 @@ def checked_log_record(record: Mapping) -> dict:
         raise ValueError("unknown jsonl keys: " + ", ".join(extra))
     return out
 
+
 _PATH_LIKE_KEYS = frozenset(
     {
         "path",
