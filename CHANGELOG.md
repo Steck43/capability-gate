@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adapter `_resolve_skill` reads a real Hermes skill field when one is present and otherwise stays `*`. Hermes 0.18.0 still has no skill on `pre_tool_call`. D15 remains NON-TRANSFER on the live dispatch.
+- Gate JSONL writes fail closed on unknown keys. Optional `SITTING_RUN_ID` becomes `run_id`.
 - Stage-1 case `S1`: in-grant symlink to an off-grant `.ssh`-shaped target. Expected deny, gate ALLOW, matrix FALSE-ALLOW. Tally is 7 / 8 / 4 / 0 (19 cases, 15 deny-expected). Counts are derived from the harness sets. The decide path is unchanged; `realpath` is not the published remedy.
 - `harness/CASES.md` is generated from those same sets. `tests/test_cases_table.py` fails if a human retypes the counts.
 - D15: the same nineteen cases through the live `pre_tool_call` hook (`harness/d15_hermes_faithful.py`). Grade is NON-TRANSFER because the adapter resolves skill as `*`. Public CI does not install Hermes to unskip adapter tests.
