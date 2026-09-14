@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- README carries the Figure 1 mermaid candidate already on the paper and the profile. This roof stays the allowlist floor.
 - README and Stage-1 note say written-up remedy, not a venue claim.
 
 ### Added
