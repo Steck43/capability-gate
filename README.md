@@ -52,7 +52,7 @@ Honest about what runs versus what is planned.
 
 ## Four-plane path
 
-This roof is the allowlist floor. Sibling roofs hold the atom plane, the box, and the judge. The ordering is design intent, not a forced invoke from `evaluate`. `always_invoked` stays false.
+This roof is the allowlist baseline of the floor. The atom plane is a sibling roof in the same plane. The box and the judge sit on their own roofs. The ordering is design intent, not a forced invoke from `evaluate`. `always_invoked` stays false.
 
 ```mermaid
 flowchart TD
@@ -67,6 +67,8 @@ flowchart TD
   ENFORCE --> OUT["allow / deny / human"]
   ENFORCE --> AUDIT["Audit: hash-chained, append-only"]
 ```
+
+![Figure 1. Box between floor and judge](assets/fig1-box-between.svg)
 
 This is a capability gate for one agent, not an operating system. The isolation idea it is built on is the same one that runs underneath every OS: let untrusted programs run on a machine without letting them wreck it or each other. Capability is what the model has. Freedom is what the system permits. Containment is the precondition for scale: more floor, more freedom, less residual risk. Authority only narrows down the tree. Kubernetes is not the scale story.
 
