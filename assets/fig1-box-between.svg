@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 560" role="img" aria-labelledby="t d">
+  <title id="t">Figure 1. Box between floor and judge. Audit attests enforce. Identity is the argument, not a fifth plane.</title>
+  <desc id="d">A proposed tool call enters the floor. A structural fact resolves there and goes to enforce. A rollup the floor cannot settle enters the isolation box. The box sits between floor and judge. What the box cannot absorb goes to a subtract-only judge. The judge cannot widen or approve. Enforce writes a hash-chained append-only audit. always_invoked is false.</desc>
+  <style>
+    .box { fill: #f6f8fa; stroke: #24292f; stroke-width: 1.5; }
+    .audit { fill: #fff8e8; stroke: #9a6700; stroke-width: 1.5; }
+    .lab { font: 14px ui-sans-serif, system-ui, sans-serif; fill: #24292f; }
+    .small { font: 11px ui-sans-serif, system-ui, sans-serif; fill: #57606a; }
+    .edge { stroke: #24292f; stroke-width: 1.4; fill: none; marker-end: url(#arr); }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#24292f"/>
+    </marker>
+  </defs>
+  <rect class="box" x="260" y="16" width="400" height="56" rx="6"/>
+  <text class="lab" x="460" y="40" text-anchor="middle">Proposed tool call</text>
+  <text class="small" x="460" y="58" text-anchor="middle">identity is the argument, not a fifth plane</text>
+
+  <rect class="box" x="260" y="120" width="400" height="48" rx="6"/>
+  <text class="lab" x="460" y="150" text-anchor="middle">Floor: allowlist + atoms</text>
+
+  <rect class="box" x="40" y="240" width="280" height="48" rx="6"/>
+  <text class="lab" x="180" y="270" text-anchor="middle">Box: isolation-layer</text>
+
+  <rect class="box" x="600" y="240" width="280" height="48" rx="6"/>
+  <text class="lab" x="740" y="270" text-anchor="middle">Judge: subtract only</text>
+  <text class="small" x="740" y="228" text-anchor="middle">cannot widen or approve</text>
+
+  <rect class="box" x="260" y="360" width="400" height="48" rx="6"/>
+  <text class="lab" x="460" y="390" text-anchor="middle">Enforce on author Hermes profile</text>
+
+  <rect class="box" x="80" y="470" width="220" height="40" rx="6"/>
+  <text class="lab" x="190" y="496" text-anchor="middle">allow / deny / human</text>
+
+  <rect class="audit" x="620" y="470" width="260" height="40" rx="6"/>
+  <text class="lab" x="750" y="496" text-anchor="middle">Audit: append-only</text>
+
+  <path class="edge" d="M460 72 V120"/>
+  <path class="edge" d="M320 168 L180 240"/>
+  <path class="edge" d="M460 168 V360"/>
+  <path class="edge" d="M320 264 H600"/>
+  <path class="edge" d="M180 288 C180 330 300 340 360 360"/>
+  <path class="edge" d="M740 288 L540 360"/>
+  <path class="edge" d="M360 408 L190 470"/>
+  <path class="edge" d="M560 408 L750 470"/>
+  <text class="small" x="220" y="210">rollup cannot settle</text>
+  <text class="small" x="500" y="210">clean</text>
+  <text class="small" x="460" y="258">still contradicts</text>
+  <text class="small" x="250" y="330">absorbed</text>
+</svg>
