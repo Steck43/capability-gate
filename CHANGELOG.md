@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - README Status names the author profile so a stranger can click once from this roof to `github.com/Steck43`.
-- README carries the Figure 1 mermaid candidate already on the paper and the profile. This roof stays the allowlist floor.
+- README Figure 1 is the dest-true SVG. The box sits between floor and judge. Mermaid stays the sketch. This roof is the allowlist baseline of the floor. The atom plane is a sibling roof in the same plane.
 - README and Stage-1 note say written-up remedy, not a venue claim.
 
 ### Added
