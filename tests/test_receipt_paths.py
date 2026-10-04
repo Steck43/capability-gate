@@ -45,9 +45,7 @@ def test_committed_receipt_matches_gate_file_and_names_a_visible_commit() -> Non
         )
         if shallow.stdout.strip() == "true":
             return
-        raise AssertionError(
-            f"git_head {sha} is not a commit in this repo"
-        )
+        raise AssertionError(f"git_head {sha} is not a commit in this repo")
     visible = subprocess.run(
         ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
         cwd=ROOF,
