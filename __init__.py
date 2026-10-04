@@ -14,9 +14,9 @@ from typing import Any
 import yaml
 
 try:
-    from .capability_gate import Gate, load_policy
+    from .capability_gate import Gate, load_policy, _PATH_LIKE_KEYS
 except ImportError:
-    from capability_gate import Gate, load_policy
+    from capability_gate import Gate, load_policy, _PATH_LIKE_KEYS
 
 _HERE = os.path.dirname(__file__)
 
@@ -122,19 +122,26 @@ def _extract_trace(kwargs: dict, task_id: str) -> dict[str, str]:
 def _extract_paths(tool_name: str, args: Any) -> list[str]:
     if not isinstance(args, dict):
         return []
-    key = _PATH_ARG.get(tool_name)
-    if not key or key not in args:
-        if (
-            tool_name == "search_files"
-            and isinstance(args.get("target"), str)
-            and args["target"]
-        ):
-            return [args["target"]]
-        return []
-    val = args[key]
-    if isinstance(val, str) and val:
-        return [val]
-    return []
+    # Complete mediation: every path-like argument, not only the tool's
+    # primary key. A notes grant must not hide target=/etc/passwd.
+    out: list[str] = []
+    seen: set[str] = set()
+    preferred = _PATH_ARG.get(tool_name)
+    keys: list[str] = []
+    if preferred is not None:
+        keys.append(preferred)
+    for raw_key in args:
+        key = str(raw_key)
+        if key == preferred:
+            continue
+        if key in _PATH_LIKE_KEYS or key.endswith("_path"):
+            keys.append(key)
+    for key in keys:
+        val = args.get(key)
+        if isinstance(val, str) and val and val not in seen:
+            seen.add(val)
+            out.append(val)
+    return out
 
 
 def _build_gate(mode: str) -> Gate:

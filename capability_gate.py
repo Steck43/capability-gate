@@ -39,6 +39,7 @@ what observe means. Protection lives in enforce mode. Do not lean on observe.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -46,6 +47,8 @@ import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
+
+_GENESIS = "0" * 64
 
 _TRACE_FIELDS = ("session_id", "turn_id", "task_id", "tool_call_id")
 _LOG_ALLOWED = frozenset(
@@ -83,6 +86,31 @@ def checked_log_record(record: Mapping) -> dict:
     if extra:
         raise ValueError("unknown jsonl keys: " + ", ".join(extra))
     return out
+
+
+def _hash_log_line(line: str) -> str:
+    return hashlib.sha256(line.encode("utf-8")).hexdigest()
+
+
+def verify_hash_chain(log_path: str) -> str:
+    """Return the hash of the last JSONL line, or genesis if none exist.
+
+    Each record's parent is the hash of the previous line. Rewriting an
+    older line breaks that link. Fail closed instead of appending onto it.
+    """
+    prev = _GENESIS
+    if not os.path.exists(log_path):
+        return _GENESIS
+    with open(log_path, encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.rstrip("\n")
+            if not line:
+                continue
+            rec = json.loads(line)
+            if rec.get("parent") != prev:
+                raise ValueError("audit log hash chain broken")
+            prev = _hash_log_line(line)
+    return prev
 
 
 _PATH_LIKE_KEYS = frozenset(
@@ -374,6 +402,7 @@ class Gate:
         run_id = os.environ.get("SITTING_RUN_ID", "").strip()
         if run_id:
             record["run_id"] = run_id
+        record["parent"] = verify_hash_chain(self._log_path)
         record = checked_log_record(record)
         line = json.dumps(record, sort_keys=True) + "\n"
         try:

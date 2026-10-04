@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Audit JSONL is hash-chained. Rewriting an older line fails closed; the old line-count test stayed green on that rewrite.
+- Adapter extracts every path argument. A notes path plus `target=/etc/passwd` is denied.
+
 ### Changed
 
 - README Status names the author profile so a stranger can click once from this roof to `github.com/Steck43`.
