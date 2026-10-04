@@ -119,6 +119,22 @@ def test_decision_logged_before_return(tmp_path):
     assert second["verdict"] == "deny"
 
 
+def test_rewriting_older_log_line_fails(tmp_path):
+    # README claims hash-chained append-only. Counting two JSONL lines
+    # stays green after a rewrite; the chain must not.
+    log = tmp_path / "decisions.jsonl"
+    g = Gate(load_policy(POLICY_DICT), log_path=str(log))
+    g.evaluate("note-taker", "write_file", [home(".hermes/notes/a.md")])
+    g.evaluate("unlisted", "read_file", [])
+    lines = log.read_text(encoding="utf-8").splitlines(keepends=True)
+    first = json.loads(lines[0])
+    first["reason"] = "rewritten"
+    lines[0] = json.dumps(first, sort_keys=True) + "\n"
+    log.write_text("".join(lines), encoding="utf-8")
+    with pytest.raises(ValueError, match="hash chain"):
+        g.evaluate("note-taker", "write_file", [home(".hermes/notes/b.md")])
+
+
 # --- glob semantics -------------------------------------------------------
 
 
