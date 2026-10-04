@@ -178,7 +178,26 @@ def _atoms_result_was_input(atoms_result, receipt) -> bool:
     return any(value is receipt for value in _values_on(atoms_result))
 
 
+def _prove_summary(*, passed: bool) -> dict:
+    """Shape of the json! in prove.rs. passed=False is a false-flag copy."""
+    return {
+        "jail_id": "mgr-pin",
+        "mode": _MANAGER_MODE,
+        "time_to_userspace_ms": 1.2,
+        "time_to_workload_ms": 3.4,
+        **{key: passed for key in _PROVE_BOOLS},
+        "dropbox_hash": "a" * 64,
+        "spot_checks": {key: passed for key in _SPOT_KEYS},
+    }
+
+
 def test_one_write_needs_three_receipts(tmp_path: Path) -> None:
+    false_copy = _prove_summary(passed=False)
+    passed = _prove_summary(passed=True)
+    # Own assert: a None-check helper would accept false_copy and fail here.
+    assert _is_jailer_prove_receipt(false_copy) is False
+    assert _is_jailer_prove_receipt(passed) is True
+
     atoms_root = _require_sibling(_ATOMS, "engine.py")
     if not (atoms_root / "catalog" / "Aegis-Atoms-v0.yaml").is_file():
         raise AssertionError(
@@ -244,6 +263,7 @@ def test_one_write_needs_three_receipts(tmp_path: Path) -> None:
     if len(firings) == 0:
         raise AssertionError("evaluate_tool_call returned empty firings")
 
+    atoms_result.carried = passed
     args, kwargs, _out = atoms_hits[-1]
     receipt = _box_receipt(atoms_result)
     misses: list[str] = []
