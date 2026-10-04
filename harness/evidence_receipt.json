@@ -2,9 +2,9 @@
   "harness": "harness/lab_insufficiency_harness.py",
   "gate_module": "capability_gate.py",
   "gate_sha256": "0e9148b76f183d061d555d564b8fe70341a81e7db55d18b4ffbbe9da27874373",
-  "git_head": "a02fbba31ba9b52f433359f189343e035d686831",
+  "git_head": "d60b8ffdf4aa5c9c5efa85b51401791de0aa5f56",
   "mode": "enforce",
-  "commit_note": "gate_sha256=0e9148b76f183d061d555d564b8fe70341a81e7db55d18b4ffbbe9da27874373 git_head=a02fbba31ba9b52f433359f189343e035d686831",
+  "commit_note": "gate_sha256=0e9148b76f183d061d555d564b8fe70341a81e7db55d18b4ffbbe9da27874373 git_head=d60b8ffdf4aa5c9c5efa85b51401791de0aa5f56",
   "results": [
     {
       "case_id": "A1",
