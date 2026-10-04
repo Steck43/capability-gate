@@ -197,6 +197,11 @@ def test_one_write_needs_three_receipts(tmp_path: Path) -> None:
     # Own assert: a None-check helper would accept false_copy and fail here.
     assert _is_jailer_prove_receipt(false_copy) is False
     assert _is_jailer_prove_receipt(passed) is True
+    # Stand-in only. The live evaluate_tool_call result is not this object.
+    stand_in = {"inner": passed}
+    nested = _box_receipt(stand_in)
+    assert _atoms_result_was_input(stand_in, nested)
+    assert _is_jailer_prove_receipt(nested)
 
     atoms_root = _require_sibling(_ATOMS, "engine.py")
     if not (atoms_root / "catalog" / "Aegis-Atoms-v0.yaml").is_file():
@@ -263,7 +268,6 @@ def test_one_write_needs_three_receipts(tmp_path: Path) -> None:
     if len(firings) == 0:
         raise AssertionError("evaluate_tool_call returned empty firings")
 
-    atoms_result.carried = passed
     args, kwargs, _out = atoms_hits[-1]
     receipt = _box_receipt(atoms_result)
     misses: list[str] = []
