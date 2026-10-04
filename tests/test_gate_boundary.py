@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import inspect
-import json
 import os
 import sys
 from collections.abc import Mapping
 from contextlib import contextmanager
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 
 ROOF = Path(__file__).resolve().parents[1]
@@ -27,13 +27,12 @@ _DECISION_PARAMS = (
     "gate",
     "capability_decision",
 )
-_PROVE_ATTRS = (
-    "prove_receipt",
-    "box_receipt",
-    "jailer_receipt",
-    "isolation_receipt",
-)
-_REFUSED_BOX_SCRIPTS = frozenset({"conflicting_handoff.py", "b1-prove.py"})
+# isolation-manager prove.rs summary. Not a flag this test invented.
+_MANAGER_PROVE = "crates/isolation-manager/src/prove.rs"
+_MANAGER_MODE = "jailed-via-helper"
+# scripts/b1-prove.py writes b1_results.json when --mode jailed.
+_B1_PROVE = "scripts/b1-prove.py"
+_B1_MODE = "jailed"
 
 
 def _require_sibling(name: str, rel: str) -> Path:
@@ -90,62 +89,62 @@ def _receipt_text(receipt) -> str:
     stdout = getattr(receipt, "stdout", None)
     if stdout:
         return str(stdout)
-    if isinstance(receipt, Mapping):
-        return json.dumps(receipt, default=str)
     return str(receipt)
 
 
-def _flag(receipt, *keys: str) -> bool:
+def _get(receipt, key: str):
     if isinstance(receipt, Mapping):
-        return any(receipt.get(key) is True for key in keys)
-    return any(getattr(receipt, key, None) is True for key in keys)
-
-
-def _box_receipt(atoms_result, isolation_root: Path):
-    for attr in _PROVE_ATTRS:
-        rec = getattr(atoms_result, attr, None)
-        if rec is not None:
-            return rec
-    consumer = _box_consumer(isolation_root)
-    if consumer is None:
-        return None
-    return consumer(atoms_result)
-
-
-def _box_consumer(isolation_root: Path):
-    # Named door for later wiring. Do not run prove. Do not treat the dry print as this door.
-    for rel, fn_name in (
-        ("box_boundary.py", "prove_receipt_for"),
-        ("scripts/box_boundary.py", "prove_receipt_for"),
-    ):
-        path = isolation_root / rel
-        if not path.is_file() or path.name in _REFUSED_BOX_SCRIPTS:
-            continue
-        sys.path.insert(0, str(path.parent))
-        # Isolation stays a sibling roof. Load only a named consumer.
-        module = __import__(path.stem)
-        fn = getattr(module, fn_name, None)
-        if callable(fn):
-            return fn
-    return None
-
-
-def _atoms_result_was_input(atoms_result, receipt) -> bool:
-    if receipt is None or atoms_result is None:
-        return False
-    if getattr(receipt, "atoms_result", None) is atoms_result:
-        return True
-    return isinstance(receipt, Mapping) and receipt.get("atoms_result") is atoms_result
+        return receipt.get(key)
+    return getattr(receipt, key, None)
 
 
 def _is_jailer_prove_receipt(receipt) -> bool:
+    """True only for the prove summary isolation already emits. HANDOFF_OK is not it."""
     if receipt is None:
         return False
     if "HANDOFF_OK" in _receipt_text(receipt):
         return False
-    if _flag(receipt, "tool_body_ran_under_jailer"):
-        return True
-    return _flag(receipt, "jailer") and _flag(receipt, "tool_body_ran")
+    jail_id = _get(receipt, "jail_id")
+    workload = _get(receipt, "time_to_workload_ms")
+    if not jail_id or workload is None:
+        return False
+    mode = _get(receipt, "mode")
+    if mode == _MANAGER_MODE:
+        return _get(receipt, "time_to_userspace_ms") is not None
+    if mode == _B1_MODE:
+        return _get(receipt, "checks") is not None
+    return False
+
+
+def _values_on(obj) -> list:
+    out: list = []
+    if obj is None:
+        return out
+    if isinstance(obj, Mapping):
+        out.extend(obj.values())
+    if is_dataclass(obj) and not isinstance(obj, type):
+        out.extend(getattr(obj, f.name) for f in fields(obj))
+    elif hasattr(obj, "__dict__"):
+        out.extend(obj.__dict__.values())
+    return out
+
+
+def _box_receipt(atoms_result):
+    # Do not run prove. Look only for the summary prove.rs / b1-prove.py already write.
+    if _is_jailer_prove_receipt(atoms_result):
+        return atoms_result
+    for value in _values_on(atoms_result):
+        if _is_jailer_prove_receipt(value):
+            return value
+    return None
+
+
+def _atoms_result_was_input(atoms_result, receipt) -> bool:
+    # A dict that stores the object is a shadow write. The evaluation itself
+    # has to be the prove summary, or the next step had to take it as an argument.
+    if receipt is None or atoms_result is None:
+        return False
+    return receipt is atoms_result
 
 
 def test_one_write_needs_three_receipts(tmp_path: Path) -> None:
@@ -155,6 +154,12 @@ def test_one_write_needs_three_receipts(tmp_path: Path) -> None:
             "missing sibling checkout: aegis-atoms (catalog/Aegis-Atoms-v0.yaml)"
         )
     isolation_root = _require_sibling(_ISOLATION, "scripts/conflicting_handoff.py")
+    manager_prove = isolation_root / _MANAGER_PROVE
+    b1_prove = isolation_root / _B1_PROVE
+    if not manager_prove.is_file() and not b1_prove.is_file():
+        raise AssertionError(
+            f"missing sibling checkout: isolation-layer ({_MANAGER_PROVE} or {_B1_PROVE})"
+        )
 
     if str(atoms_root) not in sys.path:
         sys.path.insert(0, str(atoms_root))
@@ -211,7 +216,7 @@ def test_one_write_needs_three_receipts(tmp_path: Path) -> None:
         raise AssertionError("evaluate_tool_call returned empty firings")
 
     args, kwargs, _out = atoms_hits[-1]
-    receipt = _box_receipt(atoms_result, isolation_root)
+    receipt = _box_receipt(atoms_result)
     misses: list[str] = []
     if not _decision_was_input(real_atoms, decision, args, kwargs):
         misses.append("gate decision was not the input to evaluate_tool_call")
