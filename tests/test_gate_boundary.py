@@ -30,19 +30,13 @@ _DECISION_PARAMS = (
 # Keys from the json! summary in crates/isolation-manager/src/prove.rs.
 _MANAGER_PROVE = "crates/isolation-manager/src/prove.rs"
 _MANAGER_MODE = "jailed-via-helper"
-_PROVE_KEYS = (
-    "jail_id",
-    "mode",
-    "time_to_userspace_ms",
-    "time_to_workload_ms",
+_PROVE_BOOLS = (
     "vsock_roundtrip_ok",
     "vestibule_framed_ok",
     "dropbox_handoff_ok",
-    "dropbox_hash",
     "inspector_stage_ok",
     "inspector_vm_ok",
     "inspector_verdict_ok",
-    "spot_checks",
 )
 _SPOT_KEYS = (
     "kvm_absent",
@@ -119,8 +113,12 @@ def _get(receipt, key: str):
     return getattr(receipt, key, None)
 
 
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _is_jailer_prove_receipt(receipt) -> bool:
-    """True only for the full prove.rs summary, including spot_checks."""
+    """True only after the prove.rs summary would emit: checks passed, not present."""
     if receipt is None:
         return False
     if "HANDOFF_OK" in _receipt_text(receipt):
@@ -129,12 +127,19 @@ def _is_jailer_prove_receipt(receipt) -> bool:
         return False
     if not _get(receipt, "jail_id"):
         return False
-    if any(_get(receipt, key) is None for key in _PROVE_KEYS):
+    if not _is_number(_get(receipt, "time_to_userspace_ms")):
+        return False
+    if not _is_number(_get(receipt, "time_to_workload_ms")):
+        return False
+    dropbox_hash = _get(receipt, "dropbox_hash")
+    if not isinstance(dropbox_hash, str) or not dropbox_hash:
+        return False
+    if any(_get(receipt, key) is not True for key in _PROVE_BOOLS):
         return False
     spots = _get(receipt, "spot_checks")
     if spots is None:
         return False
-    return not any(_get(spots, key) is None for key in _SPOT_KEYS)
+    return not any(_get(spots, key) is not True for key in _SPOT_KEYS)
 
 
 def _values_on(obj) -> list:
