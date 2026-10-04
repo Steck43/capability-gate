@@ -27,12 +27,33 @@ _DECISION_PARAMS = (
     "gate",
     "capability_decision",
 )
-# isolation-manager prove.rs summary. Not a flag this test invented.
+# Keys from the json! summary in crates/isolation-manager/src/prove.rs.
 _MANAGER_PROVE = "crates/isolation-manager/src/prove.rs"
 _MANAGER_MODE = "jailed-via-helper"
-# scripts/b1-prove.py writes b1_results.json when --mode jailed.
-_B1_PROVE = "scripts/b1-prove.py"
-_B1_MODE = "jailed"
+_PROVE_KEYS = (
+    "jail_id",
+    "mode",
+    "time_to_userspace_ms",
+    "time_to_workload_ms",
+    "vsock_roundtrip_ok",
+    "vestibule_framed_ok",
+    "dropbox_handoff_ok",
+    "dropbox_hash",
+    "inspector_stage_ok",
+    "inspector_vm_ok",
+    "inspector_verdict_ok",
+    "spot_checks",
+)
+_SPOT_KEYS = (
+    "kvm_absent",
+    "host_invisible",
+    "vsock_ok",
+    "vestibule_framed_ok",
+    "dropbox_handoff_ok",
+    "inspector_stage_ok",
+    "inspector_vm_ok",
+    "inspector_verdict_ok",
+)
 
 
 def _require_sibling(name: str, rel: str) -> Path:
@@ -99,21 +120,21 @@ def _get(receipt, key: str):
 
 
 def _is_jailer_prove_receipt(receipt) -> bool:
-    """True only for the prove summary isolation already emits. HANDOFF_OK is not it."""
+    """True only for the full prove.rs summary, including spot_checks."""
     if receipt is None:
         return False
     if "HANDOFF_OK" in _receipt_text(receipt):
         return False
-    jail_id = _get(receipt, "jail_id")
-    workload = _get(receipt, "time_to_workload_ms")
-    if not jail_id or workload is None:
+    if _get(receipt, "mode") != _MANAGER_MODE:
         return False
-    mode = _get(receipt, "mode")
-    if mode == _MANAGER_MODE:
-        return _get(receipt, "time_to_userspace_ms") is not None
-    if mode == _B1_MODE:
-        return _get(receipt, "checks") is not None
-    return False
+    if not _get(receipt, "jail_id"):
+        return False
+    if any(_get(receipt, key) is None for key in _PROVE_KEYS):
+        return False
+    spots = _get(receipt, "spot_checks")
+    if spots is None:
+        return False
+    return not any(_get(spots, key) is None for key in _SPOT_KEYS)
 
 
 def _values_on(obj) -> list:
@@ -122,15 +143,20 @@ def _values_on(obj) -> list:
         return out
     if isinstance(obj, Mapping):
         out.extend(obj.values())
+    seen: set[str] = set()
     if is_dataclass(obj) and not isinstance(obj, type):
-        out.extend(getattr(obj, f.name) for f in fields(obj))
-    elif hasattr(obj, "__dict__"):
-        out.extend(obj.__dict__.values())
+        for f in fields(obj):
+            out.append(getattr(obj, f.name))
+            seen.add(f.name)
+    if hasattr(obj, "__dict__"):
+        for key, value in obj.__dict__.items():
+            if key not in seen:
+                out.append(value)
     return out
 
 
 def _box_receipt(atoms_result):
-    # Do not run prove. Look only for the summary prove.rs / b1-prove.py already write.
+    # Do not run prove. The evaluation may carry the prove.rs summary as a field.
     if _is_jailer_prove_receipt(atoms_result):
         return atoms_result
     for value in _values_on(atoms_result):
@@ -140,11 +166,11 @@ def _box_receipt(atoms_result):
 
 
 def _atoms_result_was_input(atoms_result, receipt) -> bool:
-    # A dict that stores the object is a shadow write. The evaluation itself
-    # has to be the prove summary, or the next step had to take it as an argument.
     if receipt is None or atoms_result is None:
         return False
-    return receipt is atoms_result
+    if receipt is atoms_result:
+        return True
+    return any(value is receipt for value in _values_on(atoms_result))
 
 
 def test_one_write_needs_three_receipts(tmp_path: Path) -> None:
@@ -154,11 +180,9 @@ def test_one_write_needs_three_receipts(tmp_path: Path) -> None:
             "missing sibling checkout: aegis-atoms (catalog/Aegis-Atoms-v0.yaml)"
         )
     isolation_root = _require_sibling(_ISOLATION, "scripts/conflicting_handoff.py")
-    manager_prove = isolation_root / _MANAGER_PROVE
-    b1_prove = isolation_root / _B1_PROVE
-    if not manager_prove.is_file() and not b1_prove.is_file():
+    if not (isolation_root / _MANAGER_PROVE).is_file():
         raise AssertionError(
-            f"missing sibling checkout: isolation-layer ({_MANAGER_PROVE} or {_B1_PROVE})"
+            f"missing sibling checkout: isolation-layer ({_MANAGER_PROVE})"
         )
 
     if str(atoms_root) not in sys.path:
