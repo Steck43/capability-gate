@@ -17,6 +17,7 @@ import importlib.util
 import inspect
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -37,6 +38,11 @@ _ISOLATION = "isolation-layer"
 _ENV = {
     _ATOMS: "AEGIS_ATOMS_ROOT",
     _ISOLATION: "ISOLATION_LAYER_ROOT",
+}
+# Same commits floor.yml checks out. Move both together, forward only.
+_PINS = {
+    _ATOMS: "a4315cf31f0c005a6a91eca9bd8b222c4f94f89c",
+    _ISOLATION: "2a8bfa815b2bd7d2b3fe72c5b3a58155adefc716",
 }
 _DECISION_PARAMS = (
     "decision",
@@ -153,6 +159,16 @@ def test_siblings_pinned() -> None:
             assert root == Path(raw).resolve(), (
                 f"{name} resolved {root}, env pins {raw}"
             )
+        # Right file contents at the wrong commit still passes the checks above.
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        assert head.returncode == 0, f"{name} at {root}: {head.stderr.strip()}"
+        assert head.stdout.strip() == _PINS[name], (
+            f"{name} is at {head.stdout.strip()}, pinned {_PINS[name]}"
+        )
     assert Path(sib.engine.__file__).resolve().is_relative_to(sib.atoms_root)
     assert Path(sib.handoff.__file__).resolve().is_relative_to(sib.isolation_root)
 
