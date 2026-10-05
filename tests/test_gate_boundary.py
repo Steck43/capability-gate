@@ -1,19 +1,34 @@
-"""Three receipts in order: gate into atoms, atoms into a jailer prove receipt."""
+"""One call, three bindings: atoms records the gate decision, the box echoes atoms' ticket.
+
+test_siblings_pinned owns every presence and load check. The boundary test stays
+red until the three named misses clear; fixture problems fail with "fixture:"
+text instead. Clearing the misses in CI is a receipt contract, not a jailer
+proof: Actions cannot boot the box, so the real run is attached from aegisbox.
+The chain helper below stands in for the harness until the harness exists.
+"""
 
 from __future__ import annotations
 
+import hashlib
+import importlib
+import importlib.util
 import inspect
+import json
 import os
 import sys
 from collections.abc import Mapping
 from contextlib import contextmanager
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
+
+import pytest
+import yaml
 
 ROOF = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOF))
 
-from capability_gate import ENFORCE, Gate, load_policy  # noqa: E402
+from capability_gate import ENFORCE, Gate, Verdict, load_policy  # noqa: E402
 
 _ATOMS = "aegis-atoms"
 _ISOLATION = "isolation-layer"
@@ -27,6 +42,8 @@ _DECISION_PARAMS = (
     "gate",
     "capability_decision",
 )
+_CATALOG = "catalog/Aegis-Atoms-v0.yaml"
+_HANDOFF = "scripts/conflicting_handoff.py"
 # Keys from the json! summary in crates/isolation-manager/src/prove.rs.
 _MANAGER_PROVE = "crates/isolation-manager/src/prove.rs"
 _MANAGER_MODE = "jailed-via-helper"
@@ -48,6 +65,24 @@ _SPOT_KEYS = (
     "inspector_vm_ok",
     "inspector_verdict_ok",
 )
+# The box entry point the chain must call. It does not exist yet; it lands with
+# the harness work. Until then misses 2 and 3 stay red by design.
+_BOX_ENTRY = ("scripts/box_entry.py", "run")
+
+MISS_DECISION = "gate decision was not the input to evaluate_tool_call"
+MISS_ATOMS = "atoms result was not the input to the next step"
+MISS_BOX = "box step is not a prove receipt"
+
+
+# ---------------------------------------------------------------- siblings
+
+
+@dataclass(frozen=True)
+class Siblings:
+    atoms_root: Path
+    isolation_root: Path
+    engine: ModuleType
+    handoff: ModuleType
 
 
 def _require_sibling(name: str, rel: str) -> Path:
@@ -56,8 +91,71 @@ def _require_sibling(name: str, rel: str) -> Path:
     candidates.append(ROOF.parent / name)
     for root in candidates:
         if (root / rel).is_file():
-            return root
+            return root.resolve()
     raise AssertionError(f"missing sibling checkout: {name} ({rel})")
+
+
+def _load_file_module(name: str, path: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_siblings() -> Siblings:
+    atoms_root = _require_sibling(_ATOMS, "engine.py")
+    if not (atoms_root / _CATALOG).is_file():
+        raise AssertionError(f"missing sibling checkout: {_ATOMS} ({_CATALOG})")
+    isolation_root = _require_sibling(_ISOLATION, _HANDOFF)
+    prove = isolation_root / _MANAGER_PROVE
+    # Present is not loaded: an empty touched file must not pass for the checkout.
+    if not prove.is_file() or _MANAGER_MODE not in prove.read_text(encoding="utf-8"):
+        raise AssertionError(f"{_ISOLATION} checkout has no real {_MANAGER_PROVE}")
+
+    # A cached engine module wins over sys.path, so drop it before importing.
+    sys.modules.pop("engine", None)
+    if str(atoms_root) in sys.path:
+        sys.path.remove(str(atoms_root))
+    sys.path.insert(0, str(atoms_root))
+    engine = importlib.import_module("engine")
+    loaded = Path(engine.__file__).resolve()
+    if not loaded.is_relative_to(atoms_root):
+        raise AssertionError(
+            f"engine loaded from {loaded}, not the pinned {atoms_root}"
+        )
+
+    handoff = _load_file_module("pinned_conflicting_handoff", isolation_root / _HANDOFF)
+    # Run isolation code, not just find it: accept() is the box handoff rule.
+    if (
+        handoff.accept("CONFLICTING") is not True
+        or handoff.accept("ALLOW") is not False
+    ):
+        raise AssertionError(f"{_HANDOFF} did not run the handoff rule")
+    return Siblings(atoms_root, isolation_root, engine, handoff)
+
+
+def _siblings_or_skip() -> Siblings:
+    try:
+        return _load_siblings()
+    except (AssertionError, ImportError, AttributeError) as exc:
+        pytest.skip(f"siblings not pinned, test_siblings_pinned owns this red: {exc}")
+
+
+def test_siblings_pinned() -> None:
+    sib = _load_siblings()
+    for name, root in ((_ATOMS, sib.atoms_root), (_ISOLATION, sib.isolation_root)):
+        raw = os.environ.get(_ENV[name], "").strip()
+        if raw:
+            assert root == Path(raw).resolve(), (
+                f"{name} resolved {root}, env pins {raw}"
+            )
+    assert Path(sib.engine.__file__).resolve().is_relative_to(sib.atoms_root)
+    assert Path(sib.handoff.__file__).resolve().is_relative_to(sib.isolation_root)
+
+
+# ---------------------------------------------------------------- receipts
 
 
 @contextmanager
@@ -77,23 +175,30 @@ def _watch(owner, name: str):
         setattr(owner, name, real)
 
 
+def _bound_values(fn, args, kwargs) -> list:
+    try:
+        bound = inspect.signature(fn).bind(*args, **kwargs)
+    except TypeError:
+        return []
+    bound.apply_defaults()
+    return list(bound.arguments.values())
+
+
+def _was_input(fn, obj, hits) -> bool:
+    if obj is None:
+        return False
+    return any(
+        any(value is obj for value in _bound_values(fn, args, kwargs))
+        for args, kwargs, _out in hits
+    )
+
+
 def _decision_kwargs(fn, decision) -> dict:
     params = inspect.signature(fn).parameters
     for name in _DECISION_PARAMS:
         if name in params:
             return {name: decision}
     return {}
-
-
-def _decision_was_input(fn, decision, args, kwargs) -> bool:
-    if decision is None:
-        return False
-    try:
-        bound = inspect.signature(fn).bind(*args, **kwargs)
-    except TypeError:
-        return False
-    bound.apply_defaults()
-    return any(value is decision for value in bound.arguments.values())
 
 
 def _receipt_text(receipt) -> str:
@@ -127,12 +232,12 @@ def _is_jailer_prove_receipt(receipt) -> bool:
         return False
     if not _get(receipt, "jail_id"):
         return False
-    if not _is_number(_get(receipt, "time_to_userspace_ms")):
-        return False
-    if not _is_number(_get(receipt, "time_to_workload_ms")):
-        return False
+    for key in ("time_to_userspace_ms", "time_to_workload_ms"):
+        value = _get(receipt, key)
+        if not _is_number(value) or value < 0:
+            return False
     dropbox_hash = _get(receipt, "dropbox_hash")
-    if not isinstance(dropbox_hash, str) or not dropbox_hash:
+    if not isinstance(dropbox_hash, str) or len(dropbox_hash) != 64:
         return False
     if any(_get(receipt, key) is not True for key in _PROVE_BOOLS):
         return False
@@ -142,45 +247,40 @@ def _is_jailer_prove_receipt(receipt) -> bool:
     return not any(_get(spots, key) is not True for key in _SPOT_KEYS)
 
 
-def _values_on(obj) -> list:
-    out: list = []
-    if obj is None:
-        return out
-    if isinstance(obj, Mapping):
-        out.extend(obj.values())
-    seen: set[str] = set()
-    if is_dataclass(obj) and not isinstance(obj, type):
-        for f in fields(obj):
-            out.append(getattr(obj, f.name))
-            seen.add(f.name)
-    if hasattr(obj, "__dict__"):
-        for key, value in obj.__dict__.items():
-            if key not in seen:
-                out.append(value)
-    return out
+def _call_digest(decision, tool: str, path: str) -> str:
+    """The test computes this itself. A planted constant summary cannot carry it."""
+    body = json.dumps([decision.verdict.value, decision.skill, tool, path])
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def _box_receipt(atoms_result):
-    # Do not run prove. The evaluation may carry the prove.rs summary as a field.
-    if _is_jailer_prove_receipt(atoms_result):
-        return atoms_result
-    for value in _values_on(atoms_result):
-        if _is_jailer_prove_receipt(value):
-            return value
-    return None
+def _decision_digest(decision) -> str:
+    """What atoms must record to show it read the gate decision, not just accepted it."""
+    body = json.dumps(
+        [
+            decision.verdict.value,
+            decision.skill,
+            decision.tool,
+            list(decision.paths),
+            decision.reason,
+        ]
+    )
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def _atoms_result_was_input(atoms_result, receipt) -> bool:
-    if receipt is None or atoms_result is None:
-        return False
-    if receipt is atoms_result:
-        return True
-    return any(value is receipt for value in _values_on(atoms_result))
+def _ticket_digest(ticket) -> str | None:
+    """The box must echo this digest of the ticket atoms issued. The test never mints the ticket."""
+    if not isinstance(ticket, str) or not ticket:
+        return None
+    return hashlib.sha256(ticket.encode("utf-8")).hexdigest()
 
 
-def _prove_summary(*, passed: bool) -> dict:
+def _box_receipt_ok(receipt, digest: str) -> bool:
+    return _is_jailer_prove_receipt(receipt) and _get(receipt, "call_digest") == digest
+
+
+def _prove_summary(*, passed: bool, call_digest: str | None = None) -> dict:
     """Shape of the json! in prove.rs. passed=False is a false-flag copy."""
-    return {
+    out = {
         "jail_id": "mgr-pin",
         "mode": _MANAGER_MODE,
         "time_to_userspace_ms": 1.2,
@@ -189,92 +289,179 @@ def _prove_summary(*, passed: bool) -> dict:
         "dropbox_hash": "a" * 64,
         "spot_checks": {key: passed for key in _SPOT_KEYS},
     }
+    if call_digest is not None:
+        out["call_digest"] = call_digest
+    return out
 
 
-def test_one_write_needs_three_receipts(tmp_path: Path) -> None:
-    false_copy = _prove_summary(passed=False)
+def test_receipt_rule_rejects_flags_shapes_and_plants() -> None:
     passed = _prove_summary(passed=True)
-    # Own assert: a None-check helper would accept false_copy and fail here.
-    assert _is_jailer_prove_receipt(false_copy) is False
     assert _is_jailer_prove_receipt(passed) is True
-    # Stand-in only. The live evaluate_tool_call result is not this object.
-    stand_in = {"inner": passed}
-    nested = _box_receipt(stand_in)
-    assert _atoms_result_was_input(stand_in, nested)
-    assert _is_jailer_prove_receipt(nested)
+    assert _is_jailer_prove_receipt(_prove_summary(passed=False)) is False
+    assert _is_jailer_prove_receipt("HANDOFF_OK CONFLICTING") is False
+    assert _is_jailer_prove_receipt({**passed, "time_to_workload_ms": -1}) is False
+    assert _is_jailer_prove_receipt({**passed, "dropbox_hash": "x"}) is False
+    # A passing shape with no word HANDOFF_OK still needs this call's digest.
+    assert _box_receipt_ok(passed, "0" * 64) is False
+    assert _box_receipt_ok(_prove_summary(passed=True, call_digest="0" * 64), "0" * 64)
 
-    atoms_root = _require_sibling(_ATOMS, "engine.py")
-    if not (atoms_root / "catalog" / "Aegis-Atoms-v0.yaml").is_file():
-        raise AssertionError(
-            "missing sibling checkout: aegis-atoms (catalog/Aegis-Atoms-v0.yaml)"
-        )
-    isolation_root = _require_sibling(_ISOLATION, "scripts/conflicting_handoff.py")
-    if not (isolation_root / _MANAGER_PROVE).is_file():
-        raise AssertionError(
-            f"missing sibling checkout: isolation-layer ({_MANAGER_PROVE})"
-        )
 
-    if str(atoms_root) not in sys.path:
-        sys.path.insert(0, str(atoms_root))
-    # Sibling roof: import after the checkout assert so a miss fails that pin.
-    import engine
-    from engine import load_catalog
+# ---------------------------------------------------------------- the chain
 
-    path = str(tmp_path / "SOUL.md")
-    policy = load_policy(
-        {
-            "skills": {
-                "note-taker": {
-                    "tools": ["write_file"],
-                    "paths": [str(tmp_path / "**")],
-                }
-            }
-        }
-    )
-    gate = Gate(policy, log_path=str(tmp_path / "decisions.jsonl"), mode=ENFORCE)
 
-    decision = None
+@dataclass
+class Chain:
+    decision: object
+    atoms_result: object
+    atoms_fn: object
+    atoms_hits: list
+    # Copied off atoms_result before the box runs, so the box cannot write them.
+    decision_digest_seen: object
+    ticket_seen: object
+    box_hits: list
+    receipt: object
+
+
+def _box_entry(isolation_root: Path):
+    rel, name = _BOX_ENTRY
+    path = isolation_root / rel
+    if not path.is_file():
+        return None
+    module = _load_file_module("pinned_box_entry", path)
+    return (module, name) if callable(getattr(module, name, None)) else None
+
+
+def _run_chain(
+    sib: Siblings, gate: Gate, skill: str, tool: str, path: str, env: dict
+) -> Chain:
+    """The order the harness must keep: gate, then atoms, then the box, each only if the last allowed."""
     with _watch(Gate, "evaluate") as (gate_hits, _real_gate):
-        decision = gate.evaluate("note-taker", "write_file", [path])
-    if not gate_hits:
-        raise AssertionError("Gate.evaluate was skipped")
-    if decision is None:
-        raise AssertionError("Gate.evaluate returned None")
+        decision = gate.evaluate(skill, tool, [path])
+    assert gate_hits, "Gate.evaluate was skipped"
 
-    env = {
+    catalog = sib.engine.load_catalog(sib.atoms_root / _CATALOG, env)
+    extra = _decision_kwargs(sib.engine.evaluate_tool_call, decision)
+    with _watch(sib.engine, "evaluate_tool_call") as (atoms_hits, atoms_fn):
+        atoms_result = sib.engine.evaluate_tool_call(
+            catalog,
+            tool,
+            {"path": path, "content": "x"},
+            env=env,
+            plugin_mode=ENFORCE,
+            **extra,
+        )
+    assert atoms_hits, "evaluate_tool_call was skipped"
+
+    decision_digest_seen = getattr(atoms_result, "decision_digest", None)
+    ticket_seen = getattr(atoms_result, "box_ticket", None)
+    box_hits, receipt = [], None
+    entry = _box_entry(sib.isolation_root)
+    if entry is not None and atoms_result.block_message is None:
+        module, name = entry
+        with _watch(module, name) as (box_hits, _box_fn):
+            receipt = getattr(module, name)(
+                atoms_result=atoms_result, decision=decision, tool=tool, path=path
+            )
+    return Chain(
+        decision,
+        atoms_result,
+        atoms_fn,
+        atoms_hits,
+        decision_digest_seen,
+        ticket_seen,
+        box_hits,
+        receipt,
+    )
+
+
+def _env(tmp_path: Path) -> dict:
+    return {
         "HERMES_HOME": str(tmp_path),
         "OBSIDIAN_VAULT_PATH": str(tmp_path / "vault"),
     }
-    catalog = load_catalog(atoms_root / "catalog" / "Aegis-Atoms-v0.yaml", env)
-    extra = _decision_kwargs(engine.evaluate_tool_call, decision)
 
-    atoms_result = None
-    with _watch(engine, "evaluate_tool_call") as (atoms_hits, real_atoms):
-        atoms_result = engine.evaluate_tool_call(
-            catalog,
-            "write_file",
-            {"path": path, "content": "x"},
-            env=env,
-            plugin_mode="enforce",
-            **extra,
-        )
-    if not atoms_hits:
-        raise AssertionError("evaluate_tool_call was skipped")
-    if atoms_result is None:
-        raise AssertionError("evaluate_tool_call returned None")
-    firings = getattr(atoms_result, "firings", None)
-    if firings is None:
-        raise AssertionError("evaluate_tool_call returned no firings")
-    if len(firings) == 0:
-        raise AssertionError("evaluate_tool_call returned empty firings")
 
-    args, kwargs, _out = atoms_hits[-1]
-    receipt = _box_receipt(atoms_result)
+def _shipped_gate(tmp_path: Path, monkeypatch) -> Gate:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    policy = load_policy(
+        yaml.safe_load((ROOF / "allowlist.example.yaml").read_text(encoding="utf-8"))
+    )
+    return Gate(policy, log_path=str(tmp_path / "decisions.jsonl"), mode=ENFORCE)
+
+
+def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
+    sib = _siblings_or_skip()
+    gate = _shipped_gate(tmp_path, monkeypatch)
+    path = str(tmp_path / "notes" / "boundary.md")
+    chain = _run_chain(sib, gate, "*", "write_file", path, _env(tmp_path))
+
+    # The call must be one the shipped grant allows and atoms forwards, or the
+    # misses below would be about a call that should never reach the box.
+    assert chain.decision.verdict is Verdict.ALLOW, (
+        f"fixture: shipped grant denied {path}: {chain.decision.reason}"
+    )
+    assert chain.atoms_result.block_message is None, (
+        f"fixture: atoms blocked {path}: {chain.atoms_result.winning_effect}"
+    )
+
     misses: list[str] = []
-    if not _decision_was_input(real_atoms, decision, args, kwargs):
-        misses.append("gate decision was not the input to evaluate_tool_call")
-    if not _atoms_result_was_input(atoms_result, receipt):
-        misses.append("atoms result was not the input to the next step")
-    if not _is_jailer_prove_receipt(receipt):
-        misses.append("box step is not a prove receipt")
-    assert misses == []
+    # A parameter named "decision" is not enough; atoms must record what it read.
+    if not (
+        _was_input(chain.atoms_fn, chain.decision, chain.atoms_hits)
+        and chain.decision_digest_seen == _decision_digest(chain.decision)
+    ):
+        misses.append(MISS_DECISION)
+    # Atoms issues the ticket before the box runs; the box receipt must echo it.
+    ticket = _ticket_digest(chain.ticket_seen)
+    if ticket is None or _get(chain.receipt, "atoms_digest") != ticket:
+        misses.append(MISS_ATOMS)
+    if not _box_receipt_ok(
+        chain.receipt, _call_digest(chain.decision, "write_file", path)
+    ):
+        misses.append(MISS_BOX)
+    assert misses == [], "; ".join(misses)
+
+
+def test_atoms_block_never_reaches_box(tmp_path: Path, monkeypatch) -> None:
+    sib = _siblings_or_skip()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    policy = load_policy(
+        {"skills": {"*": {"tools": ["write_file"], "paths": [str(tmp_path / "**")]}}}
+    )
+    gate = Gate(policy, log_path=str(tmp_path / "decisions.jsonl"), mode=ENFORCE)
+    chain = _run_chain(
+        sib, gate, "*", "write_file", str(tmp_path / "SOUL.md"), _env(tmp_path)
+    )
+
+    # Checks the stand-in chain's order only. It cannot see a box call atoms makes itself.
+    assert chain.decision.verdict is Verdict.ALLOW, (
+        f"fixture: grant denied SOUL.md: {chain.decision.reason}"
+    )
+    assert chain.atoms_result.block_message is not None, (
+        "fixture: atoms forwarded SOUL.md"
+    )
+    assert chain.box_hits == [], "the box ran on a call atoms blocked"
+    assert chain.receipt is None
+
+
+def test_deny_decision_makes_atoms_block(tmp_path: Path, monkeypatch) -> None:
+    sib = _siblings_or_skip()
+    gate = _shipped_gate(tmp_path, monkeypatch)
+    path = str(tmp_path / "outside.md")
+    decision = gate.evaluate("*", "write_file", [path])
+    assert decision.verdict is Verdict.DENY, f"fixture: grant allowed {path}"
+
+    extra = _decision_kwargs(sib.engine.evaluate_tool_call, decision)
+    if not extra:
+        # The only expected miss today. Once the parameter exists, a forward fails hard.
+        pytest.xfail("evaluate_tool_call has no parameter for the gate decision yet")
+    catalog = sib.engine.load_catalog(sib.atoms_root / _CATALOG, _env(tmp_path))
+    result = sib.engine.evaluate_tool_call(
+        catalog,
+        "write_file",
+        {"path": path, "content": "x"},
+        env=_env(tmp_path),
+        plugin_mode=ENFORCE,
+        **extra,
+    )
+    assert result.block_message is not None, "atoms forwarded a call the gate denied"
