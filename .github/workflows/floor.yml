@@ -75,8 +75,9 @@ jobs:
         python: ["3.11", "3.12"]
     # The boundary test needs aegis-atoms and isolation-layer beside this roof.
     # Each repo gets its own directory and pytest runs from capability-gate, so
-    # pytest never collects the siblings' tests. Pins are full SHAs and only
-    # move forward to a published merge commit.
+    # pytest never collects the siblings' tests. Pins are full SHAs, moved by
+    # hand and never backward to make a test pass. The isolation pin sits on
+    # spine1/live-box until that branch merges to main.
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

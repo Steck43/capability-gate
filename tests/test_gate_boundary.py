@@ -71,7 +71,7 @@ _BOX_ENTRY = ("scripts/box_entry.py", "run")
 
 MISS_DECISION = "gate decision was not the input to evaluate_tool_call"
 MISS_ATOMS = "atoms result was not the input to the next step"
-MISS_BOX = "box step is not a prove receipt"
+MISS_BOX = "box step is not a prove receipt bound to this call"
 
 
 # ---------------------------------------------------------------- siblings
@@ -139,7 +139,7 @@ def _load_siblings() -> Siblings:
 def _siblings_or_skip() -> Siblings:
     try:
         return _load_siblings()
-    except (AssertionError, ImportError, AttributeError) as exc:
+    except Exception as exc:  # test_siblings_pinned raises the same error
         pytest.skip(f"siblings not pinned, test_siblings_pinned owns this red: {exc}")
 
 
@@ -274,11 +274,22 @@ def _ticket_digest(ticket) -> str | None:
     return hashlib.sha256(ticket.encode("utf-8")).hexdigest()
 
 
-def _box_receipt_ok(receipt, digest: str) -> bool:
-    return _is_jailer_prove_receipt(receipt) and _get(receipt, "call_digest") == digest
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def _prove_summary(*, passed: bool, call_digest: str | None = None) -> dict:
+def _box_receipt_ok(receipt, call_digest: str, content: str) -> bool:
+    """Prove-shaped, bound to this call, and the dropbox hash is the bytes this call wrote."""
+    return (
+        _is_jailer_prove_receipt(receipt)
+        and _get(receipt, "call_digest") == call_digest
+        and _get(receipt, "dropbox_hash") == _content_hash(content)
+    )
+
+
+def _prove_summary(
+    *, passed: bool, call_digest: str | None = None, dropbox_hash: str = "a" * 64
+) -> dict:
     """Shape of the json! in prove.rs. passed=False is a false-flag copy."""
     out = {
         "jail_id": "mgr-pin",
@@ -286,7 +297,7 @@ def _prove_summary(*, passed: bool, call_digest: str | None = None) -> dict:
         "time_to_userspace_ms": 1.2,
         "time_to_workload_ms": 3.4,
         **{key: passed for key in _PROVE_BOOLS},
-        "dropbox_hash": "a" * 64,
+        "dropbox_hash": dropbox_hash,
         "spot_checks": {key: passed for key in _SPOT_KEYS},
     }
     if call_digest is not None:
@@ -301,9 +312,13 @@ def test_receipt_rule_rejects_flags_shapes_and_plants() -> None:
     assert _is_jailer_prove_receipt("HANDOFF_OK CONFLICTING") is False
     assert _is_jailer_prove_receipt({**passed, "time_to_workload_ms": -1}) is False
     assert _is_jailer_prove_receipt({**passed, "dropbox_hash": "x"}) is False
-    # A passing shape with no word HANDOFF_OK still needs this call's digest.
-    assert _box_receipt_ok(passed, "0" * 64) is False
-    assert _box_receipt_ok(_prove_summary(passed=True, call_digest="0" * 64), "0" * 64)
+    # A passing prove shape is rejected without this call's digest and content hash.
+    bound = _prove_summary(
+        passed=True, call_digest="0" * 64, dropbox_hash=_content_hash("x")
+    )
+    assert _box_receipt_ok(passed, "0" * 64, "x") is False
+    assert _box_receipt_ok({**bound, "dropbox_hash": "a" * 64}, "0" * 64, "x") is False
+    assert _box_receipt_ok(bound, "0" * 64, "x") is True
 
 
 # ---------------------------------------------------------------- the chain
@@ -327,15 +342,24 @@ def _box_entry(isolation_root: Path):
     path = isolation_root / rel
     if not path.is_file():
         return None
+    # box_entry may import its sibling scripts, as it would when run from scripts/.
+    if str(path.parent) not in sys.path:
+        sys.path.insert(0, str(path.parent))
     module = _load_file_module("pinned_box_entry", path)
     return (module, name) if callable(getattr(module, name, None)) else None
 
 
 def _run_chain(
-    sib: Siblings, gate: Gate, skill: str, tool: str, path: str, env: dict
+    sib: Siblings,
+    gate: Gate,
+    skill: str,
+    tool: str,
+    path: str,
+    content: str,
+    env: dict,
 ) -> Chain:
     """The order the harness must keep: gate, then atoms, then the box, each only if the last allowed."""
-    with _watch(Gate, "evaluate") as (gate_hits, _real_gate):
+    with _watch(Gate, "evaluate") as (gate_hits, _):
         decision = gate.evaluate(skill, tool, [path])
     assert gate_hits, "Gate.evaluate was skipped"
 
@@ -345,7 +369,7 @@ def _run_chain(
         atoms_result = sib.engine.evaluate_tool_call(
             catalog,
             tool,
-            {"path": path, "content": "x"},
+            {"path": path, "content": content},
             env=env,
             plugin_mode=ENFORCE,
             **extra,
@@ -358,9 +382,13 @@ def _run_chain(
     entry = _box_entry(sib.isolation_root)
     if entry is not None and atoms_result.block_message is None:
         module, name = entry
-        with _watch(module, name) as (box_hits, _box_fn):
+        with _watch(module, name) as (box_hits, _):
             receipt = getattr(module, name)(
-                atoms_result=atoms_result, decision=decision, tool=tool, path=path
+                atoms_result=atoms_result,
+                decision=decision,
+                tool=tool,
+                path=path,
+                content=content,
             )
     return Chain(
         decision,
@@ -392,34 +420,42 @@ def _shipped_gate(tmp_path: Path, monkeypatch) -> Gate:
 def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
     sib = _siblings_or_skip()
     gate = _shipped_gate(tmp_path, monkeypatch)
-    path = str(tmp_path / "notes" / "boundary.md")
-    chain = _run_chain(sib, gate, "*", "write_file", path, _env(tmp_path))
+    env = _env(tmp_path)
 
-    # The call must be one the shipped grant allows and atoms forwards, or the
-    # misses below would be about a call that should never reach the box.
-    assert chain.decision.verdict is Verdict.ALLOW, (
-        f"fixture: shipped grant denied {path}: {chain.decision.reason}"
-    )
-    assert chain.atoms_result.block_message is None, (
-        f"fixture: atoms blocked {path}: {chain.atoms_result.winning_effect}"
-    )
+    # Two calls, two contents. A constant ticket or a canned receipt cannot match both.
+    runs = []
+    for n in (1, 2):
+        path = str(tmp_path / "notes" / f"boundary-{n}.md")
+        content = f"boundary write {n}"
+        chain = _run_chain(sib, gate, "*", "write_file", path, content, env)
+        # The call must be one the shipped grant allows and atoms forwards, or the
+        # misses below would be about a call that should never reach the box.
+        assert chain.decision.verdict is Verdict.ALLOW, (
+            f"fixture: shipped grant denied {path}: {chain.decision.reason}"
+        )
+        assert chain.atoms_result.block_message is None, (
+            f"fixture: atoms blocked {path}: {chain.atoms_result.winning_effect}"
+        )
+        runs.append((chain, path, content))
 
     misses: list[str] = []
-    # A parameter named "decision" is not enough; atoms must record what it read.
-    if not (
-        _was_input(chain.atoms_fn, chain.decision, chain.atoms_hits)
-        and chain.decision_digest_seen == _decision_digest(chain.decision)
-    ):
-        misses.append(MISS_DECISION)
-    # Atoms issues the ticket before the box runs; the box receipt must echo it.
-    ticket = _ticket_digest(chain.ticket_seen)
-    if ticket is None or _get(chain.receipt, "atoms_digest") != ticket:
+    for chain, path, content in runs:
+        # A parameter named "decision" is not enough; atoms must record what it read.
+        if not (
+            _was_input(chain.atoms_fn, chain.decision, chain.atoms_hits)
+            and chain.decision_digest_seen == _decision_digest(chain.decision)
+        ):
+            misses.append(MISS_DECISION)
+        # Atoms issues the ticket before the box runs; the box receipt must echo it.
+        ticket = _ticket_digest(chain.ticket_seen)
+        if ticket is None or _get(chain.receipt, "ticket_digest") != ticket:
+            misses.append(MISS_ATOMS)
+        call = _call_digest(chain.decision, "write_file", path)
+        if not _box_receipt_ok(chain.receipt, call, content):
+            misses.append(MISS_BOX)
+    if runs[0][0].ticket_seen == runs[1][0].ticket_seen:
         misses.append(MISS_ATOMS)
-    if not _box_receipt_ok(
-        chain.receipt, _call_digest(chain.decision, "write_file", path)
-    ):
-        misses.append(MISS_BOX)
-    assert misses == [], "; ".join(misses)
+    assert misses == [], "; ".join(dict.fromkeys(misses))
 
 
 def test_atoms_block_never_reaches_box(tmp_path: Path, monkeypatch) -> None:
@@ -430,7 +466,7 @@ def test_atoms_block_never_reaches_box(tmp_path: Path, monkeypatch) -> None:
     )
     gate = Gate(policy, log_path=str(tmp_path / "decisions.jsonl"), mode=ENFORCE)
     chain = _run_chain(
-        sib, gate, "*", "write_file", str(tmp_path / "SOUL.md"), _env(tmp_path)
+        sib, gate, "*", "write_file", str(tmp_path / "SOUL.md"), "x", _env(tmp_path)
     )
 
     # Checks the stand-in chain's order only. It cannot see a box call atoms makes itself.
