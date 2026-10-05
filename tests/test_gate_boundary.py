@@ -1,3 +1,5 @@
+# This test pins the receipt contract. A test-side fake can satisfy it until
+# prove.rs emits its own call digest (A6).
 """One call, three bindings: atoms records the gate decision, the box echoes atoms' ticket.
 
 test_siblings_pinned owns every presence and load check. The boundary test stays
