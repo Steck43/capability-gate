@@ -83,6 +83,10 @@ MISS_ATOMS = "atoms result was not the input to the next step"
 MISS_BOX = "box step is not a prove receipt bound to this call"
 
 
+class PinnedMiss(AssertionError):
+    """The one failure the strict xfails accept. Any other error fails the test."""
+
+
 # ---------------------------------------------------------------- siblings
 
 
@@ -450,11 +454,12 @@ _PINNED_MISSES = [MISS_DECISION, MISS_ATOMS, MISS_BOX] * 2 + [MISS_ATOMS]
 
 
 # Strict: green on main while the misses stand, XPASS fails once they all close.
-# Only the pinned-miss assert is an AssertionError; fixture and drift use
-# pytest.fail so the xfail cannot swallow them.
+# The xfail accepts only PinnedMiss, raised once below for the exact pinned list.
+# Any other error, a plain assert here, a skipped gate or atoms step in
+# _run_chain, or an error inside sibling code, fails the test outright.
 @pytest.mark.xfail(
     strict=True,
-    raises=AssertionError,
+    raises=PinnedMiss,
     reason="; ".join((MISS_DECISION, MISS_ATOMS, MISS_BOX)),
 )
 def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
@@ -499,7 +504,8 @@ def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
         misses.append(MISS_ATOMS)
     if misses and misses != _PINNED_MISSES:
         pytest.fail(f"misses changed from the pinned list, update the xfail: {misses}")
-    assert misses == [], "; ".join(dict.fromkeys(misses))
+    if misses:
+        raise PinnedMiss("; ".join(dict.fromkeys(misses)))
 
 
 def test_atoms_block_never_reaches_box(tmp_path: Path, monkeypatch) -> None:
@@ -527,9 +533,9 @@ def test_atoms_block_never_reaches_box(tmp_path: Path, monkeypatch) -> None:
 _NO_DECISION_PARAM = "evaluate_tool_call has no parameter for the gate decision yet"
 
 
-# Strict, same rule: the missing parameter is the only AssertionError. A forward of
-# a denied call is pytest.fail, so it fails hard even under the xfail.
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_NO_DECISION_PARAM)
+# Strict, same rule: the xfail accepts only PinnedMiss, raised for the missing
+# decision parameter. A forward of a denied call, or any other error, fails outright.
+@pytest.mark.xfail(strict=True, raises=PinnedMiss, reason=_NO_DECISION_PARAM)
 def test_deny_decision_makes_atoms_block(tmp_path: Path, monkeypatch) -> None:
     sib = _siblings_or_skip()
     gate = _shipped_gate(tmp_path, monkeypatch)
@@ -539,7 +545,8 @@ def test_deny_decision_makes_atoms_block(tmp_path: Path, monkeypatch) -> None:
         pytest.fail(f"fixture: grant allowed {path}")
 
     extra = _decision_kwargs(sib.engine.evaluate_tool_call, decision)
-    assert extra, _NO_DECISION_PARAM
+    if not extra:
+        raise PinnedMiss(_NO_DECISION_PARAM)
     catalog = sib.engine.load_catalog(sib.atoms_root / _CATALOG, _env(tmp_path))
     result = sib.engine.evaluate_tool_call(
         catalog,
