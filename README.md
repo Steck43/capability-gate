@@ -47,6 +47,8 @@ The gate reads `config.yaml` and `allowlist.yaml` only when each is a regular fi
 
 This is a manual step, run by you outside the agent. Replace the symlink or fix the owner and mode, for example `chmod 600 ~/.hermes/config.yaml`, then start a new Hermes session. The gate does not stop a process that already has terminal access as your user from doing the same thing, which is why `terminal` and `execute_code` stay behind approval. Not checked yet: a symlink in a parent folder, a hardlink to the config, and file owner and ACLs on Windows.
 
+Claude Code on Windows: the same decider runs as a `PreToolUse` hook. See [adapters/CLAUDE-CODE.md](adapters/CLAUDE-CODE.md).
+
 ## Status
 
 Honest about what runs versus what is planned.

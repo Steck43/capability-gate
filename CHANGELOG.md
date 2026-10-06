@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Claude Code adapter (`adapters/claude_code_hook.py`), Windows. The decider runs as a `PreToolUse` hook. Allow is exit 0 with no output, so Claude Code's own permissions still apply; every deny and every error is exit 2 with a reason, under a 5 s self-deadline. Calls carry no skill label and are judged as `UNLABELED`, which the allowlist must grant by name. A `PostToolUse` twin flags a call whose input changed after the check. `tests/test_cc_adapter.py` pins each branch.
+
 ### Fixed
 
 - Deny secret-canary.txt even when a grant glob covers its directory (FL-3 canary).
