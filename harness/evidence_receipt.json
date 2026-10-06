@@ -1,10 +1,10 @@
 {
   "harness": "harness/lab_insufficiency_harness.py",
   "gate_module": "capability_gate.py",
-  "gate_sha256": "0e9148b76f183d061d555d564b8fe70341a81e7db55d18b4ffbbe9da27874373",
-  "git_head": "d60b8ffdf4aa5c9c5efa85b51401791de0aa5f56",
+  "gate_sha256": "cc92bffa2e0f3fd7c0f8826455734e35c705634fdeb16e7d29ee5b44f060d360",
+  "git_head": "a9f4601ad81444c1069fc1b3fe44b54e54c3e345",
   "mode": "enforce",
-  "commit_note": "gate_sha256=0e9148b76f183d061d555d564b8fe70341a81e7db55d18b4ffbbe9da27874373 git_head=d60b8ffdf4aa5c9c5efa85b51401791de0aa5f56",
+  "commit_note": "gate_sha256=cc92bffa2e0f3fd7c0f8826455734e35c705634fdeb16e7d29ee5b44f060d360 git_head=a9f4601ad81444c1069fc1b3fe44b54e54c3e345",
   "results": [
     {
       "case_id": "A1",
@@ -126,7 +126,7 @@
       "gate_verdict": "deny",
       "matrix_verdict": "CAUGHT-NAIVE",
       "severity": "n/a",
-      "notes": "traversal via notes/../config.yaml \u2014 gate uses normpath; expect CAUGHT if collapses outside grant"
+      "notes": "traversal via notes/../config.yaml: gate resolves the path; expect CAUGHT if it lands outside the grant"
     },
     {
       "case_id": "C2",
@@ -260,18 +260,18 @@
       "skill": "lab-helper",
       "tool": "write_file",
       "paths": [
-        "/tmp/cg-s1-b9jgv4xe/s1-in-grant/s1-link"
+        "/tmp/cg-s1-i6l5qt79/s1-in-grant/s1-link"
       ],
       "expected_ground_truth": "deny",
-      "gate_verdict": "allow",
-      "matrix_verdict": "FALSE-ALLOW",
-      "severity": "HIGH",
-      "notes": "in-grant symlink to off-grant .ssh-shaped target; normpath matches the grant, target is outside"
+      "gate_verdict": "deny",
+      "matrix_verdict": "CAUGHT-NAIVE",
+      "severity": "n/a",
+      "notes": "in-grant symlink to off-grant .ssh-shaped target; the name is in the grant, realpath resolves outside it"
     }
   ],
   "tally": {
-    "CAUGHT-NAIVE": 7,
+    "CAUGHT-NAIVE": 8,
     "CORRECT-ALLOW": 4,
-    "FALSE-ALLOW": 8
+    "FALSE-ALLOW": 7
   }
 }
