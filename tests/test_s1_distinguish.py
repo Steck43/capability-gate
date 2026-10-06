@@ -1,7 +1,9 @@
-"""§8.2 distinguish: resolve-then-reopen by the original name still ALLOWs.
+"""§8.2 distinguish: S1 by name and by target, after A5.
 
-This is not a decide-path fix. It measures why publishing realpath as the
-remedy would be the wrong claim: the hook re-opens the path it was given.
+Before A5 the name ALLOWed and the resolved target DENYed. A5 matches the
+resolved real path, so both now DENY. Realpath narrows S1; it is still not the
+remedy for a swap between the check and the open, which stays a strict
+expected failure in tests/test_floor_fixes.py.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from capability_gate import ENFORCE, Gate, Verdict, load_policy  # noqa: E402
 from lab_insufficiency_harness import POLICY, _s1_symlink  # noqa: E402
 
 
-def test_resolve_then_reopen_by_name_still_allows(tmp_path: Path) -> None:
+def test_s1_denied_by_name_and_by_target(tmp_path: Path) -> None:
     link, notes, created = _s1_symlink(tmp_path)
     if not created:
         pytest.skip(notes)
@@ -43,6 +45,7 @@ def test_resolve_then_reopen_by_name_still_allows(tmp_path: Path) -> None:
     resolved = os.path.realpath(link)
     by_target = gate.evaluate("lab-helper", "write_file", [resolved])
     again_by_name = gate.evaluate("lab-helper", "write_file", [link])
-    assert by_name.verdict is Verdict.ALLOW
+    # A5: by_name and again_by_name were ALLOW.
+    assert by_name.verdict is Verdict.DENY
     assert by_target.verdict is Verdict.DENY
-    assert again_by_name.verdict is Verdict.ALLOW
+    assert again_by_name.verdict is Verdict.DENY

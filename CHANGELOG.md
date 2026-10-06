@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A call with no skill resolves to `UNLABELED` and is denied unless the allowlist grants `UNLABELED` by name. It used to fall to the `*` grant, and Hermes 0.18 sends no skill, so that was every live call. An allowlist that relied on `*` for hook traffic needs an `UNLABELED` entry. A labeled skill the allowlist does not name is still denied.
+- Path matching resolves the real path before it matches, and a request path that needs `~` or `$VAR` expansion is denied. A grant rooted at a symlink still matches its own files. `S1` moves from FALSE-ALLOW to CAUGHT, so the Stage-1 tally is 8 / 7 / 4 / 0. `S4` (`/proc/self/root`) is denied as a side effect. A hardlink to an off-grant file and a swap between the check and the open stay open as strict expected failures.
 - Audit JSONL is hash-chained. Rewriting an older line fails closed; the old line-count test stayed green on that rewrite.
 - Adapter extracts every path argument. A notes path plus `target=/etc/passwd` is denied.
 

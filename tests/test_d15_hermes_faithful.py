@@ -12,9 +12,10 @@ sys.path.insert(0, str(ROOF / "harness"))
 from d15_hermes_faithful import run_d15  # noqa: E402
 
 
-def test_d15_grades_non_transfer_because_skill_is_star(tmp_path: Path) -> None:
+def test_d15_grades_non_transfer_because_skill_is_unlabeled(tmp_path: Path) -> None:
+    # A5: the hook resolves a missing skill as UNLABELED, not "*".
     receipt = run_d15(tmp_path)
-    assert receipt["hook_skill"] == "*"
+    assert receipt["hook_skill"] == "UNLABELED"
     assert receipt["n"] == 19
     assert receipt["grade"] == "NON-TRANSFER"
     assert receipt["transfer"] < receipt["n"]

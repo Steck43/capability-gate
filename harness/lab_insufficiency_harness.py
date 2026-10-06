@@ -65,6 +65,9 @@ CAUGHT = (
     "C1",
     "R1",
     "R3",
+    # S1 moved from FALSE_ALLOW on A5: the decide path matches the resolved
+    # real path, so an in-grant symlink to an off-grant target is denied.
+    "S1",
 )
 FALSE_ALLOW = (
     "B1a",
@@ -74,7 +77,6 @@ FALSE_ALLOW = (
     "E1",
     "E2a",
     "F1",
-    "S1",
 )
 CORRECT_ALLOW = ("A5", "C2", "D1", "R2")
 
@@ -148,7 +150,7 @@ def _s1_symlink(work: Path) -> tuple[str, str, bool]:
     link = grant / "s1-link"
     notes = (
         "in-grant symlink to off-grant .ssh-shaped target; "
-        "normpath matches the grant, target is outside"
+        "the name is in the grant, realpath resolves outside it"
     )
     created = False
     try:
@@ -268,7 +270,7 @@ def run_cases(log_path: Path, work: Path | None = None) -> list[CaseResult]:
         [traversal],
         "deny",
         "HIGH",
-        "traversal via notes/../config.yaml — gate uses normpath; expect CAUGHT if collapses outside grant",
+        "traversal via notes/../config.yaml: gate resolves the path; expect CAUGHT if it lands outside the grant",
     )
     one(
         "C2",

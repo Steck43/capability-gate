@@ -302,9 +302,26 @@ def _glob_to_regex(glob: str) -> re.Pattern:
     return re.compile("".join(out))
 
 
+def _real_glob(glob: str) -> str:
+    # Resolve the literal prefix of a grant, so a grant rooted at a symlink
+    # still matches its own files once request paths are resolved.
+    parts = glob.split("/")
+    i = next((k for k, seg in enumerate(parts) if "*" in seg or "?" in seg), len(parts))
+    prefix = os.path.realpath("/".join(parts[:i]) or "/")
+    rest = parts[i:]
+    return "/".join([prefix.rstrip("/")] + rest) if rest else prefix
+
+
 def _path_allowed(path: str, globs: Iterable[str]) -> bool:
-    norm = os.path.normpath(_expand(path))
-    return any(_glob_to_regex(os.path.normpath(g)).match(norm) for g in globs)
+    # Request paths are not expanded. The tool may expand "~" or "$VAR"
+    # differently, or not at all, so the gate refuses to guess.
+    if "$" in path or path.startswith("~"):
+        return False
+    # Match the file the name resolves to, not the string. An in-grant symlink
+    # to an off-grant file is denied. A swap between this check and the
+    # tool's open is not closed here; that needs open-by-fd in the host.
+    real = os.path.realpath(path)
+    return any(_glob_to_regex(os.path.normpath(_real_glob(g))).match(real) for g in globs)
 
 
 # --- the decision ---------------------------------------------------------

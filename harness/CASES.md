@@ -4,8 +4,8 @@ Derived from `CAUGHT` / `FALSE_ALLOW` / `CORRECT_ALLOW` in
 `harness/lab_insufficiency_harness.py`. Do not hand-edit the counts.
 README order is caught / false-allow / correct / false-deny.
 
-- CAUGHT-NAIVE: 7
-- FALSE-ALLOW: 8
+- CAUGHT-NAIVE: 8
+- FALSE-ALLOW: 7
 - CORRECT-ALLOW: 4
 - FALSE-DENY: 0
 - cases: 19
@@ -20,6 +20,7 @@ README order is caught / false-allow / correct / false-deny.
 | C1 | CAUGHT-NAIVE |
 | R1 | CAUGHT-NAIVE |
 | R3 | CAUGHT-NAIVE |
+| S1 | CAUGHT-NAIVE |
 | B1a | FALSE-ALLOW |
 | B1b | FALSE-ALLOW |
 | B2 | FALSE-ALLOW |
@@ -27,7 +28,6 @@ README order is caught / false-allow / correct / false-deny.
 | E1 | FALSE-ALLOW |
 | E2a | FALSE-ALLOW |
 | F1 | FALSE-ALLOW |
-| S1 | FALSE-ALLOW |
 | A5 | CORRECT-ALLOW |
 | C2 | CORRECT-ALLOW |
 | D1 | CORRECT-ALLOW |

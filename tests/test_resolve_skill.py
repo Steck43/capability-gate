@@ -1,4 +1,4 @@
-"""_resolve_skill uses a real Hermes field or stays star. No lab-injected skill."""
+"""_resolve_skill uses a real Hermes field or returns UNLABELED. No lab-injected skill."""
 
 from __future__ import annotations
 
@@ -26,12 +26,13 @@ def _adapter():
     return mod
 
 
-def test_missing_skill_stays_star() -> None:
+def test_missing_skill_is_unlabeled() -> None:
+    # A5: was "*", the ambient grant. A call with no skill is now UNLABELED.
     adapter = _adapter()
-    assert adapter._resolve_skill({}) == "*"
-    assert adapter._resolve_skill({"session_id": "s", "turn_id": "t"}) == "*"
-    assert adapter._resolve_skill({"skill": "*"}) == "*"
-    assert adapter._resolve_skill({"skill": "  "}) == "*"
+    assert adapter._resolve_skill({}) == "UNLABELED"
+    assert adapter._resolve_skill({"session_id": "s", "turn_id": "t"}) == "UNLABELED"
+    assert adapter._resolve_skill({"skill": "*"}) == "UNLABELED"
+    assert adapter._resolve_skill({"skill": "  "}) == "UNLABELED"
 
 
 def test_real_field_is_used() -> None:

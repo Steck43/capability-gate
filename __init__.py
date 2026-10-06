@@ -93,19 +93,22 @@ def _read_mode_from_config(default: str = "observe") -> str:
 
 
 _SKILL_KEYS = ("skill", "skill_name", "active_skill")
+# A call with no skill is judged as this name, never as the "*" grant. The
+# policy grants it by name or the call is denied.
+UNLABELED = "UNLABELED"
 
 
 def _resolve_skill(kwargs: dict) -> str:
-    """Use a skill field Hermes actually passed. Missing field stays ``*``."""
+    """Use a skill field Hermes actually passed. Missing field is ``UNLABELED``."""
     if not isinstance(kwargs, dict):
-        return "*"
+        return UNLABELED
     for key in _SKILL_KEYS:
         val = kwargs.get(key)
         if isinstance(val, str):
             name = val.strip()
             if name and name != "*":
                 return name
-    return "*"
+    return UNLABELED
 
 
 def _extract_trace(kwargs: dict, task_id: str) -> dict[str, str]:

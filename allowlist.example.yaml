@@ -8,6 +8,12 @@ require_approval:
   - terminal      # tools/terminal_tool.py:2676. Shell from any workdir reaches any path.
   - execute_code  # tools/code_execution_tool.py:1821. Sandbox code, no path mediation.
 
+# A call that arrives with no skill (Hermes 0.18 sends none) is judged as
+# UNLABELED, never as "*". Grant it by name, or every such call is denied:
+#   UNLABELED:
+#     tools: [read_file]
+#     paths: ["$HERMES_HOME/notes/**"]
+# "*" below is for callers that pass "*" to Gate.evaluate directly.
 skills:
   "*":
     tools:

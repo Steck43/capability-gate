@@ -22,4 +22,5 @@ def test_cases_counts_match_sets() -> None:
     assert f"- FALSE-ALLOW: {len(FALSE_ALLOW)}" in text
     assert f"- CORRECT-ALLOW: {len(CORRECT_ALLOW)}" in text
     assert "- FALSE-DENY: 0" in text
-    assert (len(CAUGHT), len(FALSE_ALLOW), len(CORRECT_ALLOW)) == (7, 8, 4)
+    # A5: was (7, 8, 4). S1 moved to CAUGHT.
+    assert (len(CAUGHT), len(FALSE_ALLOW), len(CORRECT_ALLOW)) == (8, 7, 4)
