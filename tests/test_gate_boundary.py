@@ -169,6 +169,14 @@ def test_siblings_pinned() -> None:
         assert head.stdout.strip() == _PINS[name], (
             f"{name} is at {head.stdout.strip()}, pinned {_PINS[name]}"
         )
+        # Right commit with uncommitted files on top is a different tree.
+        dirty = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+        )
+        assert dirty.returncode == 0, f"{name} at {root}: {dirty.stderr.strip()}"
+        assert dirty.stdout == "", f"{name} has uncommitted changes:\n{dirty.stdout}"
     assert Path(sib.engine.__file__).resolve().is_relative_to(sib.atoms_root)
     assert Path(sib.handoff.__file__).resolve().is_relative_to(sib.isolation_root)
 
