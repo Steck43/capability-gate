@@ -9,12 +9,19 @@ require_approval:
   - execute_code  # tools/code_execution_tool.py:1821. Sandbox code, no path mediation.
 
 # A call that arrives with no skill (Hermes 0.18 sends none) is judged as
-# UNLABELED, never as "*". Grant it by name, or every such call is denied:
-#   UNLABELED:
-#     tools: [read_file]
-#     paths: ["$HERMES_HOME/notes/**"]
+# UNLABELED, never as "*". Only the tools granted by name below run unlabeled.
+# execute_code and every other tool stay denied until a per-call-site ruling.
 # "*" below is for callers that pass "*" to Gate.evaluate directly.
 skills:
+  UNLABELED:
+    tools:
+      - read_file     # tools/file_tools.py:1583
+      - skills_list   # no path arg; tool grant only
+    paths:
+      - "$HERMES_HOME/notes/**"
+      - "$HERMES_HOME/research/**"
+      - "$HERMES_HOME/memories/*/**"
+      - "$HERMES_HOME/scratch/**"
   "*":
     tools:
       - read_file     # tools/file_tools.py:1583

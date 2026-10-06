@@ -207,7 +207,8 @@ def test_hardlink_to_off_grant_inode_denied(tmp_path: Path) -> None:
 @pytest.mark.xfail(
     strict=True,
     reason="OPEN: swap between check and open. The gate checks a path and the tool "
-    "opens it later by name; needs open-by-fd in the host (A6).",
+    "opens it later by name; needs the host to open the checked object by fd "
+    "(open with O_NOFOLLOW once, then act through that fd).",
 )
 def test_swap_between_check_and_open_is_caught(tmp_path: Path) -> None:
     grant = _grant(tmp_path)
