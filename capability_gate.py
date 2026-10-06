@@ -305,11 +305,12 @@ def _glob_to_regex(glob: str) -> re.Pattern:
 def _real_glob(glob: str) -> str:
     # Resolve the literal prefix of a grant, so a grant rooted at a symlink
     # still matches its own files once request paths are resolved.
-    parts = glob.split("/")
+    # Split on both separators: a Windows grant is spelled with backslashes.
+    parts = re.split(r"[\\/]", glob)
     i = next((k for k, seg in enumerate(parts) if "*" in seg or "?" in seg), len(parts))
-    prefix = os.path.realpath("/".join(parts[:i]) or "/")
+    prefix = os.path.realpath(os.sep.join(parts[:i]) or os.sep)
     rest = parts[i:]
-    return "/".join([prefix.rstrip("/")] + rest) if rest else prefix
+    return os.path.join(prefix, *rest) if rest else prefix
 
 
 def _path_allowed(path: str, globs: Iterable[str]) -> bool:
