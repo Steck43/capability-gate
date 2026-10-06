@@ -306,7 +306,7 @@ def _content_hash(content: str) -> str:
 
 
 def _box_receipt_ok(receipt, call_digest: str, content: str) -> bool:
-    """Prove-shaped, bound to this call, and the dropbox hash is the bytes this call wrote."""
+    """Prove-shaped, bound to this call, and the dropbox hash is the content argument handed to the box."""
     return (
         _is_jailer_prove_receipt(receipt)
         and _get(receipt, "call_digest") == call_digest
