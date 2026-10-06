@@ -444,6 +444,19 @@ def _shipped_gate(tmp_path: Path, monkeypatch) -> Gate:
     return Gate(policy, log_path=str(tmp_path / "decisions.jsonl"), mode=ENFORCE)
 
 
+# Today's misses, exactly: three per call, plus the repeat ticket (both None).
+# Any change to this list, a miss closing or a new one, fails outright.
+_PINNED_MISSES = [MISS_DECISION, MISS_ATOMS, MISS_BOX] * 2 + [MISS_ATOMS]
+
+
+# Strict: green on main while the misses stand, XPASS fails once they all close.
+# Only the pinned-miss assert is an AssertionError; fixture and drift use
+# pytest.fail so the xfail cannot swallow them.
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="; ".join((MISS_DECISION, MISS_ATOMS, MISS_BOX)),
+)
 def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
     sib = _siblings_or_skip()
     gate = _shipped_gate(tmp_path, monkeypatch)
@@ -457,12 +470,14 @@ def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
         chain = _run_chain(sib, gate, "*", "write_file", path, content, env)
         # The call must be one the shipped grant allows and atoms forwards, or the
         # misses below would be about a call that should never reach the box.
-        assert chain.decision.verdict is Verdict.ALLOW, (
-            f"fixture: shipped grant denied {path}: {chain.decision.reason}"
-        )
-        assert chain.atoms_result.block_message is None, (
-            f"fixture: atoms blocked {path}: {chain.atoms_result.winning_effect}"
-        )
+        if chain.decision.verdict is not Verdict.ALLOW:
+            pytest.fail(
+                f"fixture: shipped grant denied {path}: {chain.decision.reason}"
+            )
+        if chain.atoms_result.block_message is not None:
+            pytest.fail(
+                f"fixture: atoms blocked {path}: {chain.atoms_result.winning_effect}"
+            )
         runs.append((chain, path, content))
 
     misses: list[str] = []
@@ -482,6 +497,8 @@ def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
             misses.append(MISS_BOX)
     if runs[0][0].ticket_seen == runs[1][0].ticket_seen:
         misses.append(MISS_ATOMS)
+    if misses and misses != _PINNED_MISSES:
+        pytest.fail(f"misses changed from the pinned list, update the xfail: {misses}")
     assert misses == [], "; ".join(dict.fromkeys(misses))
 
 
@@ -507,17 +524,22 @@ def test_atoms_block_never_reaches_box(tmp_path: Path, monkeypatch) -> None:
     assert chain.receipt is None
 
 
+_NO_DECISION_PARAM = "evaluate_tool_call has no parameter for the gate decision yet"
+
+
+# Strict, same rule: the missing parameter is the only AssertionError. A forward of
+# a denied call is pytest.fail, so it fails hard even under the xfail.
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_NO_DECISION_PARAM)
 def test_deny_decision_makes_atoms_block(tmp_path: Path, monkeypatch) -> None:
     sib = _siblings_or_skip()
     gate = _shipped_gate(tmp_path, monkeypatch)
     path = str(tmp_path / "outside.md")
     decision = gate.evaluate("*", "write_file", [path])
-    assert decision.verdict is Verdict.DENY, f"fixture: grant allowed {path}"
+    if decision.verdict is not Verdict.DENY:
+        pytest.fail(f"fixture: grant allowed {path}")
 
     extra = _decision_kwargs(sib.engine.evaluate_tool_call, decision)
-    if not extra:
-        # The only expected miss today. Once the parameter exists, a forward fails hard.
-        pytest.xfail("evaluate_tool_call has no parameter for the gate decision yet")
+    assert extra, _NO_DECISION_PARAM
     catalog = sib.engine.load_catalog(sib.atoms_root / _CATALOG, _env(tmp_path))
     result = sib.engine.evaluate_tool_call(
         catalog,
@@ -527,4 +549,5 @@ def test_deny_decision_makes_atoms_block(tmp_path: Path, monkeypatch) -> None:
         plugin_mode=ENFORCE,
         **extra,
     )
-    assert result.block_message is not None, "atoms forwarded a call the gate denied"
+    if result.block_message is None:
+        pytest.fail("atoms forwarded a call the gate denied")
