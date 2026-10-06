@@ -124,6 +124,18 @@ def test_in_grant_symlink_to_outside_denied(tmp_path: Path) -> None:
     assert gate.evaluate("*", "read_file", [str(link)]).verdict is Verdict.DENY
 
 
+def test_mid_path_directory_symlink_to_outside_denied(tmp_path: Path) -> None:
+    # The link is a directory in the middle of the path, not the leaf.
+    grant = _grant(tmp_path)
+    outside = tmp_path / "outside"
+    (outside / "keys").mkdir(parents=True)
+    (outside / "keys" / "id_rsa").write_text("x", encoding="utf-8")
+    _symlink(outside, grant / "docs")
+    gate = _gate(tmp_path, _star_policy(grant))
+    path = grant / "docs" / "keys" / "id_rsa"
+    assert gate.evaluate("*", "read_file", [str(path)]).verdict is Verdict.DENY
+
+
 def test_in_grant_symlink_to_inside_allowed(tmp_path: Path) -> None:
     grant = _grant(tmp_path)
     real = grant / "real.md"
