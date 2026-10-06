@@ -168,6 +168,22 @@ def test_request_path_needing_expansion_denied(
     assert gate.evaluate("*", "read_file", [form]).verdict is Verdict.DENY
 
 
+@pytest.mark.parametrize("form", ["$HOME/notes.md", "~/notes.md"])
+def test_unexpanded_request_path_not_matched_literally(
+    tmp_path: Path, monkeypatch, form: str
+) -> None:
+    # The other direction: the gate does not expand, the tool does. With the
+    # working directory inside the grant, the literal string resolves into the
+    # grant while the tool would open $HOME, which is outside it.
+    grant = _grant(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.setenv("HOME", str(outside))
+    monkeypatch.chdir(grant)
+    gate = _gate(tmp_path, _star_policy(grant))
+    assert gate.evaluate("*", "read_file", [form]).verdict is Verdict.DENY
+
+
 @pytest.mark.xfail(
     strict=True,
     reason="OPEN: a hardlink's in-grant name is its real path, so realpath cannot "
