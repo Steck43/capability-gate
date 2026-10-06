@@ -126,7 +126,9 @@ jobs:
         env:
           AEGIS_ATOMS_ROOT: ${{ github.workspace }}/aegis-atoms
           ISOLATION_LAYER_ROOT: ${{ github.workspace }}/isolation-layer
-        run: pytest -q
+        # -rxX names each expected failure in the log, so a run shows which
+        # tests xfailed, not only how many.
+        run: pytest -q -rxX
 
   lint:
     name: lint (ruff)
