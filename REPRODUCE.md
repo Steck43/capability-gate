@@ -13,7 +13,7 @@ The CG Stage-1 lab (`evidence_receipt.json`) asserts nineteen cases by id, inclu
 
 Expected tally on this HEAD, named harness CG Stage-1 lab (`tests/test_harness_tally.py`) against `capability_gate.py`:
 
-- 15 deny-expected: 7 CAUGHT-NAIVE, 8 FALSE-ALLOW
+- 15 deny-expected: 8 CAUGHT-NAIVE, 7 FALSE-ALLOW
 - 4 CORRECT-ALLOW
 - 0 FALSE-DENY
 

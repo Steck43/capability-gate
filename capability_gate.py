@@ -302,15 +302,67 @@ def _glob_to_regex(glob: str) -> re.Pattern:
     return re.compile("".join(out))
 
 
+def _real_glob(glob: str) -> str:
+    # Resolve the literal prefix of a grant, so a grant rooted at a symlink
+    # still matches its own files once request paths are resolved.
+    # Split on both separators: a Windows grant is spelled with backslashes.
+    parts = re.split(r"[\\/]", glob)
+    i = next((k for k, seg in enumerate(parts) if "*" in seg or "?" in seg), len(parts))
+    prefix = os.path.realpath(os.sep.join(parts[:i]) or os.sep)
+    rest = parts[i:]
+    return os.path.join(prefix, *rest) if rest else prefix
+
+
 def _path_allowed(path: str, globs: Iterable[str]) -> bool:
-    norm = os.path.normpath(_expand(path))
-    return any(_glob_to_regex(os.path.normpath(g)).match(norm) for g in globs)
+    # Request paths are not expanded. The tool may expand "~" or "$VAR"
+    # differently, or not at all, so the gate refuses to guess.
+    if "$" in path or path.startswith("~"):
+        return False
+    # Match the file the name resolves to, not the string. An in-grant symlink
+    # to an off-grant file is denied. A swap between this check and the
+    # tool's open is not closed here; that needs open-by-fd in the host.
+    real = os.path.realpath(path)
+    return any(
+        _glob_to_regex(os.path.normpath(_real_glob(g))).match(real) for g in globs
+    )
 
 
 # --- the decision ---------------------------------------------------------
 
 
-def _decide(policy: Policy, skill: str, tool: str, paths: Sequence[str]) -> Decision:
+def _absolute(path: str, base_dir: str | None) -> str | None:
+    """The absolute path a relative request names, or None with no usable base.
+
+    A path that needs ``~`` or ``$VAR`` expansion is returned as given, so
+    ``_path_allowed`` refuses it the same way it always has.
+    """
+    if os.path.isabs(path) or "$" in path or path.startswith("~"):
+        return path
+    if not base_dir or not os.path.isabs(base_dir):
+        return None
+    return os.path.normpath(os.path.join(base_dir, path))
+
+
+def _decide(
+    policy: Policy,
+    skill: str,
+    tool: str,
+    paths: Sequence[str],
+    base_dir: str | None = None,
+) -> Decision:
+    resolved = []
+    for p in paths:
+        a = _absolute(p, base_dir)
+        if a is None:
+            return Decision(
+                Verdict.DENY,
+                f"relative path '{p}' has no base folder to resolve against",
+                skill,
+                tool,
+                tuple(paths),
+            )
+        resolved.append(a)
+    paths = resolved
     ptuple = tuple(paths)
     rule = policy.skills.get(skill)
     if rule is None:
@@ -365,13 +417,33 @@ class Gate:
         *,
         trace: Mapping[str, str] | None = None,
         args: Mapping | None = None,
+        refuse: str | None = None,
+        base_dir: str | None = None,
     ) -> Decision:
+        """Decide one call. ``refuse`` is set by an adapter that could not read
+        the call's files from its arguments; the call is then denied and logged
+        like any other denial. ``base_dir`` is the absolute folder the tool will
+        resolve a relative path against; without one a relative path is denied.
+        The decision, and the log, carry the absolute paths that were checked."""
         norm_trace = _normalize_trace(trace)
         arg_summary = summarize_args(args)
         try:
-            decision = _decide(
-                self._policy, str(skill), str(tool), [str(p) for p in paths]
-            )
+            if refuse is not None:
+                decision = Decision(
+                    Verdict.DENY,
+                    f"arguments refused: {refuse}",
+                    str(skill),
+                    str(tool),
+                    tuple(str(p) for p in paths),
+                )
+            else:
+                decision = _decide(
+                    self._policy,
+                    str(skill),
+                    str(tool),
+                    [str(p) for p in paths],
+                    base_dir,
+                )
         except Exception as exc:  # any failure is a denial, on purpose
             decision = Decision(
                 Verdict.DENY,

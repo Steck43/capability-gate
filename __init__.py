@@ -8,15 +8,18 @@ present. Otherwise it stays ``*``. Do not invent a skill for the lab.
 from __future__ import annotations
 
 import os
+import re
+import stat
+import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 try:
-    from .capability_gate import Gate, load_policy, _PATH_LIKE_KEYS
+    from .capability_gate import Gate, load_policy
 except ImportError:
-    from capability_gate import Gate, load_policy, _PATH_LIKE_KEYS
+    from capability_gate import Gate, load_policy
 
 _HERE = os.path.dirname(__file__)
 
@@ -25,18 +28,162 @@ def _BLOCK(msg: str) -> dict[str, str]:
     return {"action": "block", "message": msg}
 
 
-# Path-mediatable tools only (registry: file_tools.py). Opaque tools are
-# require_approval, not path-mapped. web_search has no path arg.
-_PATH_ARG = {
-    "read_file": "path",
-    "write_file": "path",
-    "patch": "path",
-    "search_files": "path",
+class ArgsRefused(Exception):
+    """The call's arguments do not fit its tool's schema, so it is denied."""
+
+
+# Closed argument schemas. The gate can only check the files it can see, so
+# each tool lists every argument it accepts and which of them name a file. A
+# tool with no entry, an argument not listed, args that are not a plain dict,
+# or a path argument that is not a string is refused rather than read as "no
+# paths". Keys are taken from the Hermes runtime at ccd8deaa67:
+#   read_file, write_file, patch, search_files  tools/file_tools.py:2013-2110
+#   skills_list                                  tools/skills_tool.py:1605-1617
+#   execute_code                                 tools/code_execution_tool.py:1871-1886
+#   web_search                                   tools/web_tools.py:1114-1134
+#   terminal                                     tools/terminal_tool.py:2962-3004
+# When Hermes adds an argument to one of these tools, calls that use it are
+# denied until the key is added here.
+_SCHEMAS: dict[str, dict[str, Any]] = {
+    "read_file": {
+        "keys": {"path", "offset", "limit"},
+        "paths": ("path",),
+        "required": ("path",),
+    },
+    "write_file": {
+        "keys": {"path", "content", "cross_profile"},
+        "paths": ("path",),
+        "required": ("path",),
+    },
+    "patch": {
+        "keys": {
+            "mode",
+            "path",
+            "old_string",
+            "new_string",
+            "replace_all",
+            "patch",
+            "cross_profile",
+        },
+        "paths": ("path",),
+    },
+    "search_files": {
+        "keys": {
+            "pattern",
+            "target",
+            "path",
+            "file_glob",
+            "limit",
+            "offset",
+            "output_mode",
+            "context",
+        },
+        "paths": ("path",),
+        # Hermes searches the working directory when no path is given.
+        "default_path": ".",
+    },
+    "skills_list": {"keys": {"category"}, "paths": ()},
+    "execute_code": {"keys": {"code"}, "paths": ()},
+    "web_search": {"keys": {"query", "limit"}, "paths": ()},
+    "terminal": {
+        "keys": {
+            "command",
+            "background",
+            "timeout",
+            "workdir",
+            "pty",
+            "notify_on_complete",
+            "watch_patterns",
+        },
+        "paths": ("workdir",),
+    },
 }
+
+_PATCH_MODES = ("replace", "patch")
+
+# V4A patch bodies name their files in header lines. Hermes reads them with
+# re.match at column 0 (tools/patch_parser.py:111-114); this reader accepts a
+# superset (any case, optional space before the colon, OpenAI "Move to:") so a
+# header Hermes would apply is never missed. Any other line starting with "***"
+# is refused rather than guessed at.
+_V4A_FILE = re.compile(r"^\*\*\*\s*(?:Update|Add|Delete)\s+File\s*:\s*(.*)$", re.I)
+_V4A_MOVE = re.compile(r"^\*\*\*\s*Move\s+File\s*:\s*(.*?)\s*->\s*(.*)$", re.I)
+_V4A_MOVE_TO = re.compile(r"^\*\*\*\s*Move\s+to\s*:\s*(.*)$", re.I)
+_V4A_MARKER = re.compile(
+    r"^\*\*\*\s*(?:Begin\s+Patch|End\s+Patch|End\s+of\s+File)\s*$", re.I
+)
+
+
+def _v4a_paths(body: str) -> list[str]:
+    """Every file a V4A patch body names, or ArgsRefused."""
+    out: list[str] = []
+    for raw in body.split("\n"):
+        line = raw.rstrip("\r")
+        if not line.startswith("***"):
+            continue
+        if _V4A_MARKER.match(line):
+            continue
+        m = _V4A_FILE.match(line) or _V4A_MOVE_TO.match(line)
+        found = [m.group(1)] if m else []
+        if not m:
+            mv = _V4A_MOVE.match(line)
+            if mv is None:
+                raise ArgsRefused(f"unrecognised patch control line: {line[:80]!r}")
+            found = [mv.group(1), mv.group(2)]
+        for name in found:
+            name = name.strip()
+            if not name:
+                raise ArgsRefused(f"patch header names no file: {line[:80]!r}")
+            out.append(name)
+    if not out:
+        raise ArgsRefused("patch body names no file header")
+    return out
 
 
 def _hermes_home() -> str:
     return os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+
+
+class UntrustedFile(Exception):
+    """A gate file is not the plain, privately owned file it should be."""
+
+
+def _read_trusted(path: str | os.PathLike) -> str:
+    """Read one of the gate's own files only if it is what it claims to be.
+
+    POSIX: the last path part must not be a symlink (``O_NOFOLLOW``), the
+    opened file must be the same inode the name pointed at, a regular file,
+    owned by the current user, and not writable by group or others. Windows:
+    a symlink or other reparse point is refused; owner and ACL are not checked
+    there yet. A symlink in a parent folder and a hardlink are not detected.
+    """
+    path = os.fspath(path)
+    named = os.lstat(path)
+    if stat.S_ISLNK(named.st_mode):
+        raise UntrustedFile(f"{path} is a symlink")
+    if os.name == "nt":
+        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if getattr(named, "st_file_attributes", 0) & reparse:
+            raise UntrustedFile(f"{path} is a reparse point")
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+            raise UntrustedFile(f"{path} changed while it was opened")
+        if not stat.S_ISREG(opened.st_mode):
+            raise UntrustedFile(f"{path} is not a regular file")
+        if opened.st_uid != os.geteuid():
+            raise UntrustedFile(f"{path} is not owned by the current user")
+        if opened.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise UntrustedFile(f"{path} is writable by group or others")
+        with os.fdopen(fd, encoding="utf-8") as f:
+            fd = -1
+            return f.read()
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 MODE_UNRESOLVED_PREFIX = "mode_unresolved_fail_closed"
@@ -54,7 +201,9 @@ def resolve_capability_gate_mode(
     home = hermes_home or _hermes_home()
     cfg_path = Path(home) / "config.yaml"
     try:
-        raw = cfg_path.read_text(encoding="utf-8")
+        raw = _read_trusted(cfg_path)
+    except UntrustedFile as exc:
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:untrusted:{exc}"
     except (OSError, UnicodeError):
         return "enforce", f"{MODE_UNRESOLVED_PREFIX}:unreadable"
     if not raw.strip():
@@ -93,19 +242,22 @@ def _read_mode_from_config(default: str = "observe") -> str:
 
 
 _SKILL_KEYS = ("skill", "skill_name", "active_skill")
+# A call with no skill is judged as this name, never as the "*" grant. The
+# policy grants it by name or the call is denied.
+UNLABELED = "UNLABELED"
 
 
 def _resolve_skill(kwargs: dict) -> str:
-    """Use a skill field Hermes actually passed. Missing field stays ``*``."""
+    """Use a skill field Hermes actually passed. Missing field is ``UNLABELED``."""
     if not isinstance(kwargs, dict):
-        return "*"
+        return UNLABELED
     for key in _SKILL_KEYS:
         val = kwargs.get(key)
         if isinstance(val, str):
             name = val.strip()
             if name and name != "*":
                 return name
-    return "*"
+    return UNLABELED
 
 
 def _extract_trace(kwargs: dict, task_id: str) -> dict[str, str]:
@@ -120,28 +272,79 @@ def _extract_trace(kwargs: dict, task_id: str) -> dict[str, str]:
 
 
 def _extract_paths(tool_name: str, args: Any) -> list[str]:
-    if not isinstance(args, dict):
-        return []
-    # Complete mediation: every path-like argument, not only the tool's
-    # primary key. A notes grant must not hide target=/etc/passwd.
+    """Every file the call names, read from the tool's closed schema.
+
+    Raises ArgsRefused when the call does not fit the schema. The caller turns
+    that into a logged denial; it never means "no paths to check".
+    """
+    schema = _SCHEMAS.get(tool_name)
+    if schema is None:
+        raise ArgsRefused(f"no argument schema for tool '{tool_name}'")
+    if type(args) is not dict:
+        raise ArgsRefused(f"arguments are a {type(args).__name__}, not a dict")
+    unknown = sorted(str(k) for k in args if k not in schema["keys"])
+    if unknown:
+        raise ArgsRefused(
+            f"argument(s) not in the '{tool_name}' schema: {', '.join(unknown)}"
+        )
     out: list[str] = []
-    seen: set[str] = set()
-    preferred = _PATH_ARG.get(tool_name)
-    keys: list[str] = []
-    if preferred is not None:
-        keys.append(preferred)
-    for raw_key in args:
-        key = str(raw_key)
-        if key == preferred:
-            continue
-        if key in _PATH_LIKE_KEYS or key.endswith("_path"):
-            keys.append(key)
-    for key in keys:
+    for key in schema["paths"]:
         val = args.get(key)
-        if isinstance(val, str) and val and val not in seen:
-            seen.add(val)
-            out.append(val)
-    return out
+        if val is None or val == "":
+            val = schema.get("default_path")
+            if val is None:
+                if key in schema.get("required", ()):
+                    raise ArgsRefused(f"'{tool_name}' call has no '{key}'")
+                continue
+        if not isinstance(val, str):
+            raise ArgsRefused(f"'{key}' is a {type(val).__name__}, not a string")
+        out.append(val)
+    if tool_name == "patch":
+        mode = args.get("mode", "replace")
+        if mode not in _PATCH_MODES:
+            raise ArgsRefused(f"patch mode {mode!r} is not one of {_PATCH_MODES}")
+        body = args.get("patch")
+        if body is not None and not isinstance(body, str):
+            raise ArgsRefused(f"'patch' is a {type(body).__name__}, not a string")
+        if body:
+            # Read headers whatever the mode says: a body Hermes would not
+            # apply today must not become a write path tomorrow.
+            out.extend(_v4a_paths(body))
+        if not out:
+            raise ArgsRefused("patch call names no file")
+    return list(dict.fromkeys(out))
+
+
+_HERMES_FILE_TOOLS = "tools.file_tools"
+
+
+def _base_dir(task_id: str) -> str | None:
+    """The folder Hermes resolves this task's relative paths against.
+
+    Read from Hermes's own resolver (``tools/file_tools.py``
+    ``_resolve_base_dir``: live terminal cwd, then a registered session cwd,
+    then an absolute ``$TERMINAL_CWD``, then the process cwd), through the
+    module Hermes has already loaded. Nothing is imported here. None when that
+    module is not loaded, the call fails, or the answer is not absolute; the
+    gate then denies a relative path rather than guess.
+    """
+    mod = sys.modules.get(_HERMES_FILE_TOOLS)
+    resolver = getattr(mod, "_resolve_base_dir", None)
+    if not callable(resolver):
+        return None
+    try:
+        base = str(resolver(str(task_id or "default")))
+    except Exception:
+        return None
+    return base if os.path.isabs(base) else None
+
+
+def _load_allowlist(path: str):
+    return load_policy(yaml.safe_load(_read_trusted(path)))
+
+
+def _log_path() -> str:
+    return os.path.join(_hermes_home(), "logs", "capability-gate.jsonl")
 
 
 def _build_gate(mode: str) -> Gate:
@@ -149,11 +352,41 @@ def _build_gate(mode: str) -> Gate:
     # way the log path does. Without this, an unset var makes every grant match
     # nothing and the gate denies silently.
     os.environ.setdefault("HERMES_HOME", _hermes_home())
-    allowlist = os.path.join(_HERE, "allowlist.yaml")
-    with open(allowlist, encoding="utf-8") as f:
-        policy = load_policy(yaml.safe_load(f))
-    log_path = os.path.join(_hermes_home(), "logs", "capability-gate.jsonl")
-    return Gate(policy, log_path=log_path, mode=mode)
+    policy = _load_allowlist(os.path.join(_HERE, "allowlist.yaml"))
+    return Gate(policy, log_path=_log_path(), mode=mode)
+
+
+# Tools that write the files they name. A write aimed at the gate's own files
+# is denied whatever the grant says, so no grant can reconfigure the gate.
+_WRITE_TOOLS = frozenset({"write_file", "patch"})
+
+
+def _gate_file_hit(paths: list[str], base_dir: str | None, gate: Gate) -> str | None:
+    """The first path that resolves to a gate file or the plugin folder."""
+
+    def real(p: str) -> str:
+        return os.path.normcase(os.path.realpath(p))
+
+    files = {
+        real(os.path.join(_hermes_home(), "config.yaml")),
+        real(os.path.join(_HERE, "allowlist.yaml")),
+        real(_log_path()),
+    }
+    live_log = getattr(gate, "_log_path", None)
+    if live_log:
+        files.add(real(live_log))
+    plugin = real(_HERE)
+    for p in paths:
+        if "$" in p or p.startswith("~"):
+            continue  # the gate refuses these on its own
+        if not os.path.isabs(p):
+            if not base_dir:
+                continue  # the gate denies a relative path with no base
+            p = os.path.join(base_dir, p)
+        r = real(p)
+        if r in files or r == plugin or r.startswith(plugin + os.sep):
+            return f"'{p}' is one of the gate's own files"
+    return None
 
 
 def register(ctx) -> None:
@@ -204,13 +437,26 @@ def register(ctx) -> None:
             if mode != gate.mode:
                 gate.set_mode(mode)
             skill = _resolve_skill(kwargs)
-            paths = _extract_paths(tool_name, args)
+            refused = None
+            try:
+                paths = _extract_paths(tool_name, args)
+            except ArgsRefused as exc:
+                paths, refused = [], str(exc)
+            except Exception as exc:
+                paths, refused = [], f"path extraction failed: {exc!r}"
+            base_dir = (
+                _base_dir(task_id) if any(not os.path.isabs(p) for p in paths) else None
+            )
+            if refused is None and tool_name in _WRITE_TOOLS:
+                refused = _gate_file_hit(paths, base_dir, gate)
             decision = gate.evaluate(
                 skill,
                 tool_name,
                 paths,
                 trace=_extract_trace(kwargs, task_id),
                 args=args if isinstance(args, dict) else None,
+                refuse=refused,
+                base_dir=base_dir,
             )
             if decision.verdict.value == "allow":
                 # E3: reconfirm before observe allow-passthrough (same TOCTOU as deny).
@@ -226,6 +472,8 @@ def register(ctx) -> None:
                             paths,
                             trace=_extract_trace(kwargs, task_id),
                             args=args if isinstance(args, dict) else None,
+                            refuse=refused,
+                            base_dir=base_dir,
                         )
                         if decision2.verdict.value != "allow":
                             return _BLOCK(decision2.reason)

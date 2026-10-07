@@ -3,9 +3,9 @@
 Generated from `harness/evidence_receipt.json` on this roof.
 Not a copy of any vault evidence file.
 
-- CAUGHT-NAIVE: 7
+- CAUGHT-NAIVE: 8
 - CORRECT-ALLOW: 4
-- FALSE-ALLOW: 8
+- FALSE-ALLOW: 7
 - FALSE-DENY: 0
 
 | case | category | expected | verdict | matrix |
@@ -28,4 +28,4 @@ Not a copy of any vault evidence file.
 | R1 | RED | deny | deny | CAUGHT-NAIVE |
 | R2 | RED | allow | allow | CORRECT-ALLOW |
 | R3 | RED | deny | ask | CAUGHT-NAIVE |
-| S1 | S | deny | allow | FALSE-ALLOW |
+| S1 | S | deny | deny | CAUGHT-NAIVE |

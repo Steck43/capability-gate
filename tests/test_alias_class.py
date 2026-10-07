@@ -67,7 +67,9 @@ def test_s3_junction_false_allow_or_os_refused(tmp_path: Path) -> None:
         pytest.skip(f"CreateJunction refused ({exc})")
     target = junction / "id_rsa"
     d = _gate(tmp_path, grant).evaluate("lab-helper", "write_file", [str(target)])
-    assert d.verdict is Verdict.ALLOW
+    # A5: was ALLOW. The decide path matches the resolved real path, and the
+    # junction resolves to the off-grant directory.
+    assert d.verdict is Verdict.DENY
 
 
 def test_s4_proc_self_root_unmeasured_off_linux_unless_present(tmp_path: Path) -> None:
@@ -82,7 +84,9 @@ def test_s4_proc_self_root_unmeasured_off_linux_unless_present(tmp_path: Path) -
     except OSError as exc:
         pytest.skip(f"symlink to /proc/self/root refused ({exc})")
     d = _gate(tmp_path, grant).evaluate("lab-helper", "read_file", [str(alias)])
-    assert d.verdict is Verdict.ALLOW
+    # A5: was ALLOW. The decide path matches the resolved real path, and
+    # /proc/self/root resolves to "/", which is outside the grant.
+    assert d.verdict is Verdict.DENY
 
 
 def test_s5_bind_mount_named_skip_without_mount(tmp_path: Path) -> None:

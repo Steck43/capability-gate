@@ -1,7 +1,7 @@
 """D15: Stage-1 cases through the live pre_tool_call hook, not Gate.evaluate.
 
-The mounted adapter resolves skill as ``*`` (Hermes 0.16.0 has no skill on
-that dispatch). This harness grades transfer vs non-transfer. It does not
+The mounted adapter resolves a missing skill as ``UNLABELED`` (Hermes 0.16.0
+has no skill on that dispatch; before A5 it resolved as ``*``). This harness grades transfer vs non-transfer. It does not
 install Hermes. Public CI stays green without the host agent.
 """
 

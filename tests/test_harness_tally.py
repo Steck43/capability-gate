@@ -1,7 +1,7 @@
 """Stage-1 insufficiency tally is asserted by case id. Print is not the prove.
 
 Counts are derived from CAUGHT / FALSE_ALLOW / CORRECT_ALLOW. Do not hand-type
-the 7/8/4/0 permutation. README order is caught / false-allow / correct / false-deny.
+the 8/7/4/0 permutation (7/8/4/0 before A5 moved S1 to CAUGHT). README order is caught / false-allow / correct / false-deny.
 The tuple below is (caught, correct, false_allow, false_deny).
 """
 
@@ -71,7 +71,8 @@ def test_tally_shape_derived(results):
         DERIVED_FALSE_ALLOW,
         0,
     )
-    assert (caught, false_allow, correct, 0) == (7, 8, 4, 0)
+    # A5: was (7, 8, 4, 0). S1 is CAUGHT once the decide path resolves symlinks.
+    assert (caught, false_allow, correct, 0) == (8, 7, 4, 0)
 
 
 def test_s1_symlink_created_or_os_refused(tmp_path):
