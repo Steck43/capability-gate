@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -269,6 +270,30 @@ def _extract_paths(tool_name: str, args: Any) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+_HERMES_FILE_TOOLS = "tools.file_tools"
+
+
+def _base_dir(task_id: str) -> str | None:
+    """The folder Hermes resolves this task's relative paths against.
+
+    Read from Hermes's own resolver (``tools/file_tools.py``
+    ``_resolve_base_dir``: live terminal cwd, then a registered session cwd,
+    then an absolute ``$TERMINAL_CWD``, then the process cwd), through the
+    module Hermes has already loaded. Nothing is imported here. None when that
+    module is not loaded, the call fails, or the answer is not absolute; the
+    gate then denies a relative path rather than guess.
+    """
+    mod = sys.modules.get(_HERMES_FILE_TOOLS)
+    resolver = getattr(mod, "_resolve_base_dir", None)
+    if not callable(resolver):
+        return None
+    try:
+        base = str(resolver(str(task_id or "default")))
+    except Exception:
+        return None
+    return base if os.path.isabs(base) else None
+
+
 def _build_gate(mode: str) -> Gate:
     # Guarantee HERMES_HOME before policy expansion so grants resolve the same
     # way the log path does. Without this, an unset var makes every grant match
@@ -336,6 +361,9 @@ def register(ctx) -> None:
                 paths, refused = [], str(exc)
             except Exception as exc:
                 paths, refused = [], f"path extraction failed: {exc!r}"
+            base_dir = (
+                _base_dir(task_id) if any(not os.path.isabs(p) for p in paths) else None
+            )
             decision = gate.evaluate(
                 skill,
                 tool_name,
@@ -343,6 +371,7 @@ def register(ctx) -> None:
                 trace=_extract_trace(kwargs, task_id),
                 args=args if isinstance(args, dict) else None,
                 refuse=refused,
+                base_dir=base_dir,
             )
             if decision.verdict.value == "allow":
                 # E3: reconfirm before observe allow-passthrough (same TOCTOU as deny).
@@ -359,6 +388,7 @@ def register(ctx) -> None:
                             trace=_extract_trace(kwargs, task_id),
                             args=args if isinstance(args, dict) else None,
                             refuse=refused,
+                            base_dir=base_dir,
                         )
                         if decision2.verdict.value != "allow":
                             return _BLOCK(decision2.reason)
