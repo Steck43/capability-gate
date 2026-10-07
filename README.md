@@ -41,6 +41,12 @@ The allowlist is not frozen at the flip. After enforce, grants can keep training
 
 Enable the plugin under `plugins.enabled` in your Hermes `config.yaml`. Start in observe, read `~/.hermes/logs/capability-gate.jsonl`, tune the allowlist, then set the mode to enforce.
 
+The gate reads `config.yaml` and `allowlist.yaml` only when each is a regular file, not a symlink, owned by the user running Hermes, and not writable by group or others (`chmod 600` or `644`). If either fails that check, the gate denies every call until it is fixed. No grant lets a tool write those files, the decision log, or this plugin folder.
+
+### Repairing a refused config
+
+This is a manual step, run by you outside the agent. Replace the symlink or fix the owner and mode, for example `chmod 600 ~/.hermes/config.yaml`, then start a new Hermes session. The gate does not stop a process that already has terminal access as your user from doing the same thing, which is why `terminal` and `execute_code` stay behind approval. Not checked yet: a symlink in a parent folder, a hardlink to the config, and file owner and ACLs on Windows.
+
 ## Status
 
 Honest about what runs versus what is planned.

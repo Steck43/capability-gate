@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,48 @@ def _hermes_home() -> str:
     return os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
 
 
+class UntrustedFile(Exception):
+    """A gate file is not the plain, privately owned file it should be."""
+
+
+def _read_trusted(path: str | os.PathLike) -> str:
+    """Read one of the gate's own files only if it is what it claims to be.
+
+    POSIX: the last path part must not be a symlink (``O_NOFOLLOW``), the
+    opened file must be the same inode the name pointed at, a regular file,
+    owned by the current user, and not writable by group or others. Windows:
+    a symlink or other reparse point is refused; owner and ACL are not checked
+    there yet. A symlink in a parent folder and a hardlink are not detected.
+    """
+    path = os.fspath(path)
+    named = os.lstat(path)
+    if stat.S_ISLNK(named.st_mode):
+        raise UntrustedFile(f"{path} is a symlink")
+    if os.name == "nt":
+        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if getattr(named, "st_file_attributes", 0) & reparse:
+            raise UntrustedFile(f"{path} is a reparse point")
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+            raise UntrustedFile(f"{path} changed while it was opened")
+        if not stat.S_ISREG(opened.st_mode):
+            raise UntrustedFile(f"{path} is not a regular file")
+        if opened.st_uid != os.geteuid():
+            raise UntrustedFile(f"{path} is not owned by the current user")
+        if opened.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise UntrustedFile(f"{path} is writable by group or others")
+        with os.fdopen(fd, encoding="utf-8") as f:
+            fd = -1
+            return f.read()
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 MODE_UNRESOLVED_PREFIX = "mode_unresolved_fail_closed"
 
 
@@ -158,7 +201,9 @@ def resolve_capability_gate_mode(
     home = hermes_home or _hermes_home()
     cfg_path = Path(home) / "config.yaml"
     try:
-        raw = cfg_path.read_text(encoding="utf-8")
+        raw = _read_trusted(cfg_path)
+    except UntrustedFile as exc:
+        return "enforce", f"{MODE_UNRESOLVED_PREFIX}:untrusted:{exc}"
     except (OSError, UnicodeError):
         return "enforce", f"{MODE_UNRESOLVED_PREFIX}:unreadable"
     if not raw.strip():
@@ -294,16 +339,54 @@ def _base_dir(task_id: str) -> str | None:
     return base if os.path.isabs(base) else None
 
 
+def _load_allowlist(path: str):
+    return load_policy(yaml.safe_load(_read_trusted(path)))
+
+
+def _log_path() -> str:
+    return os.path.join(_hermes_home(), "logs", "capability-gate.jsonl")
+
+
 def _build_gate(mode: str) -> Gate:
     # Guarantee HERMES_HOME before policy expansion so grants resolve the same
     # way the log path does. Without this, an unset var makes every grant match
     # nothing and the gate denies silently.
     os.environ.setdefault("HERMES_HOME", _hermes_home())
-    allowlist = os.path.join(_HERE, "allowlist.yaml")
-    with open(allowlist, encoding="utf-8") as f:
-        policy = load_policy(yaml.safe_load(f))
-    log_path = os.path.join(_hermes_home(), "logs", "capability-gate.jsonl")
-    return Gate(policy, log_path=log_path, mode=mode)
+    policy = _load_allowlist(os.path.join(_HERE, "allowlist.yaml"))
+    return Gate(policy, log_path=_log_path(), mode=mode)
+
+
+# Tools that write the files they name. A write aimed at the gate's own files
+# is denied whatever the grant says, so no grant can reconfigure the gate.
+_WRITE_TOOLS = frozenset({"write_file", "patch"})
+
+
+def _gate_file_hit(paths: list[str], base_dir: str | None, gate: Gate) -> str | None:
+    """The first path that resolves to a gate file or the plugin folder."""
+
+    def real(p: str) -> str:
+        return os.path.normcase(os.path.realpath(p))
+
+    files = {
+        real(os.path.join(_hermes_home(), "config.yaml")),
+        real(os.path.join(_HERE, "allowlist.yaml")),
+        real(_log_path()),
+    }
+    live_log = getattr(gate, "_log_path", None)
+    if live_log:
+        files.add(real(live_log))
+    plugin = real(_HERE)
+    for p in paths:
+        if "$" in p or p.startswith("~"):
+            continue  # the gate refuses these on its own
+        if not os.path.isabs(p):
+            if not base_dir:
+                continue  # the gate denies a relative path with no base
+            p = os.path.join(base_dir, p)
+        r = real(p)
+        if r in files or r == plugin or r.startswith(plugin + os.sep):
+            return f"'{p}' is one of the gate's own files"
+    return None
 
 
 def register(ctx) -> None:
@@ -364,6 +447,8 @@ def register(ctx) -> None:
             base_dir = (
                 _base_dir(task_id) if any(not os.path.isabs(p) for p in paths) else None
             )
+            if refused is None and tool_name in _WRITE_TOOLS:
+                refused = _gate_file_hit(paths, base_dir, gate)
             decision = gate.evaluate(
                 skill,
                 tool_name,
