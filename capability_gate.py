@@ -322,7 +322,9 @@ def _path_allowed(path: str, globs: Iterable[str]) -> bool:
     # to an off-grant file is denied. A swap between this check and the
     # tool's open is not closed here; that needs open-by-fd in the host.
     real = os.path.realpath(path)
-    return any(_glob_to_regex(os.path.normpath(_real_glob(g))).match(real) for g in globs)
+    return any(
+        _glob_to_regex(os.path.normpath(_real_glob(g))).match(real) for g in globs
+    )
 
 
 # --- the decision ---------------------------------------------------------
@@ -383,13 +385,26 @@ class Gate:
         *,
         trace: Mapping[str, str] | None = None,
         args: Mapping | None = None,
+        refuse: str | None = None,
     ) -> Decision:
+        """Decide one call. ``refuse`` is set by an adapter that could not read
+        the call's files from its arguments; the call is then denied and logged
+        like any other denial."""
         norm_trace = _normalize_trace(trace)
         arg_summary = summarize_args(args)
         try:
-            decision = _decide(
-                self._policy, str(skill), str(tool), [str(p) for p in paths]
-            )
+            if refuse is not None:
+                decision = Decision(
+                    Verdict.DENY,
+                    f"arguments refused: {refuse}",
+                    str(skill),
+                    str(tool),
+                    tuple(str(p) for p in paths),
+                )
+            else:
+                decision = _decide(
+                    self._policy, str(skill), str(tool), [str(p) for p in paths]
+                )
         except Exception as exc:  # any failure is a denial, on purpose
             decision = Decision(
                 Verdict.DENY,
