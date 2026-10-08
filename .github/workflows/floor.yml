@@ -86,7 +86,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: Steck43/aegis-atoms
-          ref: a4315cf31f0c005a6a91eca9bd8b222c4f94f89c # master, merge of #44
+          ref: 8074e7b33569522eaf7a9e9a2b6bb799df08a2ae # master, merge of #46
           path: aegis-atoms
           persist-credentials: false
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
