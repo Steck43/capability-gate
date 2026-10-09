@@ -473,9 +473,7 @@ def register(ctx) -> None:
                     )
                     return _BLOCK(unresolved2)
                 if mode2 == "enforce":
-                    _record_failclosed(
-                        "enforce", tool_name, msg, kwargs, task_id, args
-                    )
+                    _record_failclosed("enforce", tool_name, msg, kwargs, task_id, args)
                     return _BLOCK(msg)
                 _record_failclosed(
                     "observe",
