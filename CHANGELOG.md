@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- CI checks out `aegis-atoms` at `8074e7b` (merge of aegis-atoms #46), up from `a4315cf`. `floor.yml` and the boundary test's pin move together.
+- CI checks out `aegis-atoms` at `46db989` (merge of aegis-atoms #49, `gate_decision` on `evaluate_tool_call`), up from `8074e7b`. `floor.yml` and the boundary test's pin move together. `test_deny_decision_makes_atoms_block` is a normal test.
 - README Status names the author profile so a stranger can click once from this roof to `github.com/Steck43`.
 - README Figure 1 is the dest-true SVG. The box sits between floor and judge. Mermaid stays the sketch. This roof is the allowlist baseline of the floor. The atom plane is a sibling roof in the same plane.
 - README and Stage-1 note say written-up remedy, not a venue claim.
