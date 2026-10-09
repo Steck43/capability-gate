@@ -371,10 +371,12 @@ def _gate_file_hit(paths: list[str], base_dir: str | None, gate: Gate) -> str | 
         real(os.path.join(_hermes_home(), "config.yaml")),
         real(os.path.join(_HERE, "allowlist.yaml")),
         real(_log_path()),
+        real(_log_path() + ".witness"),
     }
     live_log = getattr(gate, "_log_path", None)
     if live_log:
         files.add(real(live_log))
+        files.add(real(live_log + ".witness"))
     plugin = real(_HERE)
     for p in paths:
         if "$" in p or p.startswith("~"):

@@ -92,15 +92,46 @@ def _hash_log_line(line: str) -> str:
     return hashlib.sha256(line.encode("utf-8")).hexdigest()
 
 
-def verify_hash_chain(log_path: str) -> str:
-    """Return the hash of the last JSONL line, or genesis if none exist.
+def _witness_path(log_path: str) -> str:
+    return f"{log_path}.witness"
 
-    Each record's parent is the hash of the previous line. Rewriting an
-    older line breaks that link. Fail closed instead of appending onto it.
-    """
+
+def _read_witness(witness_path: str) -> dict:
+    with open(witness_path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        raise ValueError("audit log witness malformed")
+    head = data.get("head")
+    count = data.get("count")
+    if not isinstance(head, str) or not isinstance(count, int) or count < 0:
+        raise ValueError("audit log witness malformed")
+    return {"head": head, "count": count}
+
+
+def _write_witness(witness_path: str, head: str, count: int) -> None:
+    payload = json.dumps({"head": head, "count": count}, sort_keys=True) + "\n"
+    directory = os.path.dirname(witness_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd = os.open(witness_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, payload.encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _verify_log(log_path: str) -> tuple[str, int]:
+    """Return (head hash, record count). Check parent links and the witness."""
+    witness_path = _witness_path(log_path)
+    witness = _read_witness(witness_path) if os.path.exists(witness_path) else None
+
     prev = _GENESIS
+    count = 0
     if not os.path.exists(log_path):
-        return _GENESIS
+        if witness is not None and (witness["count"] != 0 or witness["head"] != _GENESIS):
+            raise ValueError("audit log missing but witness present")
+        return _GENESIS, 0
+
     with open(log_path, encoding="utf-8") as fh:
         for raw in fh:
             line = raw.rstrip("\n")
@@ -110,7 +141,25 @@ def verify_hash_chain(log_path: str) -> str:
             if rec.get("parent") != prev:
                 raise ValueError("audit log hash chain broken")
             prev = _hash_log_line(line)
-    return prev
+            count += 1
+
+    if witness is not None and (
+        witness["count"] != count or witness["head"] != prev
+    ):
+        raise ValueError("audit log witness mismatch")
+    return prev, count
+
+
+def verify_hash_chain(log_path: str) -> str:
+    """Return the hash of the last JSONL line, or genesis if none exist.
+
+    Each record's parent is the hash of the previous line. A sibling witness
+    file stores the head hash and record count so truncation and whole-log
+    deletion fail closed the same way a rewrite does. Fail closed instead of
+    appending onto a broken chain.
+    """
+    head, _count = _verify_log(log_path)
+    return head
 
 
 _PATH_LIKE_KEYS = frozenset(
@@ -474,9 +523,11 @@ class Gate:
         run_id = os.environ.get("SITTING_RUN_ID", "").strip()
         if run_id:
             record["run_id"] = run_id
-        record["parent"] = verify_hash_chain(self._log_path)
+        head, count = _verify_log(self._log_path)
+        record["parent"] = head
         record = checked_log_record(record)
-        line = json.dumps(record, sort_keys=True) + "\n"
+        body = json.dumps(record, sort_keys=True)
+        line = body + "\n"
         try:
             os.makedirs(os.path.dirname(self._log_path) or ".", exist_ok=True)
             fd = os.open(self._log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -485,6 +536,11 @@ class Gate:
                 os.fsync(fd)  # durable before the action runs
             finally:
                 os.close(fd)
+            _write_witness(
+                _witness_path(self._log_path),
+                _hash_log_line(body),
+                count + 1,
+            )
         except Exception:
             # A gate that cannot record its own decisions is not trustworthy.
             # Re-raise so the adapter treats that as a denial in enforce mode.
