@@ -24,9 +24,14 @@ except ImportError:  # pragma: no cover (yaml is available in the Hermes venv)
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Load decision rows only after the hash chain and witness verify."""
+    from capability_gate import verify_hash_chain
+
     rows: list[dict[str, Any]] = []
     if not path.is_file():
         return rows
+    # G-3: a forged or truncated log must not drive grant suggestions.
+    verify_hash_chain(str(path))
     with path.open(encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
@@ -37,13 +42,21 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _load_granted_tools(allowlist_path: Path | None) -> set[str]:
+    """Union of tools granted to UNLABELED, '*', and every named skill."""
     if allowlist_path is None or not allowlist_path.is_file() or yaml is None:
         return set()
-    data = yaml.safe_load(allowlist_path.read_text(encoding="utf-8")) or {}
+    from capability_gate import load_yaml_mapping
+
+    data = load_yaml_mapping(allowlist_path.read_text(encoding="utf-8"))
     skills = data.get("skills") or {}
-    star = skills.get("*") or {}
-    tools = star.get("tools") or []
-    return {str(t) for t in tools}
+    tools: set[str] = set()
+    if isinstance(skills, dict):
+        for entry in skills.values():
+            if not isinstance(entry, dict):
+                continue
+            for t in entry.get("tools") or []:
+                tools.add(str(t))
+    return tools
 
 
 def _path_prefix(path: str, depth: int = 3) -> str:

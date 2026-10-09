@@ -14,12 +14,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 try:
-    from .capability_gate import Gate, load_policy
+    from .capability_gate import Gate, load_policy, load_yaml_mapping
 except ImportError:
-    from capability_gate import Gate, load_policy
+    from capability_gate import Gate, load_policy, load_yaml_mapping
 
 _HERE = os.path.dirname(__file__)
 
@@ -209,7 +207,7 @@ def resolve_capability_gate_mode(
     if not raw.strip():
         return "enforce", f"{MODE_UNRESOLVED_PREFIX}:empty"
     try:
-        data = yaml.safe_load(raw)
+        data = load_yaml_mapping(raw)
     except Exception:
         return "enforce", f"{MODE_UNRESOLVED_PREFIX}:unparseable"
     if data is None:
@@ -340,7 +338,7 @@ def _base_dir(task_id: str) -> str | None:
 
 
 def _load_allowlist(path: str):
-    return load_policy(yaml.safe_load(_read_trusted(path)))
+    return load_policy(load_yaml_mapping(_read_trusted(path)))
 
 
 def _log_path() -> str:
@@ -371,10 +369,12 @@ def _gate_file_hit(paths: list[str], base_dir: str | None, gate: Gate) -> str | 
         real(os.path.join(_hermes_home(), "config.yaml")),
         real(os.path.join(_HERE, "allowlist.yaml")),
         real(_log_path()),
+        real(_log_path() + ".witness"),
     }
     live_log = getattr(gate, "_log_path", None)
     if live_log:
         files.add(real(live_log))
+        files.add(real(live_log + ".witness"))
     plugin = real(_HERE)
     for p in paths:
         if "$" in p or p.startswith("~"):
@@ -494,12 +494,12 @@ def register(ctx) -> None:
                 )
             return _BLOCK(decision.reason)
         except Exception as exc:
-            # E3: reconfirm before observe fail-open on errors (same class as passthrough).
+            # H1-1: a crashed check with no log line used to fail open in
+            # observe. Block in both modes; observe still does not act on a
+            # normal deny Decision, but an unrecorded exception is not that.
             mode_e, unresolved_e = resolve_capability_gate_mode()
             if unresolved_e:
                 return _BLOCK(unresolved_e)
-            if mode_e == "observe":
-                return None
             return _BLOCK(f"capability-gate error, failing closed: {exc!r}")
 
     ctx.register_hook("pre_tool_call", pre_tool_call)

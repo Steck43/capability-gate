@@ -3,7 +3,7 @@
 Author: Landen Stecker
 Date: 2026-08-19
 Version: 0.1.0
-Summary: Zip capability_gate.py, plugin.yaml, allowlist.example.yaml, and SHA256SUMS of those bytes.
+Summary: Zip __init__.py, capability_gate.py, plugin.yaml, allowlist.example.yaml, and SHA256SUMS of those bytes.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MEMBERS = (
+    "__init__.py",
     "capability_gate.py",
     "plugin.yaml",
     "allowlist.example.yaml",

@@ -45,10 +45,112 @@ import os
 import re
 import time
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
+import yaml
+from yaml.constructor import ConstructorError
+from yaml.nodes import MappingNode
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None  # type: ignore[assignment]
+
 _GENESIS = "0" * 64
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """Refuse duplicate keys and YAML merge keys (``<<``)."""
+
+
+def _construct_mapping_strict(loader: yaml.SafeLoader, node: MappingNode, deep=False):
+    if not isinstance(node, MappingNode):
+        raise ConstructorError(
+            None,
+            None,
+            f"expected a mapping node, got {node.id}",
+            node.start_mark,
+        )
+    mapping: dict = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key == "<<":
+            raise ConstructorError(
+                None,
+                None,
+                "YAML merge keys are refused",
+                key_node.start_mark,
+            )
+        if key in mapping:
+            raise ConstructorError(
+                None,
+                None,
+                f"duplicate YAML key: {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+def _refuse_merge(loader: yaml.SafeLoader, node) -> None:
+    raise ConstructorError(
+        None,
+        None,
+        "YAML merge keys are refused",
+        node.start_mark,
+    )
+
+
+_StrictLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_mapping_strict,
+)
+_StrictLoader.add_constructor("tag:yaml.org,2002:merge", _refuse_merge)
+
+
+def load_yaml_mapping(text: str) -> dict:
+    """Parse YAML that must be a mapping, without duplicate or merge keys."""
+    data = yaml.load(text, Loader=_StrictLoader)
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(f"YAML root must be a mapping, got {type(data).__name__}")
+    return data
+
+
+@contextmanager
+def _audit_lock(log_path: str):
+    """Exclusive lock around read-head and append so two writers cannot fork."""
+    lock_path = f"{log_path}.lock"
+    directory = os.path.dirname(lock_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if os.fstat(fd).st_size == 0:
+            os.write(fd, b"0")
+            os.lseek(fd, 0, os.SEEK_SET)
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        elif msvcrt is not None:
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        yield
+    finally:
+        try:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            elif msvcrt is not None:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        finally:
+            os.close(fd)
+
 
 _TRACE_FIELDS = ("session_id", "turn_id", "task_id", "tool_call_id")
 _LOG_ALLOWED = frozenset(
@@ -92,15 +194,48 @@ def _hash_log_line(line: str) -> str:
     return hashlib.sha256(line.encode("utf-8")).hexdigest()
 
 
-def verify_hash_chain(log_path: str) -> str:
-    """Return the hash of the last JSONL line, or genesis if none exist.
+def _witness_path(log_path: str) -> str:
+    return f"{log_path}.witness"
 
-    Each record's parent is the hash of the previous line. Rewriting an
-    older line breaks that link. Fail closed instead of appending onto it.
-    """
+
+def _read_witness(witness_path: str) -> dict:
+    with open(witness_path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        raise ValueError("audit log witness malformed")
+    head = data.get("head")
+    count = data.get("count")
+    if not isinstance(head, str) or not isinstance(count, int) or count < 0:
+        raise ValueError("audit log witness malformed")
+    return {"head": head, "count": count}
+
+
+def _write_witness(witness_path: str, head: str, count: int) -> None:
+    payload = json.dumps({"head": head, "count": count}, sort_keys=True) + "\n"
+    directory = os.path.dirname(witness_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd = os.open(witness_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, payload.encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _verify_log(log_path: str) -> tuple[str, int]:
+    """Return (head hash, record count). Check parent links and the witness."""
+    witness_path = _witness_path(log_path)
+    witness = _read_witness(witness_path) if os.path.exists(witness_path) else None
+
     prev = _GENESIS
+    count = 0
     if not os.path.exists(log_path):
-        return _GENESIS
+        if witness is not None and (
+            witness["count"] != 0 or witness["head"] != _GENESIS
+        ):
+            raise ValueError("audit log missing but witness present")
+        return _GENESIS, 0
+
     with open(log_path, encoding="utf-8") as fh:
         for raw in fh:
             line = raw.rstrip("\n")
@@ -110,7 +245,23 @@ def verify_hash_chain(log_path: str) -> str:
             if rec.get("parent") != prev:
                 raise ValueError("audit log hash chain broken")
             prev = _hash_log_line(line)
-    return prev
+            count += 1
+
+    if witness is not None and (witness["count"] != count or witness["head"] != prev):
+        raise ValueError("audit log witness mismatch")
+    return prev, count
+
+
+def verify_hash_chain(log_path: str) -> str:
+    """Return the hash of the last JSONL line, or genesis if none exist.
+
+    Each record's parent is the hash of the previous line. A sibling witness
+    file stores the head hash and record count so truncation and whole-log
+    deletion fail closed the same way a rewrite does. Fail closed instead of
+    appending onto a broken chain.
+    """
+    head, _count = _verify_log(log_path)
+    return head
 
 
 _PATH_LIKE_KEYS = frozenset(
@@ -157,9 +308,11 @@ def summarize_args(args: Mapping | None) -> dict:
                 paths[ks] = val
         if ks in _CONTENT_KEYS or ks.endswith("_content"):
             if isinstance(val, str):
-                content_lengths[ks] = len(val.encode("utf-8"))
+                content_lengths[ks] = len(val.encode("utf-8", errors="surrogatepass"))
             elif val is not None and not isinstance(val, (bool, int, float)):
-                content_lengths[ks] = len(str(val).encode("utf-8"))
+                content_lengths[ks] = len(
+                    str(val).encode("utf-8", errors="surrogatepass")
+                )
     out: dict = {"keys": keys}
     if paths:
         out["paths"] = paths
@@ -425,9 +578,12 @@ class Gate:
         like any other denial. ``base_dir`` is the absolute folder the tool will
         resolve a relative path against; without one a relative path is denied.
         The decision, and the log, carry the absolute paths that were checked."""
-        norm_trace = _normalize_trace(trace)
-        arg_summary = summarize_args(args)
+        # Everything that can throw before a recorded decision sits inside this
+        # boundary (H1-1). A lone surrogate in args used to raise in
+        # summarize_args before the try, so observe returned with no log line.
         try:
+            norm_trace = _normalize_trace(trace)
+            arg_summary = summarize_args(args)
             if refuse is not None:
                 decision = Decision(
                     Verdict.DENY,
@@ -444,6 +600,10 @@ class Gate:
                     [str(p) for p in paths],
                     base_dir,
                 )
+            # observe mode records the true verdict but does not act on it
+            decision = replace(decision, enforced=(self._mode == ENFORCE))
+            self._log(decision, trace=norm_trace, arg_summary=arg_summary)
+            return decision
         except Exception as exc:  # any failure is a denial, on purpose
             decision = Decision(
                 Verdict.DENY,
@@ -452,10 +612,16 @@ class Gate:
                 str(tool),
                 tuple(str(p) for p in paths),
             )
-        # observe mode records the true verdict but does not act on it
-        decision = replace(decision, enforced=(self._mode == ENFORCE))
-        self._log(decision, trace=norm_trace, arg_summary=arg_summary)
-        return decision
+            decision = replace(decision, enforced=(self._mode == ENFORCE))
+            try:
+                self._log(decision, trace=None, arg_summary=None)
+            except Exception:
+                # Still return the denial. Enforce callers that need the raise
+                # see it from _log only when the outer path did not already
+                # catch; here the record attempt failed after a prior error.
+                if self._mode == ENFORCE:
+                    raise
+            return decision
 
     def _log(
         self,
@@ -474,17 +640,37 @@ class Gate:
         run_id = os.environ.get("SITTING_RUN_ID", "").strip()
         if run_id:
             record["run_id"] = run_id
-        record["parent"] = verify_hash_chain(self._log_path)
-        record = checked_log_record(record)
-        line = json.dumps(record, sort_keys=True) + "\n"
         try:
             os.makedirs(os.path.dirname(self._log_path) or ".", exist_ok=True)
-            fd = os.open(self._log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            try:
-                os.write(fd, line.encode("utf-8"))
-                os.fsync(fd)  # durable before the action runs
-            finally:
-                os.close(fd)
+            with _audit_lock(self._log_path):
+                # F-3: verify and append under one lock so two processes cannot
+                # both parent the same head.
+                head, count = _verify_log(self._log_path)
+                record["parent"] = head
+                checked = checked_log_record(record)
+                body = json.dumps(checked, sort_keys=True)
+                line = body + "\n"
+                fd = os.open(
+                    self._log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600
+                )
+                try:
+                    before = os.fstat(fd).st_size
+                    payload = line.encode("utf-8")
+                    written = os.write(fd, payload)
+                    if written != len(payload):
+                        # F-2: roll back a torn line so the chain stays readable.
+                        os.ftruncate(fd, before)
+                        raise OSError(
+                            f"short audit log write: {written} of {len(payload)} bytes"
+                        )
+                    os.fsync(fd)  # durable before the action runs
+                finally:
+                    os.close(fd)
+                _write_witness(
+                    _witness_path(self._log_path),
+                    _hash_log_line(body),
+                    count + 1,
+                )
         except Exception:
             # A gate that cannot record its own decisions is not trustworthy.
             # Re-raise so the adapter treats that as a denial in enforce mode.
