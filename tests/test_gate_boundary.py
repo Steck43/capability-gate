@@ -42,7 +42,7 @@ _ENV = {
 }
 # Same commits floor.yml checks out. Move both together, forward only.
 _PINS = {
-    _ATOMS: "8074e7b33569522eaf7a9e9a2b6bb799df08a2ae",
+    _ATOMS: "46db989ea78e7bb635f46beaec6826817935de7e",
     _ISOLATION: "2a8bfa815b2bd7d2b3fe72c5b3a58155adefc716",
 }
 _DECISION_PARAMS = (
@@ -535,7 +535,6 @@ _NO_DECISION_PARAM = "evaluate_tool_call has no parameter for the gate decision 
 
 # Strict, same rule: the xfail accepts only PinnedMiss, raised for the missing
 # decision parameter. A forward of a denied call, or any other error, fails outright.
-@pytest.mark.xfail(strict=True, raises=PinnedMiss, reason=_NO_DECISION_PARAM)
 def test_deny_decision_makes_atoms_block(tmp_path: Path, monkeypatch) -> None:
     sib = _siblings_or_skip()
     gate = _shipped_gate(tmp_path, monkeypatch)
