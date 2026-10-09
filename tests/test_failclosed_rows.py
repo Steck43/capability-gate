@@ -195,8 +195,7 @@ def test_healthy_allow_writes_exactly_one_row(env_home, monkeypatch):
     mod = _load()
     _use_example_allowlist(mod, monkeypatch)
     hook = _hook(mod)
-    home = str(env_home)
-    # example allowlist grants * read under notes; create an in-grant file.
+    # example allowlist grants UNLABELED read under notes; create an in-grant file.
     notes = env_home / "notes"
     notes.mkdir(exist_ok=True)
     target = notes / "a.md"
