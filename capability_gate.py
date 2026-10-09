@@ -480,6 +480,16 @@ def _path_allowed(path: str, globs: Iterable[str]) -> bool:
     )
 
 
+# A grant glob allows every name under it. The Phase 1 canary planted
+# secret-canary.txt inside a granted workspace and the floor allowed both
+# the write and the read. That basename is denied even when the parent matches.
+_CANARY_BASENAMES = frozenset({"secret-canary.txt"})
+
+
+def _canary_secret(path: str) -> bool:
+    return os.path.basename(os.path.normpath(_expand(path))) in _CANARY_BASENAMES
+
+
 # --- the decision ---------------------------------------------------------
 
 
@@ -527,6 +537,14 @@ def _decide(
             Verdict.DENY, f"tool '{tool}' not granted to '{skill}'", skill, tool, ptuple
         )
     for p in paths:
+        if _canary_secret(p):
+            return Decision(
+                Verdict.DENY,
+                f"path '{p}' is a canary secret inside a grant",
+                skill,
+                tool,
+                ptuple,
+            )
         if not _path_allowed(p, rule.path_globs):
             return Decision(
                 Verdict.DENY,

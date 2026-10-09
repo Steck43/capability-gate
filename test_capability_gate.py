@@ -365,6 +365,18 @@ def test_checked_log_record_rejects_unknown_keys() -> None:
         cg.checked_log_record({"ts": 1, "mode": "enforce", "machine_id": "nope"})
 
 
+def test_secret_canary_inside_a_grant_is_denied(tmp_path) -> None:
+    policy = load_policy(
+        {"skills": {"*": {"tools": ["read_file", "write_file"], "paths": ["/work/**"]}}}
+    )
+    g = Gate(policy, log_path=str(tmp_path / "d.jsonl"))
+    for tool in ("write_file", "read_file"):
+        decision = g.evaluate("*", tool, ["/work/secret-canary.txt"])
+        assert decision.verdict is Verdict.DENY
+    allowed = g.evaluate("*", "read_file", ["/work/hello.txt"])
+    assert allowed.verdict is Verdict.ALLOW
+
+
 def test_log_optional_run_id(tmp_path, monkeypatch) -> None:
     policy = load_policy(
         {"skills": {"*": {"tools": ["write_file"], "paths": ["/work/**"]}}}
