@@ -1,0 +1,28 @@
+# capability-gate allowlist for the Claude Code hook (adapters/claude_code_hook.py).
+# Copy to adapters/claude_code_allowlist.yaml, or point CG_CC_ALLOWLIST at your copy.
+#
+# Claude Code sends no skill label, so every call is judged as UNLABELED.
+# A "*" entry never applies to Claude Code calls. Anything not granted here is denied.
+#
+# Paths: only "<root>/**" (the root and everything below it) or an exact file.
+# A single * or ? anywhere else makes the allowlist refuse to load, which denies every call.
+# $CLAUDE_PROJECT_DIR is set by Claude Code for hooks. An unset variable also refuses
+# to load. TEMP is the Windows temp folder; Claude Code keeps session scratch under it.
+
+version: 1
+
+# Tools whose effect cannot be bounded from their arguments. The gate answers
+# "ask" for these and the hook turns that into a block.
+require_approval:
+  - Bash
+  - PowerShell
+
+skills:
+  UNLABELED:
+    tools:
+      - Read
+      - Glob
+      - Grep
+    paths:
+      - "$CLAUDE_PROJECT_DIR/**"
+      - "$TEMP/claude/**"
