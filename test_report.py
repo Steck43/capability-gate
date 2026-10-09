@@ -2,6 +2,7 @@
 
 import json
 
+import capability_gate as cg
 import report
 
 FIXTURE = [
@@ -46,11 +47,24 @@ FIXTURE = [
 ]
 
 
+def _write_chained_log(log_path, rows) -> None:
+    """Write fixture rows with parent links and a matching witness."""
+    prev = cg._GENESIS
+    count = 0
+    with log_path.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            rec = dict(row)
+            rec["parent"] = prev
+            body = json.dumps(cg.checked_log_record(rec), sort_keys=True)
+            fh.write(body + "\n")
+            prev = cg._hash_log_line(body)
+            count += 1
+    cg._write_witness(cg._witness_path(str(log_path)), prev, count)
+
+
 def test_analyze_grant_gap_and_denies(tmp_path):
     log = tmp_path / "capability-gate.jsonl"
-    with log.open("w", encoding="utf-8") as fh:
-        for row in FIXTURE:
-            fh.write(json.dumps(row) + "\n")
+    _write_chained_log(log, FIXTURE)
 
     allowlist = tmp_path / "allowlist.yaml"
     allowlist.write_text(

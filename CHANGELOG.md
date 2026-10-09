@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `report.py` runs `verify_hash_chain` before suggesting grants (G-3), and reads tools from `UNLABELED`, `*`, and every named skill (G-report-star-only).
 - Observe-mode errors that used to raise before a log line was written (including a lone UTF-16 surrogate in content) now deny inside the evaluate boundary and still record a decision (H1-1). The adapter no longer fail-opens on an unrecorded exception in observe.
 - Decision-log truncation and whole-log deletion fail closed. A sibling .witness file stores the head hash and record count; erify_hash_chain checks it on every append. Cutting the log from 4 lines to 2, or deleting the log while the witness remains, raises the same way rewriting an older line does (#32).
 - Issue #33 shapes stay denied on the closed argument schema: list-valued paths, alternate keys alone, non-dict args, and blank/`*` skill names resolving to `UNLABELED` (not the `*` grant) are pinned by `tests/test_issue33_shapes.py`.
