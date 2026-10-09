@@ -1,10 +1,10 @@
 {
   "harness": "harness/lab_insufficiency_harness.py",
   "gate_module": "capability_gate.py",
-  "gate_sha256": "9bb44326f612c17d2865eac2c62f377b9360010425a2ee82c0a786c4d6850533",
-  "git_head": "0935ea9fe7d5db408417f5050fe0cbe38425c24a",
+  "gate_sha256": "34b5f1fb53efd33c8c801b708699d3cbb8b85122f845e3b1fe85b957d8bc3403",
+  "git_head": "8084160f56c5328c0e9e0d847dbe009b0ace934f",
   "mode": "enforce",
-  "commit_note": "gate_sha256=9bb44326f612c17d2865eac2c62f377b9360010425a2ee82c0a786c4d6850533 git_head=0935ea9fe7d5db408417f5050fe0cbe38425c24a",
+  "commit_note": "gate_sha256=34b5f1fb53efd33c8c801b708699d3cbb8b85122f845e3b1fe85b957d8bc3403 git_head=8084160f56c5328c0e9e0d847dbe009b0ace934f",
   "results": [
     {
       "case_id": "A1",
@@ -260,7 +260,7 @@
       "skill": "lab-helper",
       "tool": "write_file",
       "paths": [
-        "~/AppData/Local/Temp/cg-s1-rymze72m/s1-in-grant/s1-link"
+        "~/AppData/Local/Temp/cg-s1-z6wxk2_1/s1-in-grant/s1-link"
       ],
       "expected_ground_truth": "deny",
       "gate_verdict": "deny",
