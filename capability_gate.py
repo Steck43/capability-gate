@@ -549,7 +549,15 @@ class Gate:
             os.makedirs(os.path.dirname(self._log_path) or ".", exist_ok=True)
             fd = os.open(self._log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             try:
-                os.write(fd, line.encode("utf-8"))
+                before = os.fstat(fd).st_size
+                payload = line.encode("utf-8")
+                written = os.write(fd, payload)
+                if written != len(payload):
+                    # F-2: roll back a torn line so the chain stays readable.
+                    os.ftruncate(fd, before)
+                    raise OSError(
+                        f"short audit log write: {written} of {len(payload)} bytes"
+                    )
                 os.fsync(fd)  # durable before the action runs
             finally:
                 os.close(fd)
