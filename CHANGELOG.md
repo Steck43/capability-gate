@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fail-closed denials that never reach `Gate.evaluate` (unresolved mode, failed plugin load, outer adapter exception) still write a decision row and update the `.witness` via shared `record_decision` (2026-09-28 zero-row incident).
 - The plugin release zip includes `__init__.py` so the Hermes hook entry point `register` is present in the bundle (D-3).
 - Two writers cannot fork the decision-log chain: read-head and append run under an exclusive `.lock` file (F-3).
 - Config and allowlist YAML refuse duplicate keys and merge keys (`<<`) via `load_yaml_mapping` (permissive-YAML / D-4 family). PyYAML's default last-key-wins load is no longer used for those files.

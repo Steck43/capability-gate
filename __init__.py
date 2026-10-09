@@ -7,6 +7,7 @@ present. Otherwise it stays ``*``. Do not invent a skill for the lab.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import stat
@@ -15,9 +16,25 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .capability_gate import Gate, load_policy, load_yaml_mapping
+    from .capability_gate import (
+        Decision,
+        Gate,
+        Verdict,
+        load_policy,
+        load_yaml_mapping,
+        record_decision,
+        summarize_args,
+    )
 except ImportError:
-    from capability_gate import Gate, load_policy, load_yaml_mapping
+    from capability_gate import (
+        Decision,
+        Gate,
+        Verdict,
+        load_policy,
+        load_yaml_mapping,
+        record_decision,
+        summarize_args,
+    )
 
 _HERE = os.path.dirname(__file__)
 
@@ -389,6 +406,43 @@ def _gate_file_hit(paths: list[str], base_dir: str | None, gate: Gate) -> str | 
     return None
 
 
+def _record_failclosed(
+    mode: str,
+    tool_name: str,
+    reason: str,
+    kwargs: dict,
+    task_id: str,
+    args: Any = None,
+    *,
+    enforced: bool = True,
+) -> None:
+    """Record a denial that never reached Gate.evaluate().
+
+    Best effort: a logging failure must not turn a block into an allow.
+    """
+    paths: tuple = ()
+    with contextlib.suppress(Exception):
+        paths = tuple(_extract_paths(tool_name, args))
+    arg_summary = None
+    with contextlib.suppress(Exception):
+        arg_summary = summarize_args(args if isinstance(args, dict) else None)
+    with contextlib.suppress(Exception):
+        record_decision(
+            _log_path(),
+            mode,
+            Decision(
+                Verdict.DENY,
+                reason,
+                _resolve_skill(kwargs),
+                str(tool_name),
+                paths,
+                enforced=enforced,
+            ),
+            trace=_extract_trace(kwargs if isinstance(kwargs, dict) else {}, task_id),
+            arg_summary=arg_summary,
+        )
+
+
 def register(ctx) -> None:
     mode, _unresolved_at_register = resolve_capability_gate_mode()
     # Build Gate in confirmed or fail-closed-strict mode; unresolved calls block
@@ -405,20 +459,36 @@ def register(ctx) -> None:
             # E2/E3: decision-time mode; unknown mode → fail closed (not observe).
             mode_now, unresolved = resolve_capability_gate_mode()
             if unresolved:
+                _record_failclosed(
+                    "enforce", tool_name, unresolved, kwargs, task_id, args
+                )
                 return _BLOCK(unresolved)
+            msg = f"capability-gate failed to load, failing closed: {load_error}"
             if mode_now == "observe":
                 # E3: reconfirm before observe fail-open when gate failed to load.
                 mode2, unresolved2 = resolve_capability_gate_mode()
                 if unresolved2:
+                    _record_failclosed(
+                        "enforce", tool_name, unresolved2, kwargs, task_id, args
+                    )
                     return _BLOCK(unresolved2)
                 if mode2 == "enforce":
-                    return _BLOCK(
-                        f"capability-gate failed to load, failing closed: {load_error}"
+                    _record_failclosed(
+                        "enforce", tool_name, msg, kwargs, task_id, args
                     )
+                    return _BLOCK(msg)
+                _record_failclosed(
+                    "observe",
+                    tool_name,
+                    f"capability-gate failed to load (observe passthrough): {load_error}",
+                    kwargs,
+                    task_id,
+                    args,
+                    enforced=False,
+                )
                 return None
-            return _BLOCK(
-                f"capability-gate failed to load, failing closed: {load_error}"
-            )
+            _record_failclosed("enforce", tool_name, msg, kwargs, task_id, args)
+            return _BLOCK(msg)
 
         ctx.register_hook("pre_tool_call", _closed)
         return
@@ -433,6 +503,9 @@ def register(ctx) -> None:
             # E2/E3: mode at decision time from raw config — unknown → fail closed.
             mode, unresolved = resolve_capability_gate_mode()
             if unresolved:
+                _record_failclosed(
+                    "enforce", tool_name, unresolved, kwargs, task_id, args
+                )
                 return _BLOCK(unresolved)
             if mode != gate.mode:
                 gate.set_mode(mode)
@@ -463,6 +536,14 @@ def register(ctx) -> None:
                 if mode == "observe":
                     mode2, unresolved2 = resolve_capability_gate_mode()
                     if unresolved2:
+                        _record_failclosed(
+                            "enforce",
+                            tool_name,
+                            unresolved2,
+                            kwargs,
+                            task_id,
+                            args,
+                        )
                         return _BLOCK(unresolved2)
                     if mode2 == "enforce":
                         gate.set_mode(mode2)
@@ -482,6 +563,14 @@ def register(ctx) -> None:
                 # E3: reconfirm before observe passthrough — close mid-call enforce flip.
                 mode2, unresolved2 = resolve_capability_gate_mode()
                 if unresolved2:
+                    _record_failclosed(
+                        "enforce",
+                        tool_name,
+                        unresolved2,
+                        kwargs,
+                        task_id,
+                        args,
+                    )
                     return _BLOCK(unresolved2)
                 if mode2 == "enforce":
                     gate.set_mode(mode2)
@@ -499,7 +588,12 @@ def register(ctx) -> None:
             # normal deny Decision, but an unrecorded exception is not that.
             mode_e, unresolved_e = resolve_capability_gate_mode()
             if unresolved_e:
+                _record_failclosed(
+                    "enforce", tool_name, unresolved_e, kwargs, task_id, args
+                )
                 return _BLOCK(unresolved_e)
-            return _BLOCK(f"capability-gate error, failing closed: {exc!r}")
+            msg = f"capability-gate error, failing closed: {exc!r}"
+            _record_failclosed("enforce", tool_name, msg, kwargs, task_id, args)
+            return _BLOCK(msg)
 
     ctx.register_hook("pre_tool_call", pre_tool_call)
