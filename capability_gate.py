@@ -48,7 +48,70 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
+import yaml
+from yaml.constructor import ConstructorError
+from yaml.nodes import MappingNode
+
 _GENESIS = "0" * 64
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """Refuse duplicate keys and YAML merge keys (``<<``)."""
+
+
+def _construct_mapping_strict(loader: yaml.SafeLoader, node: MappingNode, deep=False):
+    if not isinstance(node, MappingNode):
+        raise ConstructorError(
+            None,
+            None,
+            f"expected a mapping node, got {node.id}",
+            node.start_mark,
+        )
+    mapping: dict = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key == "<<":
+            raise ConstructorError(
+                None,
+                None,
+                "YAML merge keys are refused",
+                key_node.start_mark,
+            )
+        if key in mapping:
+            raise ConstructorError(
+                None,
+                None,
+                f"duplicate YAML key: {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+def _refuse_merge(loader: yaml.SafeLoader, node) -> None:
+    raise ConstructorError(
+        None,
+        None,
+        "YAML merge keys are refused",
+        node.start_mark,
+    )
+
+
+_StrictLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_mapping_strict,
+)
+_StrictLoader.add_constructor("tag:yaml.org,2002:merge", _refuse_merge)
+
+
+def load_yaml_mapping(text: str) -> dict:
+    """Parse YAML that must be a mapping, without duplicate or merge keys."""
+    data = yaml.load(text, Loader=_StrictLoader)
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(f"YAML root must be a mapping, got {type(data).__name__}")
+    return data
 
 _TRACE_FIELDS = ("session_id", "turn_id", "task_id", "tool_call_id")
 _LOG_ALLOWED = frozenset(

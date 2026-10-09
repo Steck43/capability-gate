@@ -45,7 +45,9 @@ def _load_granted_tools(allowlist_path: Path | None) -> set[str]:
     """Union of tools granted to UNLABELED, '*', and every named skill."""
     if allowlist_path is None or not allowlist_path.is_file() or yaml is None:
         return set()
-    data = yaml.safe_load(allowlist_path.read_text(encoding="utf-8")) or {}
+    from capability_gate import load_yaml_mapping
+
+    data = load_yaml_mapping(allowlist_path.read_text(encoding="utf-8"))
     skills = data.get("skills") or {}
     tools: set[str] = set()
     if isinstance(skills, dict):

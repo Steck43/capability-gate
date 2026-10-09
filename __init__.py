@@ -17,9 +17,9 @@ from typing import Any
 import yaml
 
 try:
-    from .capability_gate import Gate, load_policy
+    from .capability_gate import Gate, load_policy, load_yaml_mapping
 except ImportError:
-    from capability_gate import Gate, load_policy
+    from capability_gate import Gate, load_policy, load_yaml_mapping
 
 _HERE = os.path.dirname(__file__)
 
@@ -209,7 +209,7 @@ def resolve_capability_gate_mode(
     if not raw.strip():
         return "enforce", f"{MODE_UNRESOLVED_PREFIX}:empty"
     try:
-        data = yaml.safe_load(raw)
+        data = load_yaml_mapping(raw)
     except Exception:
         return "enforce", f"{MODE_UNRESOLVED_PREFIX}:unparseable"
     if data is None:
@@ -340,7 +340,7 @@ def _base_dir(task_id: str) -> str | None:
 
 
 def _load_allowlist(path: str):
-    return load_policy(yaml.safe_load(_read_trusted(path)))
+    return load_policy(load_yaml_mapping(_read_trusted(path)))
 
 
 def _log_path() -> str:
