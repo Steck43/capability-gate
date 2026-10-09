@@ -1,4 +1,4 @@
-"""Smoke tests for the Hermes adapter translation layer (no Hermes runtime)."""
+﻿"""Smoke tests for the Hermes adapter translation layer (no Hermes runtime)."""
 
 import importlib.util
 import os
@@ -8,8 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-
-pytest.importorskip("hermes_cli", reason="adapter tests require a Hermes install")
+import yaml
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PLUGIN_DIR))
@@ -48,25 +47,40 @@ def register_hook(adapter, tmp_path, monkeypatch):
         "version": 1,
         "require_approval": ["terminal"],
         "skills": {
-            "*": {
+            "UNLABELED": {
                 "tools": ["read_file", "write_file", "terminal"],
                 "paths": [f"{home}/notes/**"],
             }
         },
     }
 
-    def fake_mode(default="observe"):
-        return adapter._test_mode
-
-    monkeypatch.setattr(adapter, "_read_mode_from_config", fake_mode)
+    def safe_load(src):
+        text = src if isinstance(src, str) else src.read()
+        if isinstance(text, str) and "capability-gate:" in text:
+            return yaml.safe_load(text)
+        return allowlist
 
     yaml_mod = types.ModuleType("yaml")
-    yaml_mod.safe_load = lambda _f: allowlist
+    yaml_mod.safe_load = safe_load
     monkeypatch.setitem(sys.modules, "yaml", yaml_mod)
     adapter.__dict__["yaml"] = yaml_mod
 
+    def _build(mode):
+        (home / "logs").mkdir(exist_ok=True)
+        policy = adapter.load_policy(allowlist)
+        log_path = str(home / "logs" / "capability-gate.jsonl")
+        return adapter.Gate(policy, log_path=log_path, mode=mode)
+
+    monkeypatch.setattr(adapter, "_build_gate", _build)
+
     def _register(mode="observe"):
         adapter._test_mode = mode
+        (home / "config.yaml").write_text(
+            "plugins:\n  entries:\n    capability-gate:\n      mode: "
+            + mode
+            + "\n",
+            encoding="utf-8",
+        )
         ctx = MagicMock()
         adapter.register(ctx)
         return ctx.register_hook.call_args[0][1]
@@ -112,11 +126,13 @@ def test_exception_enforce_blocks(register_hook, adapter, monkeypatch):
     assert "failing closed" in out["message"]
 
 
-def test_exception_observe_returns_none(register_hook, adapter, monkeypatch):
+def test_exception_observe_blocks(register_hook, adapter, monkeypatch):
     hook_fn = register_hook("observe")
 
     def boom(*_a, **_k):
         raise RuntimeError("adapter fault")
 
     monkeypatch.setattr(adapter.Gate, "evaluate", boom)
-    assert hook_fn("read_file", {"path": "/x"}, "t6") is None
+    out = hook_fn("read_file", {"path": "/x"}, "t6")
+    assert out["action"] == "block"
+    assert "failing closed" in out["message"]
