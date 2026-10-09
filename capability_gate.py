@@ -630,48 +630,69 @@ class Gate:
         trace: Mapping[str, str] | None = None,
         arg_summary: Mapping | None = None,
     ) -> None:
-        record = {"ts": time.time(), "mode": self._mode, **decision.as_dict()}
-        if trace:
-            for field in _TRACE_FIELDS:
-                if field in trace:
-                    record[field] = trace[field]
-        if arg_summary:
-            record["arg_summary"] = dict(arg_summary)
-        run_id = os.environ.get("SITTING_RUN_ID", "").strip()
-        if run_id:
-            record["run_id"] = run_id
-        try:
-            os.makedirs(os.path.dirname(self._log_path) or ".", exist_ok=True)
-            with _audit_lock(self._log_path):
-                # F-3: verify and append under one lock so two processes cannot
-                # both parent the same head.
-                head, count = _verify_log(self._log_path)
-                record["parent"] = head
-                checked = checked_log_record(record)
-                body = json.dumps(checked, sort_keys=True)
-                line = body + "\n"
-                fd = os.open(
-                    self._log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600
-                )
-                try:
-                    before = os.fstat(fd).st_size
-                    payload = line.encode("utf-8")
-                    written = os.write(fd, payload)
-                    if written != len(payload):
-                        # F-2: roll back a torn line so the chain stays readable.
-                        os.ftruncate(fd, before)
-                        raise OSError(
-                            f"short audit log write: {written} of {len(payload)} bytes"
-                        )
-                    os.fsync(fd)  # durable before the action runs
-                finally:
-                    os.close(fd)
-                _write_witness(
-                    _witness_path(self._log_path),
-                    _hash_log_line(body),
-                    count + 1,
-                )
-        except Exception:
-            # A gate that cannot record its own decisions is not trustworthy.
-            # Re-raise so the adapter treats that as a denial in enforce mode.
-            raise
+        record_decision(
+            self._log_path,
+            self._mode,
+            decision,
+            trace=trace,
+            arg_summary=arg_summary,
+        )
+
+
+def record_decision(
+    log_path: str,
+    mode: str,
+    decision: Decision,
+    *,
+    trace: Mapping[str, str] | None = None,
+    arg_summary: Mapping | None = None,
+) -> None:
+    """Write one durable decision row with parent link and witness update.
+
+    Shared by Gate._log and the adapter's fail-closed branches, so a denial that
+    never reached evaluate() is still on the record (2026-09-28 incident: nine
+    days of fail-closed denials, 0 rows).
+    """
+    record = {"ts": time.time(), "mode": mode, **decision.as_dict()}
+    if trace:
+        for field in _TRACE_FIELDS:
+            if field in trace:
+                record[field] = trace[field]
+    if arg_summary:
+        record["arg_summary"] = dict(arg_summary)
+    run_id = os.environ.get("SITTING_RUN_ID", "").strip()
+    if run_id:
+        record["run_id"] = run_id
+    try:
+        os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+        with _audit_lock(log_path):
+            # F-3: verify and append under one lock so two processes cannot
+            # both parent the same head.
+            head, count = _verify_log(log_path)
+            record["parent"] = head
+            checked = checked_log_record(record)
+            body = json.dumps(checked, sort_keys=True)
+            line = body + "\n"
+            fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            try:
+                before = os.fstat(fd).st_size
+                payload = line.encode("utf-8")
+                written = os.write(fd, payload)
+                if written != len(payload):
+                    # F-2: roll back a torn line so the chain stays readable.
+                    os.ftruncate(fd, before)
+                    raise OSError(
+                        f"short audit log write: {written} of {len(payload)} bytes"
+                    )
+                os.fsync(fd)  # durable before the action runs
+            finally:
+                os.close(fd)
+            _write_witness(
+                _witness_path(log_path),
+                _hash_log_line(body),
+                count + 1,
+            )
+    except Exception:
+        # A gate that cannot record its own decisions is not trustworthy.
+        # Re-raise so the adapter treats that as a denial in enforce mode.
+        raise
