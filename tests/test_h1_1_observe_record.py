@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import capability_gate as cg
 from capability_gate import OBSERVE, Gate, Verdict, load_policy

@@ -14,8 +14,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 try:
     from .capability_gate import Gate, load_policy, load_yaml_mapping
 except ImportError:

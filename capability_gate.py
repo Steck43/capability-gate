@@ -151,6 +151,7 @@ def _audit_lock(log_path: str):
         finally:
             os.close(fd)
 
+
 _TRACE_FIELDS = ("session_id", "turn_id", "task_id", "tool_call_id")
 _LOG_ALLOWED = frozenset(
     {
@@ -229,7 +230,9 @@ def _verify_log(log_path: str) -> tuple[str, int]:
     prev = _GENESIS
     count = 0
     if not os.path.exists(log_path):
-        if witness is not None and (witness["count"] != 0 or witness["head"] != _GENESIS):
+        if witness is not None and (
+            witness["count"] != 0 or witness["head"] != _GENESIS
+        ):
             raise ValueError("audit log missing but witness present")
         return _GENESIS, 0
 
@@ -244,9 +247,7 @@ def _verify_log(log_path: str) -> tuple[str, int]:
             prev = _hash_log_line(line)
             count += 1
 
-    if witness is not None and (
-        witness["count"] != count or witness["head"] != prev
-    ):
+    if witness is not None and (witness["count"] != count or witness["head"] != prev):
         raise ValueError("audit log witness mismatch")
     return prev, count
 
@@ -307,9 +308,7 @@ def summarize_args(args: Mapping | None) -> dict:
                 paths[ks] = val
         if ks in _CONTENT_KEYS or ks.endswith("_content"):
             if isinstance(val, str):
-                content_lengths[ks] = len(
-                    val.encode("utf-8", errors="surrogatepass")
-                )
+                content_lengths[ks] = len(val.encode("utf-8", errors="surrogatepass"))
             elif val is not None and not isinstance(val, (bool, int, float)):
                 content_lengths[ks] = len(
                     str(val).encode("utf-8", errors="surrogatepass")
