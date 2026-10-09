@@ -51,7 +51,9 @@ def _start_watchdog() -> None:
         deadline = float(os.environ.get("CG_CC_DEADLINE_S", DEFAULT_DEADLINE_S))
     except ValueError:
         deadline = DEFAULT_DEADLINE_S
-    t = threading.Timer(deadline, _deny, args=(f"deadline of {deadline}s hit, denying",))
+    t = threading.Timer(
+        deadline, _deny, args=(f"deadline of {deadline}s hit, denying",)
+    )
     t.daemon = True
     t.start()
 
@@ -61,12 +63,15 @@ def _here() -> str:
 
 
 def _allowlist_path() -> str:
-    return os.environ.get("CG_CC_ALLOWLIST") or os.path.join(_here(), "claude_code_allowlist.yaml")
+    return os.environ.get("CG_CC_ALLOWLIST") or os.path.join(
+        _here(), "claude_code_allowlist.yaml"
+    )
 
 
 def _log_path() -> str:
     return os.environ.get("CG_CC_LOG") or os.path.join(
-        os.path.expanduser("~"), ".capability-gate", "claude-code.jsonl")
+        os.path.expanduser("~"), ".capability-gate", "claude-code.jsonl"
+    )
 
 
 def _canon(path: str) -> str:
@@ -85,21 +90,30 @@ def _load_policy():
     skills = raw.get("skills")
     if isinstance(skills, dict):
         for name, rule in skills.items():
-            if not isinstance(rule, dict) or not isinstance(rule.get("paths", []), list):
+            if not isinstance(rule, dict) or not isinstance(
+                rule.get("paths", []), list
+            ):
                 continue  # load_policy raises on these
             canon_paths = []
             for g in rule.get("paths", []):
                 g = os.path.expandvars(os.path.expanduser(str(g)))
                 if "$" in g:
-                    raise PolicyError(f"grant {g!r} has an unset variable; refusing to load")
+                    raise PolicyError(
+                        f"grant {g!r} has an unset variable; refusing to load"
+                    )
                 body = g.replace("**", "")
                 # A single * or ? matches within one "/" segment in the gate's glob,
                 # which on Windows would cross a backslash. Only "<root>/**" is allowed.
                 if "*" in body or "?" in body:
-                    raise PolicyError(f"grant {g!r}: only a trailing /** wildcard is supported here")
+                    raise PolicyError(
+                        f"grant {g!r}: only a trailing /** wildcard is supported here"
+                    )
                 if g.endswith("/**") or g.endswith("\\**"):
                     root = _canon(g[:-3])
-                    canon_paths += [root, root + os.sep + "**"]  # the root itself, and below it
+                    canon_paths += [
+                        root,
+                        root + os.sep + "**",
+                    ]  # the root itself, and below it
                 else:
                     canon_paths.append(_canon(g))
             rule["paths"] = canon_paths
@@ -109,8 +123,14 @@ def _load_policy():
 def _paths(tool: str, ti: dict, cwd: str) -> list[str]:
     if tool == "Glob":
         pat = str(ti.get("pattern", ""))
-        if os.path.isabs(pat) or pat.startswith(("~", "\\", "/")) or ".." in pat.replace("\\", "/").split("/"):
-            raise ValueError(f"Glob pattern {pat!r} is absolute or climbs out of its path")
+        if (
+            os.path.isabs(pat)
+            or pat.startswith(("~", "\\", "/"))
+            or ".." in pat.replace("\\", "/").split("/")
+        ):
+            raise ValueError(
+                f"Glob pattern {pat!r} is absolute or climbs out of its path"
+            )
     key = _PATH_ARG.get(tool)
     if key is None:
         return []
@@ -129,7 +149,9 @@ def _input_digest(ti) -> str:
     import hashlib
     import json
 
-    return hashlib.sha256(json.dumps(ti, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(ti, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _inputs_log() -> str:
@@ -188,9 +210,11 @@ def _post(event: dict) -> None:
     got = _input_digest(event.get("tool_input") or {})
     if want == got:
         os._exit(0)
-    reason = ("capability-gate: no PreToolUse check is on record for this call"
-              if want is None else
-              "capability-gate: this call's input changed after the check; the run did not match what was allowed")
+    reason = (
+        "capability-gate: no PreToolUse check is on record for this call"
+        if want is None
+        else "capability-gate: this call's input changed after the check; the run did not match what was allowed"
+    )
     sys.stdout.write(json.dumps({"decision": "block", "reason": reason}) + "\n")
     sys.stdout.flush()
     os._exit(0)

@@ -45,17 +45,36 @@ def _env(tmp_path: Path, allowlist: Path | str, **extra: str) -> dict:
     return env
 
 
-def _call(tool: str, tool_input: dict, cwd: Path, tool_use_id: str = "toolu_1",
-          event: str = "PreToolUse") -> str:
-    return json.dumps({
-        "session_id": "s1", "cwd": str(cwd), "hook_event_name": event,
-        "tool_name": tool, "tool_input": tool_input, "tool_use_id": tool_use_id,
-    })
+def _call(
+    tool: str,
+    tool_input: dict,
+    cwd: Path,
+    tool_use_id: str = "toolu_1",
+    event: str = "PreToolUse",
+) -> str:
+    return json.dumps(
+        {
+            "session_id": "s1",
+            "cwd": str(cwd),
+            "hook_event_name": event,
+            "tool_name": tool,
+            "tool_input": tool_input,
+            "tool_use_id": tool_use_id,
+        }
+    )
 
 
-def _run(stdin: str, env: dict, *args: str, timeout: float = 30) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(HOOK), *args], input=stdin, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+def _run(
+    stdin: str, env: dict, *args: str, timeout: float = 30
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(HOOK), *args],
+        input=stdin,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
 
 
 def _denied(r: subprocess.CompletedProcess) -> bool:
@@ -77,21 +96,35 @@ def project(tmp_path: Path) -> Path:
 
 def test_read_inside_allowed(tmp_path, project):
     env = _env(tmp_path, _policy(tmp_path, _grant_read(project)))
-    r = _run(_call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env)
+    r = _run(
+        _call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env
+    )
     assert r.returncode == 0, r.stderr
-    assert r.stdout == ""  # allow is "no decision": Claude Code's own permissions still apply
+    assert (
+        r.stdout == ""
+    )  # allow is "no decision": Claude Code's own permissions still apply
 
 
 def test_write_outside_denied(tmp_path, project):
     env = _env(tmp_path, _policy(tmp_path, _grant_read(project)))
-    r = _run(_call("Write", {"file_path": str(tmp_path / "outside.txt"), "content": "x"}, project), env)
+    r = _run(
+        _call(
+            "Write",
+            {"file_path": str(tmp_path / "outside.txt"), "content": "x"},
+            project,
+        ),
+        env,
+    )
     assert _denied(r)
 
 
 def test_glob_and_grep_in_project_allowed(tmp_path, project):
     env = _env(tmp_path, _policy(tmp_path, _grant_read(project)))
-    for tool, ti in (("Glob", {"pattern": "**/*.txt"}), ("Grep", {"pattern": "hello"}),
-                     ("Grep", {"pattern": "hello", "path": str(project / "notes")})):
+    for tool, ti in (
+        ("Glob", {"pattern": "**/*.txt"}),
+        ("Grep", {"pattern": "hello"}),
+        ("Grep", {"pattern": "hello", "path": str(project / "notes")}),
+    ):
         r = _run(_call(tool, ti, project), env)
         assert r.returncode == 0, (tool, ti, r.stderr)
 
@@ -165,15 +198,25 @@ def test_adapter_raise_blocks(tmp_path, project):
     logdir = tmp_path / "logdir"
     (logdir / "claude-code.jsonl").mkdir(parents=True)
     env["CG_CC_LOG"] = str(logdir / "claude-code.jsonl")
-    r = _run(_call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env)
+    r = _run(
+        _call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env
+    )
     assert _denied(r)
 
 
 def test_deadline_denies(tmp_path, project):
     """Removal: the watchdog thread. stdin stays open and is never written."""
-    env = _env(tmp_path, _policy(tmp_path, _grant_read(project)), CG_CC_DEADLINE_S="0.5")
-    p = subprocess.Popen([sys.executable, str(HOOK)], stdin=subprocess.PIPE,
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True)
+    env = _env(
+        tmp_path, _policy(tmp_path, _grant_read(project)), CG_CC_DEADLINE_S="0.5"
+    )
+    p = subprocess.Popen(
+        [sys.executable, str(HOOK)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        text=True,
+    )
     # wait(), not communicate(): communicate() would close stdin and end the read.
     try:
         p.wait(timeout=10)
@@ -205,7 +248,9 @@ def test_unreadable_allowlist_denies_all(tmp_path, project, kind):
     else:
         allow = _policy(tmp_path, "skills: 7\n")
     env = _env(tmp_path, allow)
-    r = _run(_call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env)
+    r = _run(
+        _call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env
+    )
     assert _denied(r), kind
 
 
@@ -214,7 +259,9 @@ def test_unlabeled_not_star(tmp_path, project):
     root = str(project).replace("\\", "/")
     body = f"skills:\n  '*':\n    tools: [Read]\n    paths: ['{root}/**']\n"
     env = _env(tmp_path, _policy(tmp_path, body))
-    r = _run(_call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env)
+    r = _run(
+        _call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env
+    )
     assert _denied(r)
 
 
@@ -223,7 +270,9 @@ def test_single_star_grant_refused_on_windows_style(tmp_path, project):
     root = str(project).replace("\\", "/")
     body = f"skills:\n  UNLABELED:\n    tools: [Read]\n    paths: ['{root}/*']\n"
     env = _env(tmp_path, _policy(tmp_path, body))
-    r = _run(_call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env)
+    r = _run(
+        _call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env
+    )
     assert _denied(r)
 
 
@@ -236,10 +285,18 @@ def test_input_changed_after_check_flagged(tmp_path, project):
     checked = {"file_path": str(project / "notes" / "a.txt")}
     r = _run(_call("Read", checked, project, tool_use_id="toolu_X"), env)
     assert r.returncode == 0, r.stderr
-    same = _run(_call("Read", checked, project, tool_use_id="toolu_X", event="PostToolUse"), env, "--post")
+    same = _run(
+        _call("Read", checked, project, tool_use_id="toolu_X", event="PostToolUse"),
+        env,
+        "--post",
+    )
     assert same.returncode == 0 and same.stdout == "", same.stdout
     changed = {"file_path": str(tmp_path / "secret.txt")}
-    r = _run(_call("Read", changed, project, tool_use_id="toolu_X", event="PostToolUse"), env, "--post")
+    r = _run(
+        _call("Read", changed, project, tool_use_id="toolu_X", event="PostToolUse"),
+        env,
+        "--post",
+    )
     out = json.loads(r.stdout)
     assert out["decision"] == "block"
     assert "changed after the check" in out["reason"]
@@ -247,8 +304,17 @@ def test_input_changed_after_check_flagged(tmp_path, project):
 
 def test_post_with_no_pre_record_flagged(tmp_path, project):
     env = _env(tmp_path, _policy(tmp_path, _grant_read(project)))
-    r = _run(_call("Read", {"file_path": "x"}, project, tool_use_id="toolu_never",
-                   event="PostToolUse"), env, "--post")
+    r = _run(
+        _call(
+            "Read",
+            {"file_path": "x"},
+            project,
+            tool_use_id="toolu_never",
+            event="PostToolUse",
+        ),
+        env,
+        "--post",
+    )
     out = json.loads(r.stdout)
     assert out["decision"] == "block"
 
