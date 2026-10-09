@@ -206,9 +206,13 @@ def summarize_args(args: Mapping | None) -> dict:
                 paths[ks] = val
         if ks in _CONTENT_KEYS or ks.endswith("_content"):
             if isinstance(val, str):
-                content_lengths[ks] = len(val.encode("utf-8"))
+                content_lengths[ks] = len(
+                    val.encode("utf-8", errors="surrogatepass")
+                )
             elif val is not None and not isinstance(val, (bool, int, float)):
-                content_lengths[ks] = len(str(val).encode("utf-8"))
+                content_lengths[ks] = len(
+                    str(val).encode("utf-8", errors="surrogatepass")
+                )
     out: dict = {"keys": keys}
     if paths:
         out["paths"] = paths
@@ -474,9 +478,12 @@ class Gate:
         like any other denial. ``base_dir`` is the absolute folder the tool will
         resolve a relative path against; without one a relative path is denied.
         The decision, and the log, carry the absolute paths that were checked."""
-        norm_trace = _normalize_trace(trace)
-        arg_summary = summarize_args(args)
+        # Everything that can throw before a recorded decision sits inside this
+        # boundary (H1-1). A lone surrogate in args used to raise in
+        # summarize_args before the try, so observe returned with no log line.
         try:
+            norm_trace = _normalize_trace(trace)
+            arg_summary = summarize_args(args)
             if refuse is not None:
                 decision = Decision(
                     Verdict.DENY,
@@ -493,6 +500,10 @@ class Gate:
                     [str(p) for p in paths],
                     base_dir,
                 )
+            # observe mode records the true verdict but does not act on it
+            decision = replace(decision, enforced=(self._mode == ENFORCE))
+            self._log(decision, trace=norm_trace, arg_summary=arg_summary)
+            return decision
         except Exception as exc:  # any failure is a denial, on purpose
             decision = Decision(
                 Verdict.DENY,
@@ -501,10 +512,16 @@ class Gate:
                 str(tool),
                 tuple(str(p) for p in paths),
             )
-        # observe mode records the true verdict but does not act on it
-        decision = replace(decision, enforced=(self._mode == ENFORCE))
-        self._log(decision, trace=norm_trace, arg_summary=arg_summary)
-        return decision
+            decision = replace(decision, enforced=(self._mode == ENFORCE))
+            try:
+                self._log(decision, trace=None, arg_summary=None)
+            except Exception:
+                # Still return the denial. Enforce callers that need the raise
+                # see it from _log only when the outer path did not already
+                # catch; here the record attempt failed after a prior error.
+                if self._mode == ENFORCE:
+                    raise
+            return decision
 
     def _log(
         self,

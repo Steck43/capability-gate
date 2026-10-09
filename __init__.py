@@ -496,12 +496,12 @@ def register(ctx) -> None:
                 )
             return _BLOCK(decision.reason)
         except Exception as exc:
-            # E3: reconfirm before observe fail-open on errors (same class as passthrough).
+            # H1-1: a crashed check with no log line used to fail open in
+            # observe. Block in both modes; observe still does not act on a
+            # normal deny Decision, but an unrecorded exception is not that.
             mode_e, unresolved_e = resolve_capability_gate_mode()
             if unresolved_e:
                 return _BLOCK(unresolved_e)
-            if mode_e == "observe":
-                return None
             return _BLOCK(f"capability-gate error, failing closed: {exc!r}")
 
     ctx.register_hook("pre_tool_call", pre_tool_call)
