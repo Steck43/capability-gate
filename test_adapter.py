@@ -1,4 +1,4 @@
-﻿"""Smoke tests for the Hermes adapter translation layer (no Hermes runtime)."""
+"""Smoke tests for the Hermes adapter translation layer (no Hermes runtime)."""
 
 import importlib.util
 import os
@@ -76,9 +76,7 @@ def register_hook(adapter, tmp_path, monkeypatch):
     def _register(mode="observe"):
         adapter._test_mode = mode
         (home / "config.yaml").write_text(
-            "plugins:\n  entries:\n    capability-gate:\n      mode: "
-            + mode
-            + "\n",
+            "plugins:\n  entries:\n    capability-gate:\n      mode: " + mode + "\n",
             encoding="utf-8",
         )
         ctx = MagicMock()
