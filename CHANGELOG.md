@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Two writers cannot fork the decision-log chain: read-head and append run under an exclusive `.lock` file (F-3).
 - Config and allowlist YAML refuse duplicate keys and merge keys (`<<`) via `load_yaml_mapping` (permissive-YAML / D-4 family). PyYAML's default last-key-wins load is no longer used for those files.
 - A short audit-log write rolls back the torn bytes and raises (F-2) instead of leaving a partial JSONL line.
 - `report.py` runs `verify_hash_chain` before suggesting grants (G-3), and reads tools from `UNLABELED`, `*`, and every named skill (G-report-star-only).

@@ -45,12 +45,23 @@ import os
 import re
 import time
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
 import yaml
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None  # type: ignore[assignment]
 
 _GENESIS = "0" * 64
 
@@ -112,6 +123,33 @@ def load_yaml_mapping(text: str) -> dict:
     if not isinstance(data, dict):
         raise ValueError(f"YAML root must be a mapping, got {type(data).__name__}")
     return data
+
+
+@contextmanager
+def _audit_lock(log_path: str):
+    """Exclusive lock around read-head and append so two writers cannot fork."""
+    lock_path = f"{log_path}.lock"
+    directory = os.path.dirname(lock_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if os.fstat(fd).st_size == 0:
+            os.write(fd, b"0")
+            os.lseek(fd, 0, os.SEEK_SET)
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        elif msvcrt is not None:
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        yield
+    finally:
+        try:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            elif msvcrt is not None:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        finally:
+            os.close(fd)
 
 _TRACE_FIELDS = ("session_id", "turn_id", "task_id", "tool_call_id")
 _LOG_ALLOWED = frozenset(
@@ -603,32 +641,37 @@ class Gate:
         run_id = os.environ.get("SITTING_RUN_ID", "").strip()
         if run_id:
             record["run_id"] = run_id
-        head, count = _verify_log(self._log_path)
-        record["parent"] = head
-        record = checked_log_record(record)
-        body = json.dumps(record, sort_keys=True)
-        line = body + "\n"
         try:
             os.makedirs(os.path.dirname(self._log_path) or ".", exist_ok=True)
-            fd = os.open(self._log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            try:
-                before = os.fstat(fd).st_size
-                payload = line.encode("utf-8")
-                written = os.write(fd, payload)
-                if written != len(payload):
-                    # F-2: roll back a torn line so the chain stays readable.
-                    os.ftruncate(fd, before)
-                    raise OSError(
-                        f"short audit log write: {written} of {len(payload)} bytes"
-                    )
-                os.fsync(fd)  # durable before the action runs
-            finally:
-                os.close(fd)
-            _write_witness(
-                _witness_path(self._log_path),
-                _hash_log_line(body),
-                count + 1,
-            )
+            with _audit_lock(self._log_path):
+                # F-3: verify and append under one lock so two processes cannot
+                # both parent the same head.
+                head, count = _verify_log(self._log_path)
+                record["parent"] = head
+                checked = checked_log_record(record)
+                body = json.dumps(checked, sort_keys=True)
+                line = body + "\n"
+                fd = os.open(
+                    self._log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600
+                )
+                try:
+                    before = os.fstat(fd).st_size
+                    payload = line.encode("utf-8")
+                    written = os.write(fd, payload)
+                    if written != len(payload):
+                        # F-2: roll back a torn line so the chain stays readable.
+                        os.ftruncate(fd, before)
+                        raise OSError(
+                            f"short audit log write: {written} of {len(payload)} bytes"
+                        )
+                    os.fsync(fd)  # durable before the action runs
+                finally:
+                    os.close(fd)
+                _write_witness(
+                    _witness_path(self._log_path),
+                    _hash_log_line(body),
+                    count + 1,
+                )
         except Exception:
             # A gate that cannot record its own decisions is not trustworthy.
             # Re-raise so the adapter treats that as a denial in enforce mode.
