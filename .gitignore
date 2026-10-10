@@ -15,6 +15,9 @@ _tmp_lab_out_head/
 harness/s1-in-grant/
 harness/s1-off-grant/
 
+# detached sibling pins used by scripts/run_full_suite.py
+.tmp/
+
 # python
 __pycache__/
 *.pyc
