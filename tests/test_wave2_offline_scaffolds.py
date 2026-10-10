@@ -7,6 +7,7 @@ AgentDojo, or aegisbox run.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,7 +16,7 @@ import pytest
 from adapters.agentdojo_adapter import map_agentdojo_call
 from adapters.claude_code_hook import _glob_climbs
 from capability_gate import Gate, Verdict, load_policy
-from paper_contracts import decision_digest, receipt_digests_match
+from paper_contracts import accept_bound_receipt, decision_digest
 
 ROOF = Path(__file__).resolve().parents[1]
 TABLE = ROOF / "harness" / "truth-table-enforce-expected.json"
@@ -47,12 +48,37 @@ def test_t_comp_05_rejects_valid_format_wrong_digest() -> None:
         "paths": ["/tmp/note.md"],
         "enforced": True,
     }
+    atoms_result = {
+        "block_message": None,
+        "winning_effect": None,
+        "decision_digest": decision_digest(decision),
+        "box_ticket": "ticket-t-comp-05",
+    }
     expected_gate = decision_digest(decision)
+    expected_atoms = hashlib.sha256(
+        json.dumps(
+            [
+                atoms_result["block_message"],
+                atoms_result["winning_effect"],
+                atoms_result["decision_digest"],
+                atoms_result["box_ticket"],
+            ]
+        ).encode("utf-8")
+    ).hexdigest()
+    valid = {
+        "gate_decision_sha256": expected_gate,
+        "atoms_result_sha256": expected_atoms,
+    }
+    assert accept_bound_receipt(valid, decision, atoms_result) is True
+
     receipt = {
         "gate_decision_sha256": "0" * 64,
-        "atoms_result_sha256": "1" * 64,
+        "atoms_result_sha256": expected_atoms,
     }
-    assert receipt_digests_match(receipt, expected_gate, "1" * 64) is False
+    assert accept_bound_receipt(receipt, decision, atoms_result) is False
+    receipt["gate_decision_sha256"] = expected_gate
+    receipt["atoms_result_sha256"] = "1" * 64
+    assert accept_bound_receipt(receipt, decision, atoms_result) is False
 
 
 def test_agentdojo_mapping_uses_pre_tool_call_shape() -> None:
