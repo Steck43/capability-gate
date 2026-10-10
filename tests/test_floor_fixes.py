@@ -215,6 +215,7 @@ def test_hardlink_to_off_grant_inode_denied(tmp_path: Path) -> None:
     assert gate.evaluate("*", "read_file", [str(link)]).verdict is Verdict.DENY
 
 
+@pytest.mark.skipif(os.name != "posix", reason="open-by-fd uses Linux /proc identity")
 def test_swap_between_check_and_open_is_caught(tmp_path: Path) -> None:
     grant = _grant(tmp_path)
     target = grant / "notes.md"
@@ -226,7 +227,48 @@ def test_swap_between_check_and_open_is_caught(tmp_path: Path) -> None:
     gate = _gate(tmp_path, _star_policy(grant))
     with open_authorized_read(gate, "*", str(target)) as opened:
         assert opened.decision.verdict is Verdict.ALLOW
+        assert opened.stream is not None
         # The host acts on this descriptor after the attacker swaps the name.
         target.unlink()
         _symlink(secret, target)
         assert opened.stream.read() == "x"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="open-by-fd uses Linux /proc identity")
+def test_open_by_fd_refuses_existing_leaf_symlink(tmp_path: Path) -> None:
+    grant = _grant(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "id_rsa"
+    secret.write_text("secret", encoding="utf-8")
+    link = grant / "notes.md"
+    _symlink(secret, link)
+    gate = _gate(tmp_path, _star_policy(grant))
+    with open_authorized_read(gate, "*", str(link)) as opened:
+        assert opened.decision.verdict is Verdict.DENY
+        assert opened.stream is None
+
+
+@pytest.mark.skipif(os.name != "posix", reason="open-by-fd uses Linux /proc identity")
+def test_open_by_fd_authorizes_object_beyond_parent_symlink(tmp_path: Path) -> None:
+    grant = _grant(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "id_rsa"
+    secret.write_text("secret", encoding="utf-8")
+    _symlink(outside, grant / "docs")
+    gate = _gate(tmp_path, _star_policy(grant))
+    with open_authorized_read(gate, "*", str(grant / "docs" / "id_rsa")) as opened:
+        assert opened.decision.verdict is Verdict.DENY
+        assert opened.stream is None
+
+
+@pytest.mark.skipif(os.name == "posix", reason="non-POSIX fail-closed contract")
+def test_open_by_fd_denies_without_linux_identity(tmp_path: Path) -> None:
+    grant = _grant(tmp_path)
+    target = grant / "notes.md"
+    target.write_text("x", encoding="utf-8")
+    gate = _gate(tmp_path, _star_policy(grant))
+    with open_authorized_read(gate, "*", str(target)) as opened:
+        assert opened.decision.verdict is Verdict.DENY
+        assert opened.stream is None
