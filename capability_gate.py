@@ -527,6 +527,46 @@ def _canary_secret(path: str) -> bool:
     return os.path.basename(os.path.normpath(_expand(path))) in _CANARY_BASENAMES
 
 
+def _protected_segment(name: str) -> bool:
+    """True for .env / .aegis / .env.* / .envrc (case-insensitive)."""
+    if not name:
+        return False
+    lower = name.casefold()
+    if lower in {".env", ".aegis", ".envrc"}:
+        return True
+    # .env.local, .env.production, …
+    return lower.startswith(".env.")
+
+
+def _path_has_protected_segment(path: str) -> bool:
+    parts = os.path.normpath(path).replace("\\", "/").split("/")
+    return any(_protected_segment(part) for part in parts if part)
+
+
+def _protected_path(path: str) -> bool:
+    """True when the request path or its realpath names a protected segment.
+
+    Symlink bypass: notes/envl → .env must deny. For a new file under a
+    symlinked directory (notes/dl/new with dl → .aegis), also check the
+    realpath of the parent.
+    """
+    expanded = os.path.normpath(_expand(path))
+    candidates = [expanded]
+    try:
+        candidates.append(os.path.realpath(expanded))
+    except OSError:
+        pass
+    parent = os.path.dirname(expanded)
+    if parent and parent not in (expanded, ""):
+        try:
+            real_parent = os.path.realpath(parent)
+            candidates.append(real_parent)
+            candidates.append(os.path.join(real_parent, os.path.basename(expanded)))
+        except OSError:
+            pass
+    return any(_path_has_protected_segment(c) for c in candidates)
+
+
 # --- the decision ---------------------------------------------------------
 
 
@@ -578,6 +618,14 @@ def _decide(
             return Decision(
                 Verdict.DENY,
                 f"path '{p}' is a canary secret inside a grant",
+                skill,
+                tool,
+                ptuple,
+            )
+        if _protected_path(p):
+            return Decision(
+                Verdict.DENY,
+                f"path '{p}' names a protected .env or .aegis segment",
                 skill,
                 tool,
                 ptuple,
