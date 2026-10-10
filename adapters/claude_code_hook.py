@@ -18,14 +18,20 @@ UNLABELED, which the allowlist must grant by name; a "*" grant never applies.
 
 from __future__ import annotations
 
+import math
 import os
+import re
 import sys
 import threading
 
 DEFAULT_DEADLINE_S = 5.0
+# Claude Code treats a hook timeout as allow; stay under its ~15s ceiling.
+MAX_DEADLINE_S = 14.0
 SKILL = "UNLABELED"
 
 # Tool name -> the argument that names the file it touches.
+# A tool missing from this map is denied (closed schema); an empty path list
+# must never mean "skip the path check".
 _PATH_ARG = {
     "Read": "file_path",
     "Write": "file_path",
@@ -46,11 +52,18 @@ def _deny(reason: str) -> None:
         os._exit(2)
 
 
-def _start_watchdog() -> None:
+def _deadline_s() -> float:
     try:
         deadline = float(os.environ.get("CG_CC_DEADLINE_S", DEFAULT_DEADLINE_S))
     except ValueError:
-        deadline = DEFAULT_DEADLINE_S
+        return DEFAULT_DEADLINE_S
+    if not math.isfinite(deadline) or deadline <= 0:
+        return DEFAULT_DEADLINE_S
+    return min(deadline, MAX_DEADLINE_S)
+
+
+def _start_watchdog() -> None:
+    deadline = _deadline_s()
     t = threading.Timer(
         deadline, _deny, args=(f"deadline of {deadline}s hit, denying",)
     )
@@ -120,20 +133,38 @@ def _load_policy():
     return load_policy(raw)
 
 
+def _glob_climbs(pat: str) -> bool:
+    """True when a Glob pattern can reach a parent directory (including obfuscations)."""
+    s = pat.replace("\\", "/")
+    if os.path.isabs(pat) or pat.startswith(("~", "\\", "/")):
+        return True
+    if ".." in s.split("/"):
+        return True
+    if "[.][.]" in s or "[..]" in s:
+        return True
+    for m in re.finditer(r"\{([^}]*)\}", s):
+        for alt in m.group(1).split(","):
+            a = alt.strip().replace("\\", "/")
+            if (
+                a == ".."
+                or a.startswith("../")
+                or a.startswith("..\\")
+                or "/../" in f"/{a}/"
+            ):
+                return True
+    return False
+
+
 def _paths(tool: str, ti: dict, cwd: str) -> list[str]:
+    if tool not in _PATH_ARG:
+        raise ValueError(f"{tool} has no path schema in the Claude Code adapter")
     if tool == "Glob":
         pat = str(ti.get("pattern", ""))
-        if (
-            os.path.isabs(pat)
-            or pat.startswith(("~", "\\", "/"))
-            or ".." in pat.replace("\\", "/").split("/")
-        ):
+        if _glob_climbs(pat):
             raise ValueError(
                 f"Glob pattern {pat!r} is absolute or climbs out of its path"
             )
-    key = _PATH_ARG.get(tool)
-    if key is None:
-        return []
+    key = _PATH_ARG[tool]
     raw = ti.get(key)
     if raw in (None, "") and tool in _DIR_DEFAULT_CWD:
         raw = cwd
