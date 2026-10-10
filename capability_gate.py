@@ -492,7 +492,9 @@ def _shared_hardlink(path: str) -> bool:
     Realpath of an in-grant hardlink is the in-grant name, so the grant match
     cannot see that the same inode is also reachable off-grant. Refusing any
     regular file with ``st_nlink > 1`` closes that hole. Directories often have
-    ``nlink > 1`` for ``.`` / ``..`` and are not treated here.
+    ``nlink > 1`` for ``.`` / ``..`` and are not treated here. An ``os.stat``
+    ``OSError`` returns False (treat as not shared), which is fine for write
+    targets that do not exist yet.
     """
     try:
         st = os.stat(path, follow_symlinks=True)
