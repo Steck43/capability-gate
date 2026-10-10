@@ -108,9 +108,7 @@ def test_read_inside_allowed(tmp_path, project):
 def test_live_hook_honors_kill_switch_across_invocations(tmp_path, project):
     """C3: a halt marker blocks the next independently started live hook."""
     env = _env(tmp_path, _policy(tmp_path, _grant_read(project)))
-    allowed = _call(
-        "Read", {"file_path": str(project / "notes" / "a.txt")}, project
-    )
+    allowed = _call("Read", {"file_path": str(project / "notes" / "a.txt")}, project)
     assert _run(allowed, env).returncode == 0
 
     marker = Path(env["CG_CC_LOG"] + ".halt")
