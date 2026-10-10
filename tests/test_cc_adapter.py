@@ -186,6 +186,77 @@ def test_unexpanded_or_escaping_paths_denied(tmp_path, project):
         assert _denied(r), call
 
 
+def test_glob_obfuscated_climb_denied(tmp_path, project):
+    """B-P2-R2-1: a plain '..' substring check is not enough."""
+    env = _env(tmp_path, _policy(tmp_path, _grant_read(project)))
+    for pat in ("[.][.]/*", "{..,x}/*", "{x,..}/*", "[..]/*"):
+        r = _run(_call("Glob", {"pattern": pat}, project), env)
+        assert _denied(r), pat
+
+
+def test_tool_without_path_schema_denied_even_when_granted(tmp_path, project):
+    """B-P2-R2-2: a granted tool missing from the adapter schema must not skip path checks."""
+    root = str(project).replace("\\", "/")
+    body = (
+        "require_approval: []\n"
+        "skills:\n"
+        "  UNLABELED:\n"
+        "    tools: [Read, LS, NotebookRead, mcp__server__tool]\n"
+        f"    paths: ['{root}/**']\n"
+    )
+    env = _env(tmp_path, _policy(tmp_path, body))
+    for tool, ti in (
+        ("LS", {"path": str(project / "notes")}),
+        ("NotebookRead", {"notebook_path": str(project / "notes" / "a.txt")}),
+        ("mcp__server__tool", {"path": str(project / "notes" / "a.txt")}),
+    ):
+        r = _run(_call(tool, ti, project), env)
+        assert _denied(r), tool
+
+
+def test_deadline_inf_and_over_cap_clamped(tmp_path, project):
+    """B-P2-R3-1: inf / huge deadlines must not disable the watchdog or exceed the host cap."""
+    env = _env(
+        tmp_path,
+        _policy(tmp_path, _grant_read(project)),
+        CG_CC_DEADLINE_S="inf",
+    )
+    r = _run(
+        _call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env
+    )
+    # inf used to break Timer; clamp must still allow a fast Read.
+    assert r.returncode == 0, r.stderr
+    env = _env(
+        tmp_path,
+        _policy(tmp_path, _grant_read(project)),
+        CG_CC_DEADLINE_S="20",
+    )
+    # Cap is under Claude Code's 15s hook timeout; a hung stdin must still deny.
+    p = subprocess.Popen(
+        [sys.executable, str(HOOK)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        text=True,
+    )
+    try:
+        p.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait()
+        pytest.fail("adapter hung past the clamped deadline")
+    finally:
+        if p.stdin:
+            p.stdin.close()
+    err = p.stderr.read()
+    p.stdout.close()
+    p.stderr.close()
+    assert p.returncode == 2
+    assert "capability-gate:" in err
+    assert "deadline" in err
+
+
 # --- every failure path blocks ---------------------------------------------
 
 
