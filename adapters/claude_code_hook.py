@@ -18,6 +18,7 @@ UNLABELED, which the allowlist must grant by name; a "*" grant never applies.
 
 from __future__ import annotations
 
+import fnmatch
 import math
 import os
 import re
@@ -158,6 +159,8 @@ def _segment_climbs(seg: str) -> bool:
         return True
     t = _collapse_dot_classes(seg)
     if t == ".." or t.startswith(".."):
+        return True
+    if "*" not in t and fnmatch.fnmatchcase("..", t):
         return True
     core = re.sub(r"[?*]", "", t)
     return core == ".."
