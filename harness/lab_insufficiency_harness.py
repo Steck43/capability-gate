@@ -391,6 +391,7 @@ def write_receipt(results: list[CaseResult], out_dir: Path) -> Path:
     receipt = {
         "harness": "harness/lab_insufficiency_harness.py",
         "gate_module": "capability_gate.py",
+        "hermes_runtime_pin": "ccd8deaa67",
         "gate_sha256": gate_sha256(),
         "git_head": git_head(),
         "mode": ENFORCE,
