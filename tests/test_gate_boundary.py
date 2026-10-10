@@ -42,8 +42,8 @@ _ENV = {
 }
 # Same commits floor.yml checks out. Move both together, forward only.
 _PINS = {
-    _ATOMS: "46db989ea78e7bb635f46beaec6826817935de7e",
-    _ISOLATION: "2a8bfa815b2bd7d2b3fe72c5b3a58155adefc716",
+    _ATOMS: "41b6e8396b998d7f2a7bb95fb6f3ced186e28ee1",
+    _ISOLATION: "a27c8ee424d96a18a9147bab5689a78e819b7184",
 }
 _DECISION_PARAMS = (
     "decision",
@@ -453,15 +453,9 @@ def _shipped_gate(tmp_path: Path, monkeypatch) -> Gate:
 _PINNED_MISSES = [MISS_DECISION, MISS_ATOMS, MISS_BOX] * 2 + [MISS_ATOMS]
 
 
-# Strict: green on main while the misses stand, XPASS fails once they all close.
-# The xfail accepts only PinnedMiss, raised once below for the exact pinned list.
-# Any other error, a plain assert here, a skipped gate or atoms step in
-# _run_chain, or an error inside sibling code, fails the test outright.
-@pytest.mark.xfail(
-    strict=True,
-    raises=PinnedMiss,
-    reason="; ".join((MISS_DECISION, MISS_ATOMS, MISS_BOX)),
-)
+# Cleared at Step 8: atoms records the gate decision, issues a ticket, and
+# box_entry returns a prove-shaped receipt bound to this call. Fake / replay /
+# wrong-call-id denials live on isolation-layer tests/test_box_entry_bind.py.
 def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
     sib = _siblings_or_skip()
     gate = _shipped_gate(tmp_path, monkeypatch)
