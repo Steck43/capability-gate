@@ -61,5 +61,6 @@ def test_write_receipt_has_no_host_home(tmp_path: Path) -> None:
     assert "C:/Users/" not in text
     payload = json.loads(text)
     assert payload["gate_module"] == "capability_gate.py"
+    assert payload["hermes_runtime_pin"] == "ccd8deaa67"
     a2 = next(r for r in payload["results"] if r["case_id"] == "A2")
     assert a2["paths"] == ["~/.ssh/id_rsa"]

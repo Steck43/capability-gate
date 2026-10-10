@@ -208,6 +208,22 @@ def test_ks_paths_materialized_once_generator(gate, root):
     assert d.paths == ("/etc/passwd",)
 
 
+def test_ks_path_materialization_error_fails_closed_and_logs(gate, log):
+    # T-FAIL-05: coercing an adversarial path must stay inside the recorded
+    # fail-closed boundary.
+    class UnstringablePath:
+        def __str__(self):
+            raise ValueError("path refused string conversion")
+
+    d = gate.evaluate("writer", "write_file", [UnstringablePath()])
+    assert d.verdict is Verdict.DENY
+    assert "gate error, failing closed" in d.reason
+    assert "path refused string conversion" in d.reason
+    rows = _rows(log)
+    assert rows[-1]["verdict"] == "deny"
+    assert rows[-1]["paths"] == []
+
+
 def test_ks_eacces_marker_fails_closed(root, log, monkeypatch):
     # R5-2 / M03: PermissionError on lstat is a deny, not "not thrown".
     g = Gate(_policy(root), log_path=str(log))

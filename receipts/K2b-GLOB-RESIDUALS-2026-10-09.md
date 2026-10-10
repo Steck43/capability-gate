@@ -4,6 +4,8 @@ Hostile-review residual on K2: the first Glob denylist closed the pinned
 KATs (`[.][.]/*`, `{..,x}/*`) but still allowed climb obfuscations a reviewer
 will try next.
 
+Hermes runtime pin for this paper pass: `ccd8deaa67`.
+
 ## Claim (exact)
 
 On capability-gate tip after this PR, residual Glob climb patterns from the
@@ -28,13 +30,18 @@ those shapes, not a full Glob semantic model.
 
 Failing stub first: `40518e6`. Wire: this PR.
 
-`tests/test_cc_adapter.py`: **25 passed**.
+The squash merge does not preserve the failing-first commit in main's
+first-parent history; `40518e6` is the explicit red receipt. Linux CI measured
+**24 passed, 1 skipped**. A Windows re-run on this Wave 1 branch measured
+**25 passed**.
 
 Branch: `steck43/k2b-glob-claim-and-residuals`.
 
 ## NOT measured / still open
 
 - Full Glob semantic equivalence (this is still a denylist over climb shapes).
+- T-ADV-03 canary: add one outside-set climb spelling to prove this denylist
+  still reports a residual instead of being described as complete.
 - Host Hermes S3s (0004 / 0009 / `mini_swe_runner`).
 - Windows grant-file owner / ACL check.
 - K5 check-open swap (still strict xfail).
