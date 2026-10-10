@@ -133,24 +133,52 @@ def _load_policy():
     return load_policy(raw)
 
 
+def _expand_braces(pat: str) -> list[str]:
+    """Expand nested `{a,{b,c}}` style alternatives (innermost first)."""
+    m = re.search(r"\{([^{}]*)\}", pat)
+    if not m:
+        return [pat]
+    out: list[str] = []
+    for alt in m.group(1).split(","):
+        out.extend(_expand_braces(pat[: m.start()] + alt + pat[m.end() :]))
+    return out
+
+
+def _collapse_dot_classes(pat: str) -> str:
+    """Turn `[.]` / `[\\.]` / `[..]` into literal dots before separator normalize."""
+    t = re.sub(r"\[\\?\.\]", ".", pat)
+    return t.replace("[..]", "..")
+
+
+def _segment_climbs(seg: str) -> bool:
+    """True when one path segment can name a parent after glob obfuscation."""
+    if not seg:
+        return False
+    if ":" in seg:
+        return True
+    t = _collapse_dot_classes(seg)
+    if t == ".." or t.startswith(".."):
+        return True
+    core = re.sub(r"[?*]", "", t)
+    return core == ".."
+
+
 def _glob_climbs(pat: str) -> bool:
     """True when a Glob pattern can reach a parent directory (including obfuscations)."""
-    s = pat.replace("\\", "/")
     if os.path.isabs(pat) or pat.startswith(("~", "\\", "/")):
         return True
-    if ".." in s.split("/"):
+    # Windows drive-qualified even when os.path.isabs is false (e.g. C:foo).
+    if len(pat) >= 2 and pat[1] == ":":
         return True
-    if "[.][.]" in s or "[..]" in s:
-        return True
-    for m in re.finditer(r"\{([^}]*)\}", s):
-        for alt in m.group(1).split(","):
-            a = alt.strip().replace("\\", "/")
-            if (
-                a == ".."
-                or a.startswith("../")
-                or a.startswith("..\\")
-                or "/../" in f"/{a}/"
-            ):
+    # Collapse dot classes before turning remaining backslashes into separators,
+    # so `[\.][\.]/*` does not become `[/.][/.]/*`.
+    collapsed = _collapse_dot_classes(pat)
+    s = collapsed.replace("\\", "/")
+    for expanded in _expand_braces(s):
+        if os.path.isabs(expanded) or (len(expanded) >= 2 and expanded[1] == ":"):
+            return True
+        for seg in expanded.split("/"):
+            if _segment_climbs(seg):
                 return True
     return False
 

@@ -194,6 +194,23 @@ def test_glob_obfuscated_climb_denied(tmp_path, project):
         assert _denied(r), pat
 
 
+def test_glob_climb_residuals_denied(tmp_path, project):
+    """K2b: denylist residuals from hostile review (nested brace, .[.], ..*)."""
+    env = _env(tmp_path, _policy(tmp_path, _grant_read(project)))
+    for pat in (
+        ".[.]/*",
+        "[.]./*",
+        r"[\.][\.]/*",
+        "..*",
+        ".{.,x}/*",
+        "{a,{..,b}}/*",
+        "{{..},x}/*",
+        "{C:/Windows/System32/**,safe/**}",
+    ):
+        r = _run(_call("Glob", {"pattern": pat}, project), env)
+        assert _denied(r), pat
+
+
 def test_tool_without_path_schema_denied_even_when_granted(tmp_path, project):
     """B-P2-R2-2: a granted tool missing from the adapter schema must not skip path checks."""
     root = str(project).replace("\\", "/")

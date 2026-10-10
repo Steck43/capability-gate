@@ -47,7 +47,9 @@ def test_s2_hardlink_false_allow_or_os_refused(tmp_path: Path) -> None:
     except OSError as exc:
         pytest.skip(f"os.link refused ({exc})")
     d = _gate(tmp_path, grant).evaluate("lab-helper", "write_file", [str(link)])
-    assert d.verdict is Verdict.ALLOW
+    # K5: refuse regular files with st_nlink > 1 so an in-grant hardlink to an
+    # off-grant inode cannot ride the grant match on the in-grant name.
+    assert d.verdict is Verdict.DENY
 
 
 def test_s3_junction_false_allow_or_os_refused(tmp_path: Path) -> None:

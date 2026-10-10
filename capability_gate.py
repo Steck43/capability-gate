@@ -49,6 +49,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager
@@ -485,6 +486,23 @@ def _real_glob(glob: str) -> str:
     return os.path.join(prefix, *rest) if rest else prefix
 
 
+def _shared_hardlink(path: str) -> bool:
+    """True when ``path`` names a regular file with more than one hard link.
+
+    Realpath of an in-grant hardlink is the in-grant name, so the grant match
+    cannot see that the same inode is also reachable off-grant. Refusing any
+    regular file with ``st_nlink > 1`` closes that hole. Directories often have
+    ``nlink > 1`` for ``.`` / ``..`` and are not treated here. An ``os.stat``
+    ``OSError`` returns False (treat as not shared), which is fine for write
+    targets that do not exist yet.
+    """
+    try:
+        st = os.stat(path, follow_symlinks=True)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and st.st_nlink > 1
+
+
 def _path_allowed(path: str, globs: Iterable[str]) -> bool:
     # Request paths are not expanded. The tool may expand "~" or "$VAR"
     # differently, or not at all, so the gate refuses to guess.
@@ -560,6 +578,14 @@ def _decide(
             return Decision(
                 Verdict.DENY,
                 f"path '{p}' is a canary secret inside a grant",
+                skill,
+                tool,
+                ptuple,
+            )
+        if _shared_hardlink(p):
+            return Decision(
+                Verdict.DENY,
+                f"path '{p}' has multiple hard links; refuse shared inode",
                 skill,
                 tool,
                 ptuple,
@@ -687,13 +713,14 @@ class Gate:
         like any other denial. ``base_dir`` is the absolute folder the tool will
         resolve a relative path against; without one a relative path is denied.
         The decision, and the log, carry the absolute paths that were checked."""
-        # Materialize once (R4-1). A one-shot iterable must not be drained by
-        # the kill-switch walk before the policy check sees the same paths.
-        path_list = [str(p) for p in paths]
         # Everything that can throw before a recorded decision sits inside this
-        # boundary (H1-1). A lone surrogate in args used to raise in
-        # summarize_args before the try, so observe returned with no log line.
+        # boundary (H1-1 / T-FAIL-05). Keep an empty list available for the
+        # denial row if path coercion itself fails.
+        path_list: list[str] = []
         try:
+            # Materialize once (R4-1). A one-shot iterable must not be drained
+            # by the kill-switch walk before policy sees the same paths.
+            path_list = [str(p) for p in paths]
             norm_trace = _normalize_trace(trace)
             arg_summary = summarize_args(args)
             halted = self._kill_switch(str(skill), str(tool), path_list, base_dir)

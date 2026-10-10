@@ -5,8 +5,11 @@
 Gate-level kill switch on `capability-gate`: `Gate.throw` creates
 `{log_path}.halt` and one THROWN row; `Gate.evaluate` materializes paths once,
 then denies when the marker exists or is unreadable. Independent review
-R4-1 (iterator drain fail-open) is closed. R4-3 stays the documented observe
-limit (strict xfail). `always_invoked` stays false.
+R4-1 (iterator drain fail-open) and T-FAIL-05 (path coercion outside the
+recorded boundary) are closed. R4-3 stays the documented observe limit
+(strict xfail). `always_invoked` stays false.
+
+Hermes runtime pin for this paper pass: `ccd8deaa67`.
 
 ## Source
 
@@ -23,7 +26,8 @@ Held patch `Grok-Bot-Hub/burn-queue/2026-10-07-proof-build-1/kill-switch.patch`
 
 | Suite | Result |
 |---|---|
-| `tests/test_kill_switch.py` | 13 passed, 1 xfailed (observe limit) |
+| `test_ks_path_materialization_error_fails_closed_and_logs` | FAIL before wire: `ValueError` escaped from `str(path)`; PASS after wire with one deny row |
+| `tests/test_kill_switch.py` | 14 passed, 1 xfailed (observe limit) |
 | Full roof `pytest -q` (local siblings) | kill-switch green; `test_siblings_pinned` red only when local sibling HEADs differ from CI pins (CI checkouts own the pin) |
 
 ## NOT measured
