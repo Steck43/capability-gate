@@ -9,10 +9,8 @@ A5b. The gate matched the request string after expanding ``~`` and ``$VARS``.
 It now refuses request paths that need expansion and matches the resolved real
 path, so an in-grant symlink to an off-grant file is denied.
 
-Two cases stay open and are strict expected failures, so each fails outright
-the day it closes without the marker being updated:
-- a hardlink: the in-grant name is the real path, so realpath cannot see that
-  the inode is also reachable off-grant;
+Hardlink to an off-grant inode is denied when the named regular file has
+``st_nlink > 1`` (K5). One case stays open as a strict expected failure:
 - a swap between check and open: the gate checks a path, the tool opens it
   later by name. Only the host opening once by file descriptor closes it.
 """
@@ -196,11 +194,6 @@ def test_unexpanded_request_path_not_matched_literally(
     assert gate.evaluate("*", "read_file", [form]).verdict is Verdict.DENY
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="OPEN: a hardlink's in-grant name is its real path, so realpath cannot "
-    "see the inode is also reachable off-grant. Needs an inode or link-count check.",
-)
 def test_hardlink_to_off_grant_inode_denied(tmp_path: Path) -> None:
     grant = _grant(tmp_path)
     outside = tmp_path / "outside"
