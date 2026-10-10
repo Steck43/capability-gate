@@ -105,6 +105,24 @@ def test_read_inside_allowed(tmp_path, project):
     )  # allow is "no decision": Claude Code's own permissions still apply
 
 
+def test_live_hook_honors_kill_switch_across_invocations(tmp_path, project):
+    """C3: a halt marker blocks the next independently started live hook."""
+    env = _env(tmp_path, _policy(tmp_path, _grant_read(project)))
+    allowed = _call(
+        "Read", {"file_path": str(project / "notes" / "a.txt")}, project
+    )
+    assert _run(allowed, env).returncode == 0
+
+    marker = Path(env["CG_CC_LOG"] + ".halt")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("operator halt\n", encoding="utf-8")
+
+    denied = _run(allowed, env)
+    assert _denied(denied)
+    assert "kill switch" in denied.stderr
+    assert marker.read_text(encoding="utf-8") == "operator halt\n"
+
+
 def test_write_outside_denied(tmp_path, project):
     env = _env(tmp_path, _policy(tmp_path, _grant_read(project)))
     r = _run(
