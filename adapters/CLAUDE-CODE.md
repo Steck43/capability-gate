@@ -39,7 +39,7 @@ The allowlist path can be set with `CG_CC_ALLOWLIST`. Decisions go to `%USERPROF
 - **Every error is a deny.** Bad input, a missing or unreadable allowlist, a grant that does not load, and a log that cannot be written all end in exit 2. This matters because Claude Code does not block on a hook that crashes or times out. Only exit 2 or a JSON deny blocks.
 - **Deadline.** The hook denies after 5 s by default (`CG_CC_DEADLINE_S`), clamped to at most 14 s and rejecting non-finite values, so a stalled check blocks inside Claude Code's ~15 s hook timeout instead of timing out as allow.
 - **No skill label.** Claude Code sends none, so every call is judged as the skill `UNLABELED`. The allowlist must grant `UNLABELED` by name. A `"*"` entry never applies.
-- **Paths.** Only tools in the closed adapter schema are checked: `Read`, `Write`, `Edit`, `MultiEdit` and `NotebookEdit` on the file they name; `Glob` and `Grep` on their search path, or the working directory when none is given. Any other tool name (including `LS`, `NotebookRead`, and `mcp__*`) is denied even if the allowlist grants it. Relative paths resolve against the working directory. Links are resolved and case is folded before matching. A path with an unexpanded `$` or a leading `~` is denied. A `Glob` pattern that is absolute or climbs — including obfuscations such as `[.][.]/*` and `{..,x}/*` — is denied.
+- **Paths.** Only tools in the closed adapter schema are checked: `Read`, `Write`, `Edit`, `MultiEdit` and `NotebookEdit` on the file they name; `Glob` and `Grep` on their search path, or the working directory when none is given. Any other tool name (including `LS`, `NotebookRead`, and `mcp__*`) is denied even if the allowlist grants it. Relative paths resolve against the working directory. Links are resolved and case is folded before matching. A path with an unexpanded `$` or a leading `~` is denied. A `Glob` pattern that is absolute or climbs is denied, including `[.][.]/*`, `[\.][\.]/*`, nested braces such as `{a,{..,b}}/*`, `..*`, and absolute brace alts. That is a denylist over climb shapes, not a full Glob semantic model.
 - **Shell tools.** `Bash` and `PowerShell` are outside the path schema, so the adapter denies them. The example allowlist also lists them under `require_approval`.
 - **Grants.** A grant is either a file or `<root>/**`, which covers the root and everything below it. A single `*` or `?` makes the allowlist refuse to load, which denies every call.
 - **It never rewrites a call.** The hook prints no JSON on `PreToolUse`, so it never returns `updatedInput`.
@@ -105,6 +105,7 @@ Managed settings change some of this. With the hook in managed settings and `all
 | Link resolution and case folding | `test_windows_spellings_match` |
 | Refusing a single `*` or `?` in a grant | `test_single_star_grant_refused_on_windows_style` |
 | Refusing an absolute or `..` `Glob` pattern | `test_unexpanded_or_escaping_paths_denied` |
+| Refusing obfuscated Glob climbs (incl. residuals) | `test_glob_obfuscated_climb_denied`, `test_glob_climb_residuals_denied` |
 | Refusing `$` and leading `~` | `test_unexpanded_or_escaping_paths_denied` |
 
 `test_never_emits_updated_input` guards the rule that the hook prints nothing on `PreToolUse`. It goes red if any branch starts printing.
