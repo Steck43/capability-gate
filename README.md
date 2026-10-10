@@ -47,6 +47,21 @@ The gate reads `config.yaml` and `allowlist.yaml` only when each is a regular fi
 
 This is a manual step, run by you outside the agent. Replace the symlink or fix the owner and mode, for example `chmod 600 ~/.hermes/config.yaml`, then start a new Hermes session. The gate does not stop a process that already has terminal access as your user from doing the same thing, which is why `terminal` and `execute_code` stay behind approval. Not checked yet: a symlink in a parent folder, a hardlink to the config, and file owner and ACLs on Windows.
 
+## Kill switch
+
+`Gate.throw(reason)` creates a marker beside the decision log, the log path plus `.halt` (live: `~/.hermes/logs/capability-gate.jsonl.halt`), and appends one THROWN row to the hash-chained log. From the next call on, every call is denied and logged, with no restart. A second throw adds no row.
+
+- Every call reads the marker before the allowlist, so a gate that is already running stops on its next call. A marker the gate cannot read, for any reason other than "not there", is a deny.
+- No tool call may name the marker, switch on or off, so a granted write cannot clear it.
+- Clearing is a manual step outside the agent: remove the marker. The gate never clears it, and the clear is not in the log.
+
+Limits, pinned in `tests/test_kill_switch.py`:
+
+- This is the gate, not the hook. The tests show `Gate.evaluate` denies after a throw. They do not show the live Hermes hook or a Claude Code hook calls the gate, and a plugin that is not loaded stops nothing.
+- Observe mode logs the kill switch deny and blocks nothing (`test_kill_switch_blocks_in_observe`, a strict expected failure). Throw it in enforce.
+- `terminal` and `execute_code` can remove the marker through a command the gate does not read as a path, and removing or renaming the logs folder clears it too. That is one more reason those tools stay behind approval.
+- An edit to the THROWN row is caught once a later row chains onto it. The chain does not anchor its last line.
+
 Claude Code on Windows: the same decider runs as a `PreToolUse` hook. See [adapters/CLAUDE-CODE.md](adapters/CLAUDE-CODE.md).
 
 ## Status

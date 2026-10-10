@@ -35,6 +35,12 @@ how a new allowlist gets built against real behavior without breaking the
 skills already running. Read the log, write the grants to match, then flip to
 enforce. Observe enforces nothing, including its own errors, because that is
 what observe means. Protection lives in enforce mode. Do not lean on observe.
+
+One kill switch. Throwing it creates a marker file beside the decision log and
+appends one THROWN row to the hash chain. Every call after that is denied, in
+the gate that threw it and in any gate already running on the same log, with no
+restart. A human clears it by removing the marker; the gate never clears it.
+Observe mode still blocks nothing, the switch included.
 """
 
 from __future__ import annotations
@@ -336,10 +342,23 @@ class Verdict(str, Enum):
     ALLOW = "allow"
     DENY = "deny"
     ASK = "ask"  # reserved for Stage 3; the Stage 1 adapter maps ASK -> block
+    THROWN = "thrown"  # kill switch arming row; not a tool-call decision
 
 
 ENFORCE = "enforce"
 OBSERVE = "observe"
+HALT_SUFFIX = ".halt"
+
+
+def halt_marker_path(log_path: str) -> str:
+    """The kill switch marker for a decision log: the log path plus ``.halt``."""
+    return log_path + HALT_SUFFIX
+
+
+def _same_file_name(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(
+        os.path.realpath(b)
+    )
 
 
 @dataclass(frozen=True)
@@ -563,11 +582,22 @@ def _decide(
 class Gate:
     """Wraps the decision with mode, fail-closed handling, and log-before-act."""
 
-    def __init__(self, policy: Policy, log_path: str, mode: str = ENFORCE):
+    def __init__(
+        self,
+        policy: Policy,
+        log_path: str,
+        mode: str = ENFORCE,
+        *,
+        halt_path: str | None = None,
+    ):
         if mode not in (ENFORCE, OBSERVE):
             raise ValueError(f"mode must be '{ENFORCE}' or '{OBSERVE}', got {mode!r}")
         self._policy = policy
-        self._log_path = log_path
+        # Absolute paths so a relative HERMES_HOME does not move the marker
+        # when the process cwd changes (independent review R2-3).
+        self._log_path = os.path.abspath(log_path)
+        raw_halt = halt_path if halt_path else halt_marker_path(self._log_path)
+        self._halt_path = os.path.abspath(raw_halt)
         self._mode = mode
 
     @property
@@ -579,6 +609,67 @@ class Gate:
         if mode not in (ENFORCE, OBSERVE):
             raise ValueError(f"mode must be '{ENFORCE}' or '{OBSERVE}', got {mode!r}")
         self._mode = mode
+
+    @property
+    def halt_path(self) -> str:
+        return self._halt_path
+
+    def throw(self, reason: str = "") -> bool:
+        """Throw the kill switch. True if this call threw it, False if already thrown.
+
+        The marker goes down before the THROWN row. If the log write then fails,
+        the switch is still thrown and the error is raised.
+        """
+        os.makedirs(os.path.dirname(self._halt_path) or ".", exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        try:
+            fd = os.open(self._halt_path, flags, 0o600)
+        except FileExistsError:
+            return False
+        try:
+            os.write(fd, f"thrown at {time.time()}: {reason}\n".encode())
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        decision = Decision(
+            Verdict.THROWN,
+            f"kill switch thrown: {reason or 'no reason given'}",
+            "",
+            "",
+            (self._halt_path,),
+            enforced=True,
+        )
+        record_decision(self._log_path, self._mode, decision)
+        return True
+
+    def _halt_state(self) -> str | None:
+        """Deny reason from the marker, or None when it is not there.
+
+        Read on every call and never cached. Only FileNotFoundError means not
+        thrown. Any other error reading the marker is a deny.
+        """
+        try:
+            os.lstat(self._halt_path)
+        except FileNotFoundError:
+            return None
+        except Exception as exc:
+            return f"kill switch state unreadable, failing closed: {exc!r}"
+        return f"kill switch thrown: {self._halt_path} exists; a human removes it"
+
+    def _kill_switch(
+        self, skill: str, tool: str, paths: Sequence[str], base_dir: str | None
+    ) -> Decision | None:
+        reason = self._halt_state()
+        if reason is None:
+            # The agent must not clear or throw the switch through a tool path.
+            for p in paths:
+                a = _absolute(p, base_dir)
+                if a is not None and _same_file_name(a, self._halt_path):
+                    reason = f"path '{p}' is the kill switch marker"
+                    break
+        if reason is None:
+            return None
+        return Decision(Verdict.DENY, reason, skill, tool, tuple(paths))
 
     def evaluate(
         self,
@@ -596,26 +687,32 @@ class Gate:
         like any other denial. ``base_dir`` is the absolute folder the tool will
         resolve a relative path against; without one a relative path is denied.
         The decision, and the log, carry the absolute paths that were checked."""
+        # Materialize once (R4-1). A one-shot iterable must not be drained by
+        # the kill-switch walk before the policy check sees the same paths.
+        path_list = [str(p) for p in paths]
         # Everything that can throw before a recorded decision sits inside this
         # boundary (H1-1). A lone surrogate in args used to raise in
         # summarize_args before the try, so observe returned with no log line.
         try:
             norm_trace = _normalize_trace(trace)
             arg_summary = summarize_args(args)
-            if refuse is not None:
+            halted = self._kill_switch(str(skill), str(tool), path_list, base_dir)
+            if halted is not None:
+                decision = halted
+            elif refuse is not None:
                 decision = Decision(
                     Verdict.DENY,
                     f"arguments refused: {refuse}",
                     str(skill),
                     str(tool),
-                    tuple(str(p) for p in paths),
+                    tuple(path_list),
                 )
             else:
                 decision = _decide(
                     self._policy,
                     str(skill),
                     str(tool),
-                    [str(p) for p in paths],
+                    path_list,
                     base_dir,
                 )
             # observe mode records the true verdict but does not act on it
@@ -628,7 +725,7 @@ class Gate:
                 f"gate error, failing closed: {exc!r}",
                 str(skill),
                 str(tool),
-                tuple(str(p) for p in paths),
+                tuple(path_list),
             )
             decision = replace(decision, enforced=(self._mode == ENFORCE))
             try:
