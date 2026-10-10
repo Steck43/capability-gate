@@ -10,7 +10,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from adapters.agentdojo_adapter import map_agentdojo_call
+from adapters.claude_code_hook import _glob_climbs
+from capability_gate import Gate, Verdict, load_policy
 from paper_contracts import decision_digest, receipt_digests_match
 
 ROOF = Path(__file__).resolve().parents[1]
@@ -75,3 +79,74 @@ def test_t_adv_02_tool_output_cannot_supply_privilege_metadata() -> None:
     )
     assert mapped["args"] == {"path": "/tmp/note.md"}
     assert set(mapped) == {"tool_name", "args", "task_id"}
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [".?/*", "?./*", "[.x][.x]/*", "[!a][!a]/*", "[.-.][.-.]/*"],
+)
+def test_t_adv_03_outside_set_glob_canaries_are_denied(pattern: str) -> None:
+    assert _glob_climbs(pattern) is True
+
+
+def _gate(tmp_path: Path, log_path: Path | None = None) -> Gate:
+    root = str(tmp_path.resolve()).replace("\\", "/")
+    return Gate(
+        load_policy(
+            {
+                "skills": {
+                    "writer": {
+                        "tools": ["write_file"],
+                        "paths": [root + "/**"],
+                    }
+                }
+            }
+        ),
+        log_path=str(log_path or (tmp_path / "decisions.jsonl")),
+    )
+
+
+def test_t_fail_01_log_layer_death_never_becomes_allow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = _gate(tmp_path)
+    target = tmp_path / "target.md"
+
+    def killed(*_args, **_kwargs):
+        raise OSError("injected log-layer death")
+
+    monkeypatch.setattr(gate, "_log", killed)
+    with pytest.raises(OSError, match="injected log-layer death"):
+        gate.evaluate("writer", "write_file", [str(target)])
+    assert not target.exists()
+
+
+def test_t_fail_04_restart_keeps_kill_switch_thrown(tmp_path: Path) -> None:
+    log = tmp_path / "decisions.jsonl"
+    first = _gate(tmp_path, log)
+    assert first.throw("restart drill") is True
+    restarted = _gate(tmp_path, log)
+    decisions = [
+        restarted.evaluate("writer", "write_file", [str(tmp_path / f"{i}.md")])
+        for i in range(20)
+    ]
+    assert all(decision.verdict is Verdict.DENY for decision in decisions)
+    rows = [
+        json.loads(line)
+        for line in log.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert sum(row["verdict"] == "thrown" for row in rows) == 1
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "T-FAIL-03 MEASURED-GAP: verify_hash_chain reports corruption but does "
+        "not report the exact first bad row index required by the plan."
+    ),
+)
+def test_t_fail_03_verifier_reports_first_bad_row_index() -> None:
+    reported_fields = {"error", "reason"}
+    assert "first_bad_row_index" in reported_fields

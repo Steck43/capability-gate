@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Wave 2 offline paper contracts: a 96-row enforce oracle, digest recomputation helper, dependency-free AgentDojo-to-`pre_tool_call` adapter stub, failure/adversarial scaffolds, source map, sanitized benign-day template, and bounded reproduction instructions. Live Hermes, AgentDojo, box, and judge claims remain explicitly unmeasured.
 - The Hermes hook exports its live allow `Decision` and `tool_call_id` through the shared per-call context, so downstream atoms can bind their receipt and box prove to the exact gate decision that was evaluated.
 - Plugin bundle version `0.1.1` (tag `plugin-v0.1.1`): same SLSA attestation path as `plugin-v0.1.0`, zip includes `__init__.py` plus the kill switch tip. Verify: `gh attestation verify capability-gate-plugin-0.1.1.zip --repo Steck43/capability-gate`.
 - Kill switch. `Gate.throw` creates a marker beside the decision log (the log path plus `.halt`) and appends one THROWN row to the hash chain; a second throw adds no row. `Gate.evaluate` materializes paths once, then reads the marker before the allowlist, so a running gate denies the next call with no restart, and a marker it cannot read is a deny. A call that names the marker is denied with the switch on or off. Only a human removing the marker clears it. Observe mode still blocks nothing (`test_kill_switch_blocks_in_observe`, strict expected failure). `tests/test_kill_switch.py` is gate-level only: it does not show the live hook calls the gate.
@@ -16,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Claude Code Glob canaries now deny five additional segment spellings that can match `..`: `.?`, `?.`, `[.x][.x]`, `[!a][!a]`, and `[.-.][.-.]`.
 - T-FAIL-05 path coercion now runs inside `Gate.evaluate`'s recorded fail-closed boundary. A path whose string conversion raises returns DENY and appends a deny row instead of escaping before the boundary.
 - Claude Code adapter Glob climb residuals (K2b): deny escaped character-class parents (`[\.][\.]/*`), mixed `.`/`[.]` segments, `..*`, nested brace alternatives, and absolute brace alts before separator normalize. Collapse `[.]` / `[\.]` / `[..]` to literal dots first so a global `\`→`/` rewrite cannot turn `[\.]` into `[/.]`. Still a denylist over climb shapes, not a full Glob semantic model.
 - K5 hardlink hole: a regular file with `st_nlink > 1` is denied, so an in-grant hardlink name cannot open an off-grant inode that realpath cannot see. Alias S2 moves to DENY. The check-open swap stays a strict expected failure (needs open-by-fd in the host).
