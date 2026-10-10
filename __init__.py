@@ -556,6 +556,15 @@ def register(ctx) -> None:
                         )
                         if decision2.verdict.value != "allow":
                             return _BLOCK(decision2.reason)
+                        decision = decision2
+                # Step 11: export the live Decision into the shared pre_tool_context
+                # so aegis-atoms can pass gate_decision= under this Hermes tool_call_id.
+                pre_tool_context = kwargs.get("pre_tool_context")
+                if isinstance(pre_tool_context, dict):
+                    pre_tool_context["gate_decision"] = decision
+                    pre_tool_context["tool_call_id"] = kwargs.get(
+                        "tool_call_id", ""
+                    ) or kwargs.get("toolCallId", "")
                 return None
             if not decision.enforced:
                 # E3: reconfirm before observe passthrough — close mid-call enforce flip.
