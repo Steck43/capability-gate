@@ -62,7 +62,7 @@ Limits, pinned in `tests/test_kill_switch.py`:
 - `terminal` and `execute_code` can remove the marker through a command the gate does not read as a path, and removing or renaming the logs folder clears it too. That is one more reason those tools stay behind approval.
 - An edit to the THROWN row is caught once a later row chains onto it. The chain does not anchor its last line.
 
-Claude Code on Windows: the same decider runs as a `PreToolUse` hook. See [adapters/CLAUDE-CODE.md](adapters/CLAUDE-CODE.md).
+Claude Code on Windows: the same decider runs as a `PreToolUse` hook. Glob patterns that climb — including character-class and nested-brace obfuscations — are denied by a denylist, not a full Glob semantic model. See [adapters/CLAUDE-CODE.md](adapters/CLAUDE-CODE.md).
 
 ## Status
 

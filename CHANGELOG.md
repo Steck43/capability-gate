@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Claude Code adapter Glob climb residuals (K2b): deny escaped character-class parents (`[\.][\.]/*`), mixed `.`/`[.]` segments, `..*`, nested brace alternatives, and absolute brace alts before separator normalize. Collapse `[.]` / `[\.]` / `[..]` to literal dots first so a global `\`→`/` rewrite cannot turn `[\.]` into `[/.]`. Still a denylist over climb shapes, not a full Glob semantic model.
 - Claude Code adapter S3 close (red-team B-P2-R2-1 / R2-2 / R3-1): Glob patterns that climb via character-class or brace obfuscation are denied; a tool missing from the closed path schema is denied even when granted; `CG_CC_DEADLINE_S` rejects non-finite values and clamps to 14 s so a stalled check cannot outrun Claude Code's hook timeout.
 - Deny secret-canary.txt even when a grant glob covers its directory (FL-3 canary).
 - Fail-closed denials that never reach `Gate.evaluate` (unresolved mode, failed plugin load, outer adapter exception) still write a decision row and update the `.witness` via shared `record_decision` (2026-09-28 zero-row incident).
