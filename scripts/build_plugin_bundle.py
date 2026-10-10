@@ -2,7 +2,7 @@
 
 Author: Landen Stecker
 Date: 2026-08-19
-Version: 0.1.0
+Version: 0.1.1
 Summary: Zip __init__.py, capability_gate.py, plugin.yaml, allowlist.example.yaml, and SHA256SUMS of those bytes.
 """
 
@@ -19,7 +19,7 @@ MEMBERS = (
     "plugin.yaml",
     "allowlist.example.yaml",
 )
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 
 def main() -> int:
