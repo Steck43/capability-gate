@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Wave 3 measured-gap receipt: AgentDojo, GAIA2, TAU-Bench, and SWE-Gym stays unmeasured until a live boxed run exists; B7, live AgentDojo, and paid runs remain held. The Wave 3 document is a MEASURED-GAP design, not a paper claim.
 - Wave 2 offline paper contracts: a 96-row enforce oracle, digest recomputation helper, dependency-free AgentDojo-to-`pre_tool_call` adapter stub, failure/adversarial scaffolds, source map, sanitized benign-day template, and bounded reproduction instructions. Live Hermes, AgentDojo, box, and judge claims remain explicitly unmeasured.
 - The Hermes hook exports its live allow `Decision` and `tool_call_id` through the shared per-call context, so downstream atoms can bind their receipt and box prove to the exact gate decision that was evaluated.
 - Plugin bundle version `0.1.1` (tag `plugin-v0.1.1`): same SLSA attestation path as `plugin-v0.1.0`, zip includes `__init__.py` plus the kill switch tip. Verify: `gh attestation verify capability-gate-plugin-0.1.1.zip --repo Steck43/capability-gate`.
