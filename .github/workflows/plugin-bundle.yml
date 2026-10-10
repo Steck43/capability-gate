@@ -1,7 +1,7 @@
 # Versioned Hermes plugin bundle. Not a wheel. Not GitHub's source zip.
 #
 # Subject: capability_gate.py + plugin.yaml + allowlist.example.yaml + SHA256SUMS
-# of those bytes, packed as capability-gate-plugin-0.1.0.zip, attested, uploaded
+# of those bytes, packed as capability-gate-plugin-0.1.1.zip, attested, uploaded
 # to the GitHub Release for tag plugin-v*.
 #
 # Job-scoped write: contents (release), id-token, attestations. Default
@@ -39,12 +39,12 @@ jobs:
       - name: attest zip
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
-          subject-path: dist/capability-gate-plugin-0.1.0.zip
+          subject-path: dist/capability-gate-plugin-0.1.1.zip
       - name: upload release asset
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/capability-gate-plugin-0.1.0.zip \
+          gh release create "$GITHUB_REF_NAME" dist/capability-gate-plugin-0.1.1.zip \
             --title "capability-gate plugin bundle ${GITHUB_REF_NAME#plugin-v}" \
-            --notes "Hermes plugin bundle: capability_gate.py, plugin.yaml, allowlist.example.yaml, SHA256SUMS of those bytes. Not a source zip. Verify with gh attestation verify."
+            --notes "Hermes plugin bundle: __init__.py, capability_gate.py, plugin.yaml, allowlist.example.yaml, SHA256SUMS of those bytes. Not a source zip. Verify with gh attestation verify."

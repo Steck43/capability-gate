@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Plugin bundle version `0.1.1` (tag `plugin-v0.1.1`): same SLSA attestation path as `plugin-v0.1.0`, zip includes `__init__.py` plus the kill switch tip. Verify: `gh attestation verify capability-gate-plugin-0.1.1.zip --repo Steck43/capability-gate`.
 - Kill switch. `Gate.throw` creates a marker beside the decision log (the log path plus `.halt`) and appends one THROWN row to the hash chain; a second throw adds no row. `Gate.evaluate` materializes paths once, then reads the marker before the allowlist, so a running gate denies the next call with no restart, and a marker it cannot read is a deny. A call that names the marker is denied with the switch on or off. Only a human removing the marker clears it. Observe mode still blocks nothing (`test_kill_switch_blocks_in_observe`, strict expected failure). `tests/test_kill_switch.py` is gate-level only: it does not show the live hook calls the gate.
 - Claude Code adapter (`adapters/claude_code_hook.py`), Windows. The decider runs as a `PreToolUse` hook. Allow is exit 0 with no output, so Claude Code's own permissions still apply; every deny and every error is exit 2 with a reason, under a 5 s self-deadline. Calls carry no skill label and are judged as `UNLABELED`, which the allowlist must grant by name. A `PostToolUse` twin flags a call whose input changed after the check. `tests/test_cc_adapter.py` pins each branch.
 
