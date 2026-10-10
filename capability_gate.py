@@ -522,9 +522,20 @@ def _path_allowed(path: str, globs: Iterable[str]) -> bool:
 # the write and the read. That basename is denied even when the parent matches.
 _CANARY_BASENAMES = frozenset({"secret-canary.txt"})
 
+# Explicit floor denies — not only deny-by-default outside the grant.
+# .env holds secrets; .aegis holds the judge-apply profile marker.
+_PROTECTED_PATH_PARTS = frozenset({".env", ".aegis"})
+
 
 def _canary_secret(path: str) -> bool:
     return os.path.basename(os.path.normpath(_expand(path))) in _CANARY_BASENAMES
+
+
+def _protected_path(path: str) -> bool:
+    """True when any path segment is .env or .aegis (file or directory)."""
+    normalized = os.path.normpath(_expand(path))
+    parts = normalized.replace("\\", "/").split("/")
+    return any(part in _PROTECTED_PATH_PARTS for part in parts)
 
 
 # --- the decision ---------------------------------------------------------
@@ -578,6 +589,14 @@ def _decide(
             return Decision(
                 Verdict.DENY,
                 f"path '{p}' is a canary secret inside a grant",
+                skill,
+                tool,
+                ptuple,
+            )
+        if _protected_path(p):
+            return Decision(
+                Verdict.DENY,
+                f"path '{p}' names a protected .env or .aegis segment",
                 skill,
                 tool,
                 ptuple,

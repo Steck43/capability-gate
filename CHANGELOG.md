@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Explicit deny for path segments `.env` and `.aegis` even when a grant glob covers the parent directory (Forseti #60 nit). Deny-by-default alone is not enough once those names sit inside a granted tree; the reason names the protected segment.
 - Full-suite runner (`scripts/run_full_suite.py`) that sets `AEGIS_ATOMS_ROOT` and `ISOLATION_LAYER_ROOT` to detached worktrees at the sibling pins in `tests/test_gate_boundary.py`, so a local pytest matches CI instead of the operator's live sibling HEAD.
 - Folded Part C design scaffolds under `design/part-c/`, plus pre-code OS, specification-gaming, and policy-decay designs. None of those folders change the gate decision path.
 - Wave 3 measured-gap receipt: AgentDojo, GAIA2, TAU-Bench, and SWE-Gym stays unmeasured until a live boxed run exists; B7, live AgentDojo, and paid runs remain held. The Wave 3 document is a MEASURED-GAP design, not a paper claim.

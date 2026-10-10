@@ -377,6 +377,27 @@ def test_secret_canary_inside_a_grant_is_denied(tmp_path) -> None:
     assert allowed.verdict is Verdict.ALLOW
 
 
+def test_protected_env_and_aegis_paths_denied_inside_a_grant(tmp_path) -> None:
+    """Explicit deny for .env / .aegis — not only deny-by-default outside grants."""
+    policy = load_policy(
+        {"skills": {"*": {"tools": ["read_file", "write_file"], "paths": ["/work/**"]}}}
+    )
+    g = Gate(policy, log_path=str(tmp_path / "d.jsonl"))
+    for path in (
+        "/work/.env",
+        "/work/subdir/.env",
+        "/work/.aegis",
+        "/work/.aegis/profile_id",
+        "/work/nested/.aegis/x",
+    ):
+        for tool in ("write_file", "read_file"):
+            decision = g.evaluate("*", tool, [path])
+            assert decision.verdict is Verdict.DENY, (tool, path, decision.reason)
+            assert "protected" in decision.reason
+    allowed = g.evaluate("*", "read_file", ["/work/hello.txt"])
+    assert allowed.verdict is Verdict.ALLOW
+
+
 def test_log_optional_run_id(tmp_path, monkeypatch) -> None:
     policy = load_policy(
         {"skills": {"*": {"tools": ["write_file"], "paths": ["/work/**"]}}}
