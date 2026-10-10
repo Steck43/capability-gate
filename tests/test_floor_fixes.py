@@ -196,11 +196,6 @@ def test_unexpanded_request_path_not_matched_literally(
     assert gate.evaluate("*", "read_file", [form]).verdict is Verdict.DENY
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="OPEN: a hardlink's in-grant name is its real path, so realpath cannot "
-    "see the inode is also reachable off-grant. Needs an inode or link-count check.",
-)
 def test_hardlink_to_off_grant_inode_denied(tmp_path: Path) -> None:
     grant = _grant(tmp_path)
     outside = tmp_path / "outside"
