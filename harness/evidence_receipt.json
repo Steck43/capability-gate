@@ -2,10 +2,10 @@
   "harness": "harness/lab_insufficiency_harness.py",
   "gate_module": "capability_gate.py",
   "hermes_runtime_pin": "ccd8deaa67",
-  "gate_sha256": "ba8e522dfcd56a960d500e2f949acfc54f83680c7752bbcaa19b094169757938",
-  "git_head": "2182f40d1a14836c86945b01363b748ea45aed9c",
+  "gate_sha256": "1a211424c427281ccede5a3f1dd122cbb8e9025a763d992758a69325a27ba14f",
+  "git_head": "cae48036820c42c7944efaf51954811c26ea8b84",
   "mode": "enforce",
-  "commit_note": "gate_sha256=ba8e522dfcd56a960d500e2f949acfc54f83680c7752bbcaa19b094169757938 git_head=2182f40d1a14836c86945b01363b748ea45aed9c",
+  "commit_note": "gate_sha256=1a211424c427281ccede5a3f1dd122cbb8e9025a763d992758a69325a27ba14f git_head=cae48036820c42c7944efaf51954811c26ea8b84",
   "results": [
     {
       "case_id": "A1",
@@ -261,7 +261,7 @@
       "skill": "lab-helper",
       "tool": "write_file",
       "paths": [
-        "~/AppData/Local/Temp/cg-s1-p15we9n_/s1-in-grant/s1-link"
+        "harness/s1-in-grant/s1-link"
       ],
       "expected_ground_truth": "deny",
       "gate_verdict": "deny",

@@ -386,6 +386,10 @@ def test_protected_env_and_aegis_paths_denied_inside_a_grant(tmp_path) -> None:
     for path in (
         "/work/.env",
         "/work/subdir/.env",
+        "/work/.env.local",
+        "/work/.envrc",
+        "/work/.ENV",
+        "/work/.Aegis/profile_id",
         "/work/.aegis",
         "/work/.aegis/profile_id",
         "/work/nested/.aegis/x",
@@ -395,6 +399,52 @@ def test_protected_env_and_aegis_paths_denied_inside_a_grant(tmp_path) -> None:
             assert decision.verdict is Verdict.DENY, (tool, path, decision.reason)
             assert "protected" in decision.reason
     allowed = g.evaluate("*", "read_file", ["/work/hello.txt"])
+    assert allowed.verdict is Verdict.ALLOW
+
+
+def test_protected_symlink_and_hardlink_bypass_denied(tmp_path) -> None:
+    """Forseti #65: deny follows realpath (symlink) and shared inodes (hardlink)."""
+    home = (tmp_path / "home").resolve()
+    home.mkdir()
+    (home / ".env").write_text("SECRET=1\n", encoding="utf-8")
+    (home / ".aegis").mkdir()
+    (home / ".aegis" / "profile_id").write_text("step11-test\n", encoding="utf-8")
+    notes = home / "notes"
+    notes.mkdir()
+    (notes / "envl").symlink_to(home / ".env")
+    (notes / "fl").symlink_to(home / ".aegis" / "profile_id")
+    (notes / "dl").symlink_to(home / ".aegis")
+    env_hl = home / "notes" / "envh"
+    try:
+        os.link(home / ".env", env_hl)
+    except OSError:
+        env_hl = None  # platform may refuse hardlinks
+
+    policy = load_policy(
+        {
+            "skills": {
+                "*": {
+                    "tools": ["read_file", "write_file"],
+                    "paths": [str(home / "**")],
+                }
+            }
+        }
+    )
+    g = Gate(policy, log_path=str(tmp_path / "d.jsonl"))
+    for path in (
+        str(notes / "envl"),
+        str(notes / "fl"),
+        str(notes / "dl" / "new"),
+    ):
+        for tool in ("write_file", "read_file"):
+            decision = g.evaluate("*", tool, [path])
+            assert decision.verdict is Verdict.DENY, (tool, path, decision.reason)
+            assert "protected" in decision.reason or "hard link" in decision.reason
+    if env_hl is not None:
+        decision = g.evaluate("*", "read_file", [str(env_hl)])
+        assert decision.verdict is Verdict.DENY, decision.reason
+    allowed = g.evaluate("*", "read_file", [str(notes / "ok.txt")])
+    # ok.txt may not exist; grant still allows the name under home/**
     assert allowed.verdict is Verdict.ALLOW
 
 
