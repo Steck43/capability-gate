@@ -522,6 +522,7 @@ def _path_allowed(path: str, globs: Iterable[str]) -> bool:
 # the write and the read. That basename is denied even when the parent matches.
 _CANARY_BASENAMES = frozenset({"secret-canary.txt"})
 
+
 def _canary_secret(path: str) -> bool:
     return os.path.basename(os.path.normpath(_expand(path))) in _CANARY_BASENAMES
 
