@@ -49,6 +49,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager
@@ -485,6 +486,21 @@ def _real_glob(glob: str) -> str:
     return os.path.join(prefix, *rest) if rest else prefix
 
 
+def _shared_hardlink(path: str) -> bool:
+    """True when ``path`` names a regular file with more than one hard link.
+
+    Realpath of an in-grant hardlink is the in-grant name, so the grant match
+    cannot see that the same inode is also reachable off-grant. Refusing any
+    regular file with ``st_nlink > 1`` closes that hole. Directories often have
+    ``nlink > 1`` for ``.`` / ``..`` and are not treated here.
+    """
+    try:
+        st = os.stat(path, follow_symlinks=True)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and st.st_nlink > 1
+
+
 def _path_allowed(path: str, globs: Iterable[str]) -> bool:
     # Request paths are not expanded. The tool may expand "~" or "$VAR"
     # differently, or not at all, so the gate refuses to guess.
@@ -560,6 +576,14 @@ def _decide(
             return Decision(
                 Verdict.DENY,
                 f"path '{p}' is a canary secret inside a grant",
+                skill,
+                tool,
+                ptuple,
+            )
+        if _shared_hardlink(p):
+            return Decision(
+                Verdict.DENY,
+                f"path '{p}' has multiple hard links; refuse shared inode",
                 skill,
                 tool,
                 ptuple,

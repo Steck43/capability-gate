@@ -88,7 +88,7 @@ This happens after the call has run. It is detection, not prevention.
 - **A broken settings file.** If the settings file that holds the hook is invalid JSON, Claude Code skips it. In an interactive session it asks first; with `-p` it skips silently. The hook is then not loaded. (From the Claude Code documentation; not measured here.)
 - **Other hooks.** Another hook's `updatedInput` can change a call after this hook allowed it (see the table above). The `PostToolUse` check reports it after the fact.
 - **What an allowed tool does next.** The hook sees the call, not its effects. What a shell command does once it is allowed, what an MCP server does on its side, and the files Claude Code reads on its own (project instructions, settings, `@` mentions) are outside the hook path.
-- **Hardlinks and races.** Resolving links catches a symlink or junction to an off-grant file. It does not catch a hardlink, or a file swapped between the check and the open.
+- **Hardlinks and races.** Resolving links catches a symlink or junction to an off-grant file. A regular file with more than one hard link is denied. A file swapped between the check and the open stays open until the host opens by fd.
 
 Managed settings change some of this. With the hook in managed settings and `allowManagedHooksOnly` set, user, project, local and plugin hooks do not run, apart from plugins that managed settings force-enable. That removes other hooks' rewrites and a broken user or project settings file. A user `disableAllHooks` cannot turn off a managed hook. The interpreter failing to start, and what an allowed tool does next, are not changed by managed settings. These managed-settings effects come from the Claude Code documentation and were not measured here.
 
