@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI now pins `zizmorcore/zizmor-action` at v0.6.4 (`cc914d7`) so workflow analysis runs against the reviewed release while checkout credentials remain disabled.
 - CI checks out `aegis-atoms` at `41b6e83` (merge of aegis-atoms #51, decision digest and box ticket) and `isolation-layer` at `a27c8ee` (merge of isolation-layer #24, `box_entry` bind). `test_one_write_needs_three_receipts` is a normal test. Clearing it in CI is a receipt contract, not a jailer proof. `always_invoked` stays false.
 - CI checks out `aegis-atoms` at `46db989` (merge of aegis-atoms #49, `gate_decision` on `evaluate_tool_call`), up from `8074e7b`. `floor.yml` and the boundary test's pin move together. `test_deny_decision_makes_atoms_block` is a normal test.
 - README Status names the author profile so a stranger can click once from this roof to `github.com/Steck43`.
