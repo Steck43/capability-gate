@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- OS-1/OS-2 collected as strict xfail under `tests/test_os_01_02_collected.py` (Track B). Design under `design/os/` stays unscanned. Receipt `OS-1-2-COLLECTED-XFAIL-2026-10-11.md`. No implementation. No paper claim.
 
 - Explicit deny for path segments `.env` and `.aegis` even when a grant glob covers the parent directory (Forseti #60 nit). Deny-by-default alone is not enough once those names sit inside a granted tree; the reason names the protected segment. The check follows `realpath` (symlink aliases under a whole-home grant) and the realpath of the parent for new files; also denies `.env.*`, `.envrc`, and case-folded `.ENV` / `.Aegis` (Forseti #65 FIX-FIRST). Names that merely *end* in `.env` (for example `foo.env`) stay allowed - only the exact segment `.env` / `.env.*` / `.envrc` / `.aegis` is protected.
 - Full-suite runner (`scripts/run_full_suite.py`) that sets `AEGIS_ATOMS_ROOT` and `ISOLATION_LAYER_ROOT` to detached worktrees at the sibling pins in `tests/test_gate_boundary.py`, so a local pytest matches CI instead of the operator's live sibling HEAD.
