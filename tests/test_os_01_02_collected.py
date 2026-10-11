@@ -29,7 +29,9 @@ def test_t_os_02a_taint_marks_untrusted_tool_result() -> None:
 
 def test_t_os_02b_taint_blocks_privileged_sink() -> None:
     """Tainted data cannot authorize a privileged sink without an explicit clear."""
-    pytest.fail("OS-2b not implemented: tainted value must not authorize a privileged sink")
+    pytest.fail(
+        "OS-2b not implemented: tainted value must not authorize a privileged sink"
+    )
 
 
 def test_t_os_02c_taint_survives_benign_transform() -> None:
