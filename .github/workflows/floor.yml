@@ -14,7 +14,7 @@
 #
 # Craft BASE (2026-08-18): on pull_request use the PR base SHA; on push use
 # github.event.before. Never fall back to the root commit. Empty range
-# (BASE == HEAD) exits 3 â€” that is "nothing in scope", not success.
+# (BASE == HEAD) exits 3 — that is "nothing in scope", not success.
 
 name: floor
 
