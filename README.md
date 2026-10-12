@@ -88,7 +88,7 @@ flowchart TD
   JUDGE -.->|"cannot widen or approve"| ENFORCE
   JUDGE -->|"low confidence"| HUMAN["Human"]
   ENFORCE --> OUT["allow / deny / human"]
-  ENFORCE --> AUDIT["Audit: hash-chained, append-only"]
+  ENFORCE --> AUDIT["Audit: hash-chained, witness and anchor checked"]
 ```
 
 ![Figure 1. Box between floor and judge](assets/fig1-box-between.svg)

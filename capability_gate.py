@@ -229,10 +229,35 @@ def _write_witness(witness_path: str, head: str, count: int) -> None:
         os.close(fd)
 
 
-def _verify_log(log_path: str) -> tuple[str, int]:
-    """Return (head hash, record count). Check parent links and the witness."""
+def _anchor_path(log_path: str) -> str:
+    """Default anchor location: beside the log. An operator can set another."""
+    return f"{log_path}.anchor"
+
+
+_REANCHOR = "an operator must re-anchor (python capability_gate.py reanchor)"
+
+
+def _read_anchor(anchor_path: str) -> dict | None:
+    if not os.path.lexists(anchor_path):
+        return None
+    try:
+        return _read_witness(anchor_path)
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"audit log anchor unreadable, failing closed: {exc!r}"
+        ) from exc
+
+
+def _verify_log(log_path: str, anchor_path: str | None = None) -> tuple[str, int]:
+    """Return (head hash, record count). Check parent links, witness, and anchor.
+
+    The anchor holds the same head and count as the witness, written on every
+    append. Once it exists, a missing log, a missing witness, or a chain that
+    does not reach the anchored head and count is tamper, not a first run.
+    """
     witness_path = _witness_path(log_path)
     witness = _read_witness(witness_path) if os.path.exists(witness_path) else None
+    anchor = _read_anchor(anchor_path or _anchor_path(log_path))
 
     prev = _GENESIS
     count = 0
@@ -241,6 +266,11 @@ def _verify_log(log_path: str) -> tuple[str, int]:
             witness["count"] != 0 or witness["head"] != _GENESIS
         ):
             raise ValueError("audit log missing but witness present")
+        if anchor is not None and (anchor["count"] != 0 or anchor["head"] != _GENESIS):
+            raise ValueError(
+                f"audit log missing but its anchor records {anchor['count']} "
+                f"row(s); {_REANCHOR}"
+            )
         return _GENESIS, 0
 
     with open(log_path, encoding="utf-8") as fh:
@@ -254,21 +284,51 @@ def _verify_log(log_path: str) -> tuple[str, int]:
             prev = _hash_log_line(line)
             count += 1
 
+    if witness is None and anchor is not None and count > 0:
+        raise ValueError(f"audit log witness missing; {_REANCHOR}")
     if witness is not None and (witness["count"] != count or witness["head"] != prev):
         raise ValueError("audit log witness mismatch")
+    if anchor is not None and (anchor["count"] != count or anchor["head"] != prev):
+        raise ValueError(
+            "audit log does not match its anchor (shortened, rewritten, or "
+            f"replaced); {_REANCHOR}"
+        )
     return prev, count
 
 
-def verify_hash_chain(log_path: str) -> str:
+def verify_hash_chain(log_path: str, anchor_path: str | None = None) -> str:
     """Return the hash of the last JSONL line, or genesis if none exist.
 
     Each record's parent is the hash of the previous line. A sibling witness
-    file stores the head hash and record count so truncation and whole-log
-    deletion fail closed the same way a rewrite does. Fail closed instead of
-    appending onto a broken chain.
+    file and an anchor (beside the log unless an operator sets another
+    location) store the head hash and record count, so truncation, deletion,
+    and a recomputed witness fail closed the same way a rewrite does. Fail
+    closed instead of appending onto a broken chain.
     """
-    head, _count = _verify_log(log_path)
+    head, _count = _verify_log(log_path, anchor_path)
     return head
+
+
+def reanchor_audit_log(log_path: str, anchor_path: str | None = None) -> list[str]:
+    """Operator action: retire the current log, witness, and anchor.
+
+    Nothing is deleted. Each file present is renamed with a ``.retired-<time>``
+    suffix, so the damaged record stays available to inspect, and the next
+    decision starts a new chain and a new anchor. The gate never does this on
+    its own. Returns the retired paths.
+    """
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    retired = []
+    for path in (
+        log_path,
+        _witness_path(log_path),
+        anchor_path or _anchor_path(log_path),
+    ):
+        if os.path.lexists(path):
+            target = f"{path}.retired-{stamp}"
+            os.replace(path, target)
+            retired.append(target)
+    return retired
 
 
 _PATH_LIKE_KEYS = frozenset(
@@ -663,6 +723,7 @@ class Gate:
         mode: str = ENFORCE,
         *,
         halt_path: str | None = None,
+        anchor_path: str | None = None,
     ):
         if mode not in (ENFORCE, OBSERVE):
             raise ValueError(f"mode must be '{ENFORCE}' or '{OBSERVE}', got {mode!r}")
@@ -672,6 +733,9 @@ class Gate:
         self._log_path = os.path.abspath(log_path)
         raw_halt = halt_path if halt_path else halt_marker_path(self._log_path)
         self._halt_path = os.path.abspath(raw_halt)
+        # An anchor outside the agent's tree survives deletion of the log
+        # folder; the default beside the log survives deletion of the log.
+        self._anchor_path = os.path.abspath(anchor_path or _anchor_path(self._log_path))
         self._mode = mode
 
     @property
@@ -740,6 +804,9 @@ class Gate:
                 a = _absolute(p, base_dir)
                 if a is not None and _same_file_name(a, self._halt_path):
                     reason = f"path '{p}' is the kill switch marker"
+                    break
+                if a is not None and _same_file_name(a, self._anchor_path):
+                    reason = f"path '{p}' is the audit log anchor"
                     break
         if reason is None:
             return None
@@ -826,6 +893,7 @@ class Gate:
             decision,
             trace=trace,
             arg_summary=arg_summary,
+            anchor_path=self._anchor_path,
         )
 
 
@@ -836,8 +904,9 @@ def record_decision(
     *,
     trace: Mapping[str, str] | None = None,
     arg_summary: Mapping | None = None,
+    anchor_path: str | None = None,
 ) -> None:
-    """Write one durable decision row with parent link and witness update.
+    """Write one durable decision row with parent link, witness, and anchor update.
 
     Shared by Gate._log and the adapter's fail-closed branches, so a denial that
     never reached evaluate() is still on the record (2026-09-28 incident: nine
@@ -858,7 +927,7 @@ def record_decision(
         with _audit_lock(log_path):
             # F-3: verify and append under one lock so two processes cannot
             # both parent the same head.
-            head, count = _verify_log(log_path)
+            head, count = _verify_log(log_path, anchor_path)
             record["parent"] = head
             checked = checked_log_record(record)
             body = json.dumps(checked, sort_keys=True)
@@ -882,7 +951,37 @@ def record_decision(
                 _hash_log_line(body),
                 count + 1,
             )
+            _write_witness(
+                anchor_path or _anchor_path(log_path),
+                _hash_log_line(body),
+                count + 1,
+            )
     except Exception:
         # A gate that cannot record its own decisions is not trustworthy.
         # Re-raise so the adapter treats that as a denial in enforce mode.
         raise
+
+
+def _main(argv: Sequence[str] | None = None) -> int:
+    """Operator commands. The agent never runs these; they act on the record."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="capability_gate.py")
+    sub = parser.add_subparsers(dest="command", required=True)
+    re_cmd = sub.add_parser(
+        "reanchor",
+        help="retire a damaged decision log, witness, and anchor so a new chain starts",
+    )
+    re_cmd.add_argument("--log", required=True, help="decision log path")
+    re_cmd.add_argument("--anchor", help="anchor path, when not beside the log")
+    args = parser.parse_args(argv)
+    retired = reanchor_audit_log(args.log, anchor_path=args.anchor)
+    if retired:
+        print("retired: " + ", ".join(retired))
+    else:
+        print("nothing to retire")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
