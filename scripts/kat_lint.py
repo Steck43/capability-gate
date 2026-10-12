@@ -4,10 +4,17 @@
 A known-answer test (KAT) runs a named attack through the gate and asserts the
 known decision. Shapes that look like that and prove nothing:
 
-* a test that fails by fiat: any ``pytest.fail`` (under any import alias) or
-  ``raise AssertionError`` in a KAT file is red on every commit, fixed or not;
+* a test that fails by fiat: any ``pytest.fail`` (under any import alias or
+  through ``getattr``), ``raise AssertionError``, or ``assert`` on a constant
+  false value in a KAT file is red on every commit, fixed or not;
+* a test that never runs its check: imperative ``pytest.skip`` or
+  ``pytest.xfail`` outside a platform check, or an unconditional skip mark;
 * a test that never reaches the gate, or returns before it does, and only
   checks that a receipt file exists.
+
+Every test file, KAT or not, is also checked for the two escape hatches that
+defeat ``xfail_strict``: an xfail mark with ``strict=False`` and an imperative
+``pytest.xfail``.
 
 KAT files are found recursively under tests/ and among top-level test files,
 case-insensitively: names like test_k*.py or containing "kat", any file with a
@@ -16,12 +23,15 @@ the command line are linted as KATs whatever their name.
 
 A test reaches the gate when its straight-line path (try, with, and for bodies
 count; if branches, except handlers, and constant-guarded code do not), before
-any return or raise, calls one of: an .evaluate(...) or .throw(...) method,
+any return or raise, calls one of: .evaluate(...) or .throw(...) on a gate,
 pre_tool_call, the Claude Code hook's main or _pre, or open_authorized_read.
-A call into a same-file helper, or a same-file fixture the test takes, counts
-when that helper or fixture reaches the gate the same way. The receiver of the
-call is not type-checked, so a local class with an evaluate method passes; this
-is a lint against placeholder shapes, not proof the call reaches the real gate.
+A gate is a ``Gate(...)`` or ``_build_gate(...)`` result, a same-file fixture or
+helper that returns one, a parameter named after such a fixture or annotated
+``Gate``, or a local name assigned from any of those. A call into a same-file
+helper, or a same-file fixture the test takes, counts when that helper or
+fixture reaches the gate the same way. This is a lint against placeholder
+shapes, not proof the call reaches the real gate: a gate built from a class
+named Gate in the test file itself still passes.
 
 Exit 0 = clean. Exit 1 = violation. Exit 2 = a file did not parse.
 """
@@ -44,6 +54,8 @@ _MARKER = re.compile(r"^#\s*KAT\b")
 _NAME = re.compile(r"^test_k.*\.py$|kat", re.I)
 _RECEIPTS = re.compile(r"(^|[\\/])receipts([\\/]|$)", re.I)
 _GATE_METHODS = {"evaluate", "throw"}
+_GATE_BUILDERS = {"Gate", "_build_gate"}
+_PLATFORM = re.compile(r"\bsys\.platform\b|\bos\.name\b|\bplatform\.")
 _GATE_FUNCS = {"pre_tool_call", "open_authorized_read", "_pre"}
 _HOOK_MAIN = re.compile(r"hook", re.I)
 _SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
@@ -72,16 +84,19 @@ def _names_receipts(src: str) -> bool:
     )
 
 
-def discover(root: Path) -> list[Path]:
-    candidates = [
+def test_files(root: Path) -> list[Path]:
+    return sorted(
         p
         for p in (*root.joinpath("tests").rglob("*.py"), *root.glob("*.py"))
-        if p.name.lower().startswith("test") and p.is_file()
-    ]
+        if p.name.lower().startswith("test")
+        and p.is_file()
+        and p.relative_to(root).as_posix() not in EXEMPT
+    )
+
+
+def discover(root: Path) -> list[Path]:
     found = []
-    for p in candidates:
-        if p.relative_to(root).as_posix() in EXEMPT:
-            continue
+    for p in test_files(root):
         src = p.read_text(encoding="utf-8", errors="replace")
         if _NAME.search(p.name) or _has_marker(src) or _names_receipts(src):
             found.append(p)
@@ -99,31 +114,86 @@ def _dotted(node: ast.expr) -> str | None:
     return None
 
 
-def _fail_names(tree: ast.Module) -> set[str]:
-    """Every spelling of pytest.fail this file can use."""
-    names = {"pytest.fail"}
+def _pytest_aliases(tree: ast.Module) -> set[str]:
+    names = {"pytest"}
     for n in ast.walk(tree):
         if isinstance(n, ast.Import):
             for a in n.names:
                 if a.name == "pytest" and a.asname:
-                    names.add(f"{a.asname}.fail")
-        elif isinstance(n, ast.ImportFrom) and n.module in (
-            "pytest",
-            "_pytest.outcomes",
-        ):
-            for a in n.names:
-                if a.name == "fail":
-                    names.add(a.asname or "fail")
+                    names.add(a.asname)
     return names
 
 
-def _is_by_fiat(node: ast.AST, fail_names: set[str]) -> bool:
+def _outcome_names(tree: ast.Module, outcome: str) -> set[str]:
+    """Every spelling of pytest.<outcome> (fail, skip, xfail) this file can use."""
+    names = {f"{alias}.{outcome}" for alias in _pytest_aliases(tree)}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom) and n.module in ("pytest", "_pytest.outcomes"):
+            for a in n.names:
+                if a.name == outcome:
+                    names.add(a.asname or outcome)
+    return names
+
+
+def _fiat(node: ast.AST, fail_names: set[str], aliases: set[str]) -> str | None:
+    """Name of the fail-by-fiat form node is, if any."""
     if isinstance(node, ast.Call) and _dotted(node.func) in fail_names:
-        return True
+        return "pytest.fail"
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and _dotted(node.args[0]) in aliases
+    ):
+        return "getattr(pytest, ...)"
     if isinstance(node, ast.Raise) and node.exc is not None:
         exc = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
-        return _dotted(exc) == "AssertionError"
+        if _dotted(exc) == "AssertionError":
+            return "raise AssertionError"
+    if isinstance(node, ast.Assert):
+        known, value = _const(node.test)
+        if known and not value:
+            return "assert False"
+    return None
+
+
+def _parents(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    return {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
+
+
+def _under_platform_check(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+    while node in parents:
+        node = parents[node]
+        if isinstance(node, ast.If) and _PLATFORM.search(ast.unparse(node.test)):
+            return True
     return False
+
+
+def _is_mark(node: ast.expr, mark: str) -> bool:
+    target = node.func if isinstance(node, ast.Call) else node
+    name = _dotted(target) or ""
+    return name == mark or name.endswith("." + mark)
+
+
+def lint_hatches(src: str, label: str) -> list[str]:
+    """Escape hatches that defeat xfail_strict, checked in every test file."""
+    tree = ast.parse(src, filename=label)
+    xfail_calls = _outcome_names(tree, "xfail")
+    problems = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and _is_mark(n, "mark.xfail"):
+            for kw in n.keywords:
+                if kw.arg == "strict" and _const(kw.value) == (True, False):
+                    problems.append(
+                        f"{label}:{n.lineno}: xfail(strict=False) lets a fixed bug"
+                        " pass silently"
+                    )
+        if isinstance(n, ast.Call) and _dotted(n.func) in xfail_calls:
+            problems.append(
+                f"{label}:{n.lineno}: imperative pytest.xfail is never strict"
+            )
+    return problems
 
 
 def _const(node: ast.expr) -> tuple[bool, bool]:
@@ -159,11 +229,13 @@ def _live_calls(node: ast.AST) -> list[ast.Call]:
     return out
 
 
-def _is_gate_call(call: ast.Call) -> bool:
+def _is_gate_call(call: ast.Call, is_gate) -> bool:
     f = call.func
     if isinstance(f, ast.Attribute):
-        if f.attr in _GATE_METHODS or f.attr in _GATE_FUNCS:
+        if f.attr in _GATE_FUNCS:
             return True
+        if f.attr in _GATE_METHODS:
+            return bool(is_gate(f.value)) or _dotted(f.value) in _GATE_BUILDERS
         if f.attr == "main":
             recv = f.value
             name = (
@@ -193,9 +265,68 @@ class _File:
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self.funcs.setdefault(n.name, n)
         self._memo: dict[str, bool] = {}
+        self._typed: dict[str, set[str]] = {}
+        self._current_typed: set[str] = set()
+        # Same-file fixtures and helpers that return or yield a gate.
+        self.gate_makers: set[str] = set()
+        changed = True
+        while changed:
+            changed = False
+            for name, fn in self.funcs.items():
+                if name in self.gate_makers:
+                    continue
+                typed = self.typed_names(fn)
+                for n in ast.walk(fn):
+                    if isinstance(n, (ast.Return, ast.Yield)) and self.makes_gate(
+                        n.value, typed
+                    ):
+                        self.gate_makers.add(name)
+                        changed = True
+                        break
+            self._typed.clear()
+
+    def makes_gate(self, expr: ast.AST | None, typed: set[str]) -> bool:
+        if isinstance(expr, ast.Name):
+            return expr.id in typed
+        if isinstance(expr, ast.Call):
+            name = _dotted(expr.func) or ""
+            return name.rsplit(".", 1)[-1] in _GATE_BUILDERS or name in self.gate_makers
+        return False
+
+    def typed_names(self, fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+        """Names in fn that hold a gate: matching params, then assignments."""
+        if fn.name in self._typed:
+            return self._typed[fn.name]
+        typed = {
+            a.arg
+            for a in fn.args.args
+            if a.arg in self.gate_makers
+            or (
+                a.annotation is not None
+                and (_dotted(a.annotation) or "").endswith("Gate")
+            )
+        }
+        changed = True
+        while changed:
+            changed = False
+            for n in ast.walk(fn):
+                if (
+                    isinstance(n, ast.Assign)
+                    and len(n.targets) == 1
+                    and isinstance(n.targets[0], ast.Name)
+                    and n.targets[0].id not in typed
+                    and self.makes_gate(n.value, typed)
+                ):
+                    typed.add(n.targets[0].id)
+                    changed = True
+        self._typed[fn.name] = typed
+        return typed
 
     def _call_reaches(self, call: ast.Call, seen: frozenset[str]) -> bool:
-        if _is_gate_call(call) or _runs_hook_script(call):
+        typed = self._current_typed
+        if _is_gate_call(call, lambda e: self.makes_gate(e, typed)):
+            return True
+        if _runs_hook_script(call):
             return True
         callee = call.func
         name = None
@@ -257,6 +388,16 @@ class _File:
                 return False, s
         return False, None
 
+    def first_reach_in(
+        self, fn: ast.FunctionDef | ast.AsyncFunctionDef, seen: frozenset[str]
+    ) -> tuple[bool, ast.stmt | None]:
+        outer = self._current_typed
+        self._current_typed = self.typed_names(fn)
+        try:
+            return self.first_reach(fn.body, seen)
+        finally:
+            self._current_typed = outer
+
     def reaches(self, name: str, seen: frozenset[str]) -> bool:
         if name not in self._memo:
             self._memo[name] = False
@@ -268,19 +409,39 @@ class _File:
                 for a in fn.args.args
             )
             if not hit:
-                hit, _ = self.first_reach(fn.body, seen)
+                hit, _ = self.first_reach_in(fn, seen)
             self._memo[name] = hit
         return self._memo[name]
 
 
 def lint_source(src: str, label: str) -> list[str]:
     tree = ast.parse(src, filename=label)
-    fail_names = _fail_names(tree)
+    fail_names = _outcome_names(tree, "fail")
+    aliases = _pytest_aliases(tree)
+    parents = _parents(tree)
+    skip_like = {o: _outcome_names(tree, o) for o in ("skip", "xfail")}
     problems = []
     for n in ast.walk(tree):
-        if _is_by_fiat(n, fail_names):
-            what = "raise AssertionError" if isinstance(n, ast.Raise) else "pytest.fail"
+        what = _fiat(n, fail_names, aliases)
+        if what:
             problems.append(f"{label}:{n.lineno}: {what} in a KAT file fails by fiat")
+        for outcome, names in skip_like.items():
+            if (
+                isinstance(n, ast.Call)
+                and _dotted(n.func) in names
+                and not _under_platform_check(n, parents)
+            ):
+                problems.append(
+                    f"{label}:{n.lineno}: pytest.{outcome} in a KAT file outside a"
+                    " platform check never runs the check"
+                )
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for d in n.decorator_list:
+                if _is_mark(d, "mark.skip"):
+                    problems.append(
+                        f"{label}:{d.lineno}: unconditional skip mark in a KAT file"
+                        " never runs the check"
+                    )
 
     f = _File(tree)
     for name, fn in f.funcs.items():
@@ -293,7 +454,7 @@ def lint_source(src: str, label: str) -> list[str]:
         )
         if by_fixture:
             continue
-        hit, end = f.first_reach(fn.body, seen)
+        hit, end = f.first_reach_in(fn, seen)
         if hit:
             continue
         if end is not None:
@@ -313,17 +474,23 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--root", type=Path, default=ROOT)
     a = ap.parse_args(argv)
     files = a.files or discover(a.root)
+    every = a.files or test_files(a.root)
 
     problems = []
-    for path in files:
-        try:
+    try:
+        for path in files:
             problems += lint_source(path.read_text(encoding="utf-8"), path.as_posix())
-        except SyntaxError as exc:
-            print(f"kat lint: {path}: does not parse: {exc}", file=sys.stderr)
-            return 2
+        for path in every:
+            problems += lint_hatches(path.read_text(encoding="utf-8"), path.as_posix())
+    except SyntaxError as exc:
+        print(f"kat lint: does not parse: {exc}", file=sys.stderr)
+        return 2
     for p in problems:
         print(p)
-    print(f"kat lint: {len(problems)} problem(s) in {len(files)} KAT file(s)")
+    print(
+        f"kat lint: {len(problems)} problem(s) in {len(files)} KAT file(s),"
+        f" {len(every)} test file(s) checked for xfail escape hatches"
+    )
     return 1 if problems else 0
 
 

@@ -189,14 +189,10 @@ def test_real_gate_call_asserting_deny_is_accepted(tmp_path: Path) -> None:
     assert run.returncode == 0, run.stdout + run.stderr
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="receiver of the gate call is not type-checked yet",
-)
 def test_local_evaluate_method_is_rejected(tmp_path: Path) -> None:
     r = _lint(_write(tmp_path, "test_k90_local.py", LOCAL_EVALUATE))
     assert r.returncode == 1
+    assert "never reaches the gate" in r.stdout
 
 
 def test_discovery_is_recursive_case_insensitive_and_reads_receipt_paths(
@@ -228,3 +224,132 @@ def test_discovery_is_recursive_case_insensitive_and_reads_receipt_paths(
 def test_this_repo_kats_pass() -> None:
     r = _lint()
     assert r.returncode == 0, r.stdout
+
+
+# A real gate fixture, so each fiat form below is the only problem in its file.
+GATE_HEADER = """
+import sys
+
+import pytest
+
+from capability_gate import Gate, load_policy
+
+
+@pytest.fixture()
+def gate(tmp_path):
+    return Gate(load_policy({"skills": {}}), log_path=str(tmp_path / "d.jsonl"))
+
+"""
+
+FIAT_FORMS = {
+    "assert_false_after_gate": (
+        "assert False",
+        """
+def test_k_af(gate):
+    gate.evaluate("s", "read_file", ["x"])
+    assert False, "fiat"
+""",
+    ),
+    "assert_constant_zero": (
+        "assert False",
+        """
+def test_k_az(gate):
+    gate.evaluate("s", "read_file", ["x"])
+    assert 0
+""",
+    ),
+    "getattr_pytest_fail": (
+        "getattr(pytest, ...)",
+        """
+def test_k_ga(gate):
+    getattr(pytest, "fail")("fiat")
+    gate.evaluate("s", "read_file", ["x"])
+""",
+    ),
+    "skip_after_gate": (
+        "pytest.skip",
+        """
+def test_k_sk(gate):
+    gate.evaluate("s", "read_file", ["x"])
+    pytest.skip("later")
+""",
+    ),
+    "xfail_after_gate": (
+        "pytest.xfail",
+        """
+def test_k_xf(gate):
+    gate.evaluate("s", "read_file", ["x"])
+    pytest.xfail("later")
+""",
+    ),
+    "unconditional_skip_mark": (
+        "unconditional skip mark",
+        """
+@pytest.mark.skip(reason="later")
+def test_k_sm(gate):
+    assert gate.evaluate("s", "read_file", ["x"]) is not None
+""",
+    ),
+    "generator_throw": (
+        "never reaches the gate",
+        """
+def test_k_gt():
+    def gen():
+        yield 1
+
+    g = gen()
+    next(g)
+    g.throw(ValueError("x"))
+""",
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(FIAT_FORMS))
+def test_fiat_form_is_rejected(tmp_path: Path, shape: str) -> None:
+    reason, body = FIAT_FORMS[shape]
+    r = _lint(_write(tmp_path, f"test_k_{shape}.py", GATE_HEADER + body))
+    assert r.returncode == 1, r.stdout
+    assert reason in r.stdout, r.stdout
+
+
+def test_platform_conditional_skip_with_gate_call_is_accepted(tmp_path: Path) -> None:
+    body = """
+def test_k_pl(gate):
+    if sys.platform == "win32":
+        pytest.skip("no symlinks without privilege")
+    assert gate.evaluate("s", "read_file", ["x"]) is not None
+"""
+    r = _lint(_write(tmp_path, "test_k_platform.py", GATE_HEADER + body))
+    assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize(
+    "src, reason",
+    [
+        (
+            "import pytest\n\n\n@pytest.mark.xfail(strict=False, reason='x')\n"
+            "def test_a():\n    assert 1\n",
+            "strict=False",
+        ),
+        (
+            "import pytest\n\n\n"
+            "@pytest.mark.parametrize('v', [pytest.param(1, marks=pytest.mark.xfail(strict=False))])\n"
+            "def test_b(v):\n    assert v\n",
+            "strict=False",
+        ),
+        (
+            "import pytest\n\n\ndef test_c():\n    pytest.xfail('later')\n",
+            "imperative pytest.xfail",
+        ),
+    ],
+    ids=["mark-strict-false", "param-strict-false", "imperative-xfail"],
+)
+def test_xfail_escape_hatches_rejected_in_any_test_file(
+    tmp_path: Path, src: str, reason: str
+) -> None:
+    # An ordinary test file, not a KAT: these hatches defeat xfail_strict anywhere.
+    _write(tmp_path, "test_ordinary.py", src)
+    r = _lint("--root", tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert reason in r.stdout, r.stdout
