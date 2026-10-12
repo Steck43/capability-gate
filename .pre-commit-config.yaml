@@ -79,6 +79,13 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: kat-lint
+        name: known-answer tests call the gate
+        entry: python scripts/kat_lint.py
+        language: system
+        pass_filenames: false
+        files: '^(tests/.*|test_[^/]*)\.py$'
+
       - id: no-ai-trailer
         name: no AI authorship trailer
         entry: python .githooks/no_ai_trailer.py
