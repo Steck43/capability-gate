@@ -112,3 +112,100 @@ def test_symlink_then_dotdot_relative_denied_through_the_hook(
 
 def test_dotdot_inside_the_grant_allows_through_the_hook(layout, pre_tool_call) -> None:
     assert pre_tool_call("read_file", {"path": IN_GRANT}, "t") is None
+
+
+@pytest.fixture
+def search_area(tmp_path: Path):
+    """A granted tree with a folder to search, and a secret outside the grant.
+
+    The search targets granted/docs: a grant of "<root>/**" covers paths below
+    the root, not the root folder itself.
+    """
+    granted = (tmp_path / "s-granted").resolve()
+    docs = granted / "docs"
+    docs.mkdir(parents=True)
+    (docs / "note.md").write_text("in grant", encoding="utf-8")
+    outside = (tmp_path / "s-outside").resolve()
+    outside.mkdir()
+    (outside / "secret.txt").write_text("SECRET", encoding="utf-8")
+    return types.SimpleNamespace(
+        root=tmp_path, granted=granted, docs=docs, outside=outside
+    )
+
+
+@pytest.fixture
+def search_gate(search_area):
+    policy = load_policy(
+        {
+            "skills": {
+                "s": {
+                    "tools": ["search_files"],
+                    "paths": [str(search_area.granted / "**")],
+                }
+            }
+        }
+    )
+    return Gate(policy, log_path=str(search_area.root / "s-logs" / "d.jsonl"))
+
+
+def _link(target: Path, link: Path, is_dir: bool = False) -> None:
+    if os.name == "nt":
+        try:
+            os.symlink(target, link, target_is_directory=is_dir)
+        except OSError as exc:
+            pytest.skip(f"this Windows account cannot create symlinks: {exc}")
+    else:
+        os.symlink(target, link, target_is_directory=is_dir)
+
+
+def test_search_files_dir_with_offgrant_hardlink_denied(search_area, search_gate):
+    os.link(search_area.outside / "secret.txt", search_area.docs / "hl.txt")
+    assert (search_area.docs / "hl.txt").read_text(encoding="utf-8") == "SECRET"
+    d = search_gate.evaluate("s", "search_files", [str(search_area.docs)])
+    assert d.verdict is Verdict.DENY, d.reason
+
+
+def test_search_files_dir_with_offgrant_symlink_denied(search_area, search_gate):
+    _link(search_area.outside / "secret.txt", search_area.docs / "link.txt")
+    d = search_gate.evaluate("s", "search_files", [str(search_area.docs)])
+    assert d.verdict is Verdict.DENY, d.reason
+
+
+def test_search_files_dir_with_offgrant_dir_symlink_denied(search_area, search_gate):
+    _link(search_area.outside, search_area.docs / "elsewhere", is_dir=True)
+    d = search_gate.evaluate("s", "search_files", [str(search_area.docs)])
+    assert d.verdict is Verdict.DENY, d.reason
+
+
+def test_search_files_dir_with_only_in_grant_files_allows(search_area, search_gate):
+    (search_area.docs / "sub").mkdir()
+    (search_area.docs / "sub" / "more.md").write_text("in", encoding="utf-8")
+    _link(search_area.docs / "note.md", search_area.docs / "alias.md")
+    d = search_gate.evaluate("s", "search_files", [str(search_area.docs)])
+    assert d.verdict is Verdict.ALLOW, d.reason
+
+
+def test_search_files_denies_when_the_walk_fails(search_area, search_gate, monkeypatch):
+    def _broken(top, *a, onerror=None, **k):
+        if onerror is not None:
+            onerror(PermissionError(13, "simulated walk failure"))
+        return iter(())
+
+    monkeypatch.setattr(os, "walk", _broken)
+    d = search_gate.evaluate("s", "search_files", [str(search_area.docs)])
+    assert d.verdict is Verdict.DENY, d.reason
+
+
+def test_search_files_hardlink_denied_through_the_hook(search_area, monkeypatch):
+    os.link(search_area.outside / "secret.txt", search_area.docs / "hl.txt")
+    home = hermes_home(search_area.root, monkeypatch)
+    skills = {
+        "UNLABELED": {
+            "tools": ["search_files"],
+            "paths": [str(search_area.granted / "**")],
+        }
+    }
+    pre_tool_call = register(load_adapter("search"), home, skills)
+    args = {"pattern": "x", "path": str(search_area.docs)}
+    out = pre_tool_call("search_files", args, "t")
+    assert blocked(out), out
