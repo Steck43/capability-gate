@@ -462,12 +462,14 @@ def _glob_to_regex(glob: str) -> re.Pattern:
             if i + 1 < n and glob[i + 1] == "*":
                 out.append(".*")  # ** crosses separators
                 i += 2
-                if i < n and glob[i] == "/":
-                    i += 1  # collapse the slash after **
+                if i < n and glob[i] in "/\\":
+                    i += 1  # collapse the separator after **
                 continue
-            out.append("[^/]*")  # * stays within a segment
+            # * and ? stay within one segment. Both separators count, because a
+            # Windows path is spelled with backslashes.
+            out.append(r"[^/\\]*")
         elif c == "?":
-            out.append("[^/]")
+            out.append(r"[^/\\]")
         else:
             out.append(re.escape(c))
         i += 1

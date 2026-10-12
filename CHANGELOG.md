@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- On Windows, `*` and `?` in a grant no longer match a backslash, so `ws\*` covers files directly in `ws` and nothing deeper, and `a?b` does not match `a\b`. Only `**` crosses separators, and a backslash after `**` collapses the same way a slash does. `tests/test_glob_separators.py` (through the gate, on Windows) and `tests/test_glob_regex.py` (the matcher, on any OS).
 - Claude Code Glob canaries now deny five additional segment spellings that can match `..`: `.?`, `?.`, `[.x][.x]`, `[!a][!a]`, and `[.-.][.-.]`.
 - T-FAIL-05 path coercion now runs inside `Gate.evaluate`'s recorded fail-closed boundary. A path whose string conversion raises returns DENY and appends a deny row instead of escaping before the boundary.
 - Claude Code adapter Glob climb residuals (K2b): deny escaped character-class parents (`[\.][\.]/*`), mixed `.`/`[.]` segments, `..*`, nested brace alternatives, and absolute brace alts before separator normalize. Collapse `[.]` / `[\.]` / `[..]` to literal dots first so a global `\`→`/` rewrite cannot turn `[\.]` into `[/.]`. Still a denylist over climb shapes, not a full Glob semantic model.
