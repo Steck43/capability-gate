@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The Claude Code adapter refuses to decide any call when its policy grants Write, Edit, MultiEdit, or NotebookEdit over its own files: the allowlist, the decision log and its `.inputs`, `.witness`, `.lock`, `.halt`, and `.anchor` files, the gate module, or the hook itself. A write aimed at one of those files, or into the hook folder, is denied per call as well, and both denials are logged. Before this, an ordinary Write could rewrite the allowlist and widen the agent's own grants. `tests/test_cc_adapter.py`.
 - OS-1/OS-2 collected as strict xfail under `tests/test_os_01_02_collected.py` (Track B). Design under `design/os/` stays unscanned. Receipt `OS-1-2-COLLECTED-XFAIL-2026-10-11.md`. No implementation. No paper claim.
 
 - Explicit deny for path segments `.env` and `.aegis` even when a grant glob covers the parent directory (Forseti #60 nit). Deny-by-default alone is not enough once those names sit inside a granted tree; the reason names the protected segment. The check follows `realpath` (symlink aliases under a whole-home grant) and the realpath of the parent for new files; also denies `.env.*`, `.envrc`, and case-folded `.ENV` / `.Aegis` (Forseti #65 FIX-FIRST). Names that merely *end* in `.env` (for example `foo.env`) stay allowed - only the exact segment `.env` / `.env.*` / `.envrc` / `.aegis` is protected.

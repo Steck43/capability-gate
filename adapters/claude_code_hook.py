@@ -232,6 +232,56 @@ def _record_input(tool_use_id: str, ti) -> None:
         os.close(fd)
 
 
+_WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+
+
+def _own_files() -> list[str]:
+    """The files that decide or record this hook, in canonical form."""
+    import capability_gate
+
+    log = _log_path()
+    names = [
+        _allowlist_path(),
+        log,
+        log + ".inputs",
+        log + ".witness",
+        log + ".lock",
+        log + ".halt",
+        log + ".anchor",
+        capability_gate.__file__,
+    ]
+    return [_canon(p) for p in names]
+
+
+def _own_file_hit(paths: list[str]) -> str | None:
+    """Why a write target is one of the hook's own files, or None."""
+    own = set(_own_files())
+    hook_dir = _canon(_here()) + os.sep
+    for p in paths:
+        if p in own or p.startswith(hook_dir):
+            return f"path '{p}' is one of the adapter's own policy, log, or code files"
+    return None
+
+
+def _grant_reaches_own_files(policy) -> str | None:
+    """A write grant that covers the hook's own files lets the agent widen it.
+
+    Checked on every start, before any call is decided: such a policy is
+    refused outright rather than trusted call by call.
+    """
+    from capability_gate import Verdict, _decide
+
+    targets = [*_own_files(), _canon(os.path.join(_here(), "claude_code_hook.py"))]
+    for tool in sorted(_WRITE_TOOLS):
+        for target in targets:
+            if _decide(policy, SKILL, tool, [target]).verdict is Verdict.ALLOW:
+                return (
+                    f"refusing to start: the {tool} grant covers the adapter's own "
+                    f"file '{target}'"
+                )
+    return None
+
+
 def _pre(event: dict) -> None:
     from capability_gate import Gate, Verdict
 
@@ -247,7 +297,10 @@ def _pre(event: dict) -> None:
     trace = {k: str(event[k]) for k in ("session_id",) if event.get(k)}
     if event.get("tool_use_id"):
         trace["tool_call_id"] = str(event["tool_use_id"])
-    decision = gate.evaluate(SKILL, tool, paths, trace=trace, args=ti)
+    refused = _grant_reaches_own_files(policy)
+    if refused is None and tool in _WRITE_TOOLS:
+        refused = _own_file_hit(paths)
+    decision = gate.evaluate(SKILL, tool, paths, trace=trace, args=ti, refuse=refused)
     if decision.verdict is not Verdict.ALLOW:
         _deny(f"{decision.verdict.value}: {decision.reason}")
     if event.get("tool_use_id"):
