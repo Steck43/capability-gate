@@ -10,13 +10,18 @@ Two pattern sources:
   the tree, because publishing it would be the leak. It is read from the
   LEAK_DENYLIST environment variable (one pattern per line) or, locally, from
   the untracked file .git/info/leak-denylist. A line is a case-insensitive
-  whole-word literal; prefix it with "re:" for a raw regex. Blank lines and
-  lines starting with "#" are skipped.
+  substring, so a name glued to other text ("NameReview") still matches;
+  prefix it with "re:" for a raw regex, for example word boundaries on a name
+  that is also part of common words. Blank lines and lines starting with "#"
+  are skipped.
 
 Modes:
 
   --staged            lines the staged change adds (pre-commit)
-  --ci --base B       lines added in B..HEAD plus the commit messages in B..HEAD
+  --ci --base B       lines each commit in B..HEAD adds, judged commit by commit
+                      so a name added and later removed is still caught, plus
+                      those commits' messages
+  --text LABEL        text on stdin (for example a pull request title and body)
   --tree              every tracked file at HEAD (reports counts by file)
   FILE ...            the named files
 
@@ -24,7 +29,14 @@ Output names file and line only. The matched text is never printed, so a CI log
 cannot republish what the scan exists to stop.
 
 Exit 0 = clean. Exit 1 = hit, or no denylist configured in --ci mode (fail
-closed: a scan with no list would pass everything). Exit 2 = usage or git error.
+closed: a scan with no list would pass everything). Exit 2 = usage or git
+error, including a diff header this script cannot parse, so an unreadable file
+name fails instead of being skipped.
+
+Known gaps: text in encodings other than UTF-8 (UTF-16 diffs as binary),
+binary files, file names themselves, "~" and environment-variable home paths,
+forward-slash Windows paths, IP addresses written in other forms, and anything
+committed with --no-verify before CI runs.
 """
 
 from __future__ import annotations
@@ -46,7 +58,7 @@ BUILTIN: list[tuple[str, re.Pattern[str]]] = [
         "windows-user-home-path",
         re.compile(r"(?i)\b[A-Z]:\\{1,2}Users\\{1,2}[^\\/\s\"'`]+"),
     ),
-    ("posix-home-path", re.compile(r"/home/[A-Za-z0-9._-]+/")),
+    ("posix-home-path", re.compile(r"/home/[A-Za-z0-9._-]+")),
     (
         "private-ipv4",
         re.compile(
@@ -79,7 +91,7 @@ def _git(*args: str, check: bool = True) -> str:
 def _compile_line(line: str) -> re.Pattern[str]:
     if line.startswith("re:"):
         return re.compile(line[3:], re.I)
-    return re.compile(r"(?<!\w)" + re.escape(line) + r"(?!\w)", re.I)
+    return re.compile(re.escape(line), re.I)
 
 
 def load_denylist() -> list[re.Pattern[str]] | None:
@@ -121,6 +133,40 @@ def _tree() -> list[tuple[str, str]]:
 
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13}
+
+
+def _unquote(name: str) -> str:
+    """Undo git's C-style quoting of a path: octal bytes and backslash escapes."""
+    if not (name.startswith('"') and name.endswith('"')):
+        return name
+    raw = name[1:-1]
+    out = bytearray()
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        if ch != "\\":
+            out += ch.encode("utf-8")
+            i += 1
+        elif raw[i + 1 : i + 4].isdigit() and len(raw[i + 1 : i + 4]) == 3:
+            out.append(int(raw[i + 1 : i + 4], 8))
+            i += 4
+        else:
+            nxt = raw[i + 1]
+            out.append(_C_ESCAPES.get(nxt, ord(nxt)))
+            i += 2
+    return out.decode("utf-8", errors="replace")
+
+
+def _target(header: str) -> str | None:
+    """Path from a '+++ ' header line; None for /dev/null. Unparseable exits 2."""
+    name = _unquote(header[4:].rstrip("\t"))
+    if name == "/dev/null":
+        return None
+    if not name.startswith("b/"):
+        print(f"leak scan: cannot parse diff header {header!r}", file=sys.stderr)
+        raise SystemExit(2)
+    return name[2:]
 
 
 def _added_lines(*diff_args: str) -> list[tuple[str, str]]:
@@ -130,14 +176,21 @@ def _added_lines(*diff_args: str) -> list[tuple[str, str]]:
     known hit, so pre-commit and CI judge only what the change adds.
     """
     diff = _git(
-        "diff", "--unified=0", "--no-color", "--no-ext-diff", "--no-renames", *diff_args
+        "-c",
+        "core.quotepath=false",
+        "diff",
+        "--unified=0",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-renames",
+        *diff_args,
     )
     by_file: dict[str, dict[int, str]] = {}
     current = None
     lineno = 0
     for line in diff.splitlines():
         if line.startswith("+++ "):
-            current = line[6:] if line.startswith("+++ b/") else None
+            current = _target(line)
         elif m := _HUNK.match(line):
             lineno = int(m.group(1))
         elif current and line.startswith("+"):
@@ -149,6 +202,23 @@ def _added_lines(*diff_args: str) -> list[tuple[str, str]]:
         for n, text in added.items():
             rows[n - 1] = text
         out.append((path, "\n".join(rows)))
+    return out
+
+
+_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _per_commit(base: str, head: str) -> list[tuple[str, str]]:
+    """Added lines of each commit on its own, against its first parent."""
+    out = []
+    for row in _git("rev-list", "--parents", f"{base}..{head}").splitlines():
+        sha, *parents = row.split()
+        args = (
+            [f"{sha}^!"]
+            if len(parents) == 1
+            else [parents[0] if parents else _EMPTY_TREE, sha]
+        )
+        out += [(f"{path} @ {sha[:12]}", text) for path, text in _added_lines(*args)]
     return out
 
 
@@ -167,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--staged", action="store_true")
     mode.add_argument("--ci", action="store_true")
     mode.add_argument("--tree", action="store_true")
+    mode.add_argument("--text", metavar="LABEL")
     ap.add_argument("--base", help="base ref for --ci")
     ap.add_argument("--head", default="HEAD")
     ap.add_argument("files", nargs="*")
@@ -174,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
 
     names = load_denylist()
     if names is None:
-        if a.ci:
+        if a.ci or a.text:
             print(
                 f"leak scan: denylist not configured ({ENV_VAR} is empty); failing closed"
             )
@@ -189,7 +260,9 @@ def main(argv: list[str] | None = None) -> int:
     if a.ci:
         if not a.base:
             ap.error("--ci needs --base")
-        targets = _added_lines(f"{a.base}..{a.head}") + _messages(a.base, a.head)
+        targets = _per_commit(a.base, a.head) + _messages(a.base, a.head)
+    elif a.text:
+        targets = [(a.text, sys.stdin.read())]
     elif a.staged:
         targets = _added_lines("--cached")
     elif a.tree:

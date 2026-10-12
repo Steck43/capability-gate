@@ -20,7 +20,7 @@ id = "posix-home-path"
 description = "POSIX home path with a user name"
 # The capture group is the reported secret. Without it the default config's
 # global allowlist suppresses the whole match.
-regex = '''/home/([A-Za-z0-9._-]+)/'''
+regex = '''/home/([A-Za-z0-9._-]+)'''
 secretGroup = 1
 keywords = ["/home/"]
 

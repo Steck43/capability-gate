@@ -78,10 +78,27 @@ def test_denylisted_name_fails_and_is_redacted(repo: Path) -> None:
     assert SYNTHETIC_NAME.lower() not in (r.stdout + r.stderr).lower()
 
 
-def test_name_matches_whole_word_only(repo: Path) -> None:
-    f = _write(repo, f"the {SYNTHETIC_NAME}function helper\n")
+@pytest.mark.parametrize("glued", ["{n}Review", "the{n}", "x_{n}_1", "{n}.local"])
+def test_name_glued_to_other_text_fails(repo: Path, glued: str) -> None:
+    f = _write(repo, glued.format(n=SYNTHETIC_NAME) + "\n")
     r = _run([str(f)], repo, denylist=SYNTHETIC_NAME)
+    assert r.returncode == 1, r.stdout
+
+
+def test_regex_entry_can_keep_word_boundaries(repo: Path) -> None:
+    f = _write(repo, f"the {SYNTHETIC_NAME}function helper\n")
+    r = _run([str(f)], repo, denylist="re:\\b" + SYNTHETIC_NAME + "\\b")
     assert r.returncode == 0, r.stdout
+    f = _write(repo, f"the {SYNTHETIC_NAME} helper\n")
+    r = _run([str(f)], repo, denylist="re:\\b" + SYNTHETIC_NAME + "\\b")
+    assert r.returncode == 1, r.stdout
+
+
+def test_home_path_without_trailing_slash_fails(repo: Path) -> None:
+    f = _write(repo, "cd " + "/" + "home" + "/someone\n")
+    r = _run([str(f)], repo, denylist=SYNTHETIC_NAME)
+    assert r.returncode == 1, r.stdout
+    assert "posix-home-path" in r.stdout
 
 
 def test_clean_text_passes(repo: Path) -> None:
@@ -152,7 +169,8 @@ def test_ci_mode_scans_added_lines_and_messages(repo: Path) -> None:
     subprocess.run(["git", "-C", str(repo), "commit", "-qam", "edit"], check=True)
     r = _run(["--ci", "--base", base], repo, denylist=SYNTHETIC_NAME)
     assert r.returncode == 1
-    assert "other.md:1: windows-user-home-path" in r.stdout
+    assert "other.md @ " in r.stdout
+    assert ":1: windows-user-home-path" in r.stdout
 
 
 def test_staged_mode_scans_index(repo: Path) -> None:
@@ -179,3 +197,75 @@ def test_staged_mode_judges_added_lines_at_real_line_numbers(repo: Path) -> None
     r = _run(["--staged"], repo, denylist=SYNTHETIC_NAME)
     assert r.returncode == 1
     assert "doc.md:4: denylist entry 1" in r.stdout
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def test_ci_mode_catches_a_name_added_then_removed(repo: Path) -> None:
+    _write(repo, "clean\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    _write(repo, f"clean\n{SYNTHETIC_NAME}\n")
+    _git(repo, "commit", "-qam", "add")
+    _write(repo, "clean\n")
+    _git(repo, "commit", "-qam", "remove")
+    assert _git(repo, "diff", f"{base}..HEAD") == ""
+    r = _run(["--ci", "--base", base], repo, denylist=SYNTHETIC_NAME)
+    assert r.returncode == 1, r.stdout
+    assert ":2: denylist entry 1" in r.stdout
+
+
+def test_non_ascii_file_name_is_scanned(repo: Path) -> None:
+    f = repo / "h_ünicode note.md"
+    f.write_text(f"{SYNTHETIC_NAME}\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    r = _run(["--staged"], repo, denylist=SYNTHETIC_NAME)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "nicode note.md:1: denylist entry 1" in r.stdout
+
+
+def test_quoted_header_is_unquoted() -> None:
+    sys.path.insert(0, str(SCRIPT.parent))
+    import leak_denylist_scan as scan
+
+    bs = chr(92)
+    header = '+++ "b/h_' + bs + "303" + bs + "274 x" + bs + 't.md"'
+    assert scan._target(header) == "h_ü x\t.md"
+    with pytest.raises(SystemExit):
+        scan._target("+++ c/unexpected")
+
+
+def test_text_mode_scans_stdin(repo: Path) -> None:
+    env = {k: v for k, v in os.environ.items() if k != "LEAK_DENYLIST"}
+    env["LEAK_DENYLIST"] = SYNTHETIC_NAME
+    r = subprocess.run(
+        [sys.executable, str(SCRIPT), "--text", "pull request"],
+        input=f"Title\n\nThanks to {SYNTHETIC_NAME}Review\n",
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 1
+    assert "pull request:3: denylist entry 1" in r.stdout
+
+
+def test_text_mode_fails_closed_without_list(repo: Path) -> None:
+    env = {k: v for k, v in os.environ.items() if k != "LEAK_DENYLIST"}
+    r = subprocess.run(
+        [sys.executable, str(SCRIPT), "--text", "pull request"],
+        input="clean title\n",
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 1
+    assert "denylist not configured" in r.stdout
