@@ -133,11 +133,15 @@ def test_hermes_registered_hook_allows_in_grant_read(hermes) -> None:
 
 
 def test_hermes_registered_hook_denies_when_gate_raises(hermes, monkeypatch) -> None:
-    import capability_gate
+    # Other tests reload capability_gate, so patch the Gate class the registered
+    # hook was actually built with, not whichever module object is current.
+    import grind01_util
 
     def _boom(self, *a, **k):
         raise RuntimeError("evaluate failed")
 
-    monkeypatch.setattr(capability_gate.Gate, "evaluate", _boom)
+    monkeypatch.setattr(grind01_util.Gate, "evaluate", _boom)
     pre, inside, _ = hermes
-    assert blocked(pre("read_file", {"path": str(inside)}, "t"))
+    out = pre("read_file", {"path": str(inside)}, "t")
+    assert blocked(out)
+    assert "evaluate failed" in out["message"]
