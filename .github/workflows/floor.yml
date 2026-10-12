@@ -21,7 +21,10 @@ name: floor
 on:
   push:
     branches: [main]
+  # edited reruns the floor when a title or body changes after the last push,
+  # so the title and body leak scan always reads the current text.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
   schedule:
     - cron: "17 9 * * 1"
