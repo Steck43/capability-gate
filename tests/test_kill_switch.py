@@ -26,7 +26,6 @@ sys.path.insert(0, str(ROOF))
 from capability_gate import (  # noqa: E402
     OBSERVE,
     Gate,
-    KillSwitchUnthrowable,
     Verdict,
     load_policy,
     verify_hash_chain,
@@ -327,6 +326,8 @@ def test_throw_fails_loudly_when_no_location_works(root, log):
         halt_path=_not_a_dir_parent(root, "a"),
         fallback_halt_path=_not_a_dir_parent(root, "b"),
     )
+    from capability_gate import KillSwitchUnthrowable
+
     with pytest.raises(KillSwitchUnthrowable):
         g.throw("drill")
     d = g.evaluate("writer", "write_file", [_granted(root)])
@@ -347,7 +348,13 @@ def test_ks_denies_when_log_folder_removed(tmp_path):
     d = g.evaluate("writer", "write_file", [str(work / "a.md")])
     assert d.verdict is Verdict.DENY
     assert "log folder" in d.reason
+    # The denial does not re-create the folder, which would start a new chain.
     assert not logs.exists()
+    # A folder put back in its place is a different folder; still denied.
+    logs.mkdir()
+    d = g.evaluate("writer", "write_file", [str(work / "a.md")])
+    assert d.verdict is Verdict.DENY
+    assert "removed or replaced" in d.reason
 
 
 @pytest.mark.parametrize("thrown", [False, True])
