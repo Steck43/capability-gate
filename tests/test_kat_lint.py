@@ -1,10 +1,12 @@
-"""KAT linter: reject tests that are red by fiat or never touch the gate."""
+"""KAT linter: reject tests that are red by fiat or never reach the gate."""
 
 from __future__ import annotations
 
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "kat_lint.py"
@@ -53,10 +55,94 @@ def test_k9_off_grant_read_denied(gate, tmp_path):
     assert _attempt(gate, tmp_path).verdict is Verdict.DENY
 """
 
+# Placeholder shapes from independent review, each a one-line edit away from
+# the original hard-coded fail. Every one must be rejected.
+REJECTED = {
+    "dead_gate_call_then_fail": """
+import pytest
 
-def _lint(path: Path) -> subprocess.CompletedProcess[str]:
+
+def test_k91():
+    if False:
+        pre_tool_call()
+    pytest.fail("red by fiat")
+""",
+    "fail_second_gate_call_unreachable": """
+import pytest
+
+
+def test_k92(gate):
+    x = 1
+    pytest.fail("red by fiat")
+    gate.evaluate("s", "read_file", ["x"])
+""",
+    "aliased_fail_gate_call_in_uncalled_lambda": """
+from pytest import fail as boom
+
+
+def test_k93(gate):
+    _later = lambda: gate.evaluate("s", "read_file", ["x"])
+    boom("red by fiat")
+""",
+    "module_alias_fail": """
+import pytest as pt
+
+
+def test_k95(gate):
+    gate.evaluate("s", "read_file", ["x"])
+    pt.fail("red by fiat")
+""",
+    "skip_marked_receipt_placeholder": """
+import pytest
+from pathlib import Path
+
+
+@pytest.mark.skip(reason="later")
+def test_k94():
+    assert (Path(__file__).parent / "receipts" / "K94.md").is_file()
+""",
+    "raise_assertion_error": """
+def test_k96(gate):
+    gate.evaluate("s", "read_file", ["x"])
+    raise AssertionError("todo")
+""",
+    "constant_true_guarded_fail": """
+import pytest
+
+
+def test_k97(gate):
+    if True:
+        pytest.fail("red by fiat")
+    gate.evaluate("s", "read_file", ["x"])
+""",
+    "returns_before_gate": """
+def test_k98(gate):
+    return
+    gate.evaluate("s", "read_file", ["x"])
+""",
+    "gate_call_only_in_constant_false_expression": """
+def test_k99(gate):
+    assert (gate.evaluate("s", "read_file", ["x"]) if False else True)
+""",
+}
+
+# Known gap, kept visible: the call's receiver is not type-checked, so a local
+# class with an evaluate method passes.
+LOCAL_EVALUATE = """
+class D:
+    def evaluate(self, *a):
+        return None
+
+
+def test_k90():
+    D().evaluate("x")
+    assert True
+"""
+
+
+def _lint(*args: str | Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(SCRIPT), str(path)],
+        [sys.executable, str(SCRIPT), *map(str, args)],
         capture_output=True,
         text=True,
         check=False,
@@ -64,9 +150,8 @@ def _lint(path: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _write(tmp_path: Path, name: str, src: str) -> Path:
-    tests = tmp_path / "tests"
-    tests.mkdir(exist_ok=True)
-    p = tests / name
+    p = tmp_path / "tests" / name
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(src, encoding="utf-8")
     return p
 
@@ -74,18 +159,23 @@ def _write(tmp_path: Path, name: str, src: str) -> Path:
 def test_hard_coded_fail_is_rejected(tmp_path: Path) -> None:
     r = _lint(_write(tmp_path, "test_k9_fail.py", HARD_CODED_FAIL))
     assert r.returncode == 1
-    assert "first statement is an unconditional pytest.fail" in r.stdout
+    assert "pytest.fail in a KAT file fails by fiat" in r.stdout
 
 
 def test_receipt_only_is_rejected(tmp_path: Path) -> None:
     r = _lint(_write(tmp_path, "test_k9_receipt.py", RECEIPT_ONLY))
     assert r.returncode == 1
-    assert "never calls the gate" in r.stdout
+    assert "never reaches the gate" in r.stdout
+
+
+@pytest.mark.parametrize("shape", sorted(REJECTED))
+def test_placeholder_shape_is_rejected(tmp_path: Path, shape: str) -> None:
+    r = _lint(_write(tmp_path, f"test_k_{shape}.py", REJECTED[shape]))
+    assert r.returncode == 1, r.stdout
 
 
 def test_real_gate_call_asserting_deny_is_accepted(tmp_path: Path) -> None:
-    src = REAL_GATE_CALL.format(root=str(ROOT))
-    path = _write(tmp_path, "test_k9_real.py", src)
+    path = _write(tmp_path, "test_k9_real.py", REAL_GATE_CALL.format(root=str(ROOT)))
     r = _lint(path)
     assert r.returncode == 0, r.stdout
     # The accepted fixture is a working test, not only a lint-shaped one.
@@ -99,24 +189,42 @@ def test_real_gate_call_asserting_deny_is_accepted(tmp_path: Path) -> None:
     assert run.returncode == 0, run.stdout + run.stderr
 
 
-def test_discovery_finds_kat_files_by_name_and_marker(tmp_path: Path) -> None:
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="receiver of the gate call is not type-checked yet",
+)
+def test_local_evaluate_method_is_rejected(tmp_path: Path) -> None:
+    r = _lint(_write(tmp_path, "test_k90_local.py", LOCAL_EVALUATE))
+    assert r.returncode == 1
+
+
+def test_discovery_is_recursive_case_insensitive_and_reads_receipt_paths(
+    tmp_path: Path,
+) -> None:
     _write(tmp_path, "test_k9_fail.py", HARD_CODED_FAIL)
     _write(tmp_path, "test_scaffold_kat.py", RECEIPT_ONLY)
     _write(tmp_path, "test_marked.py", "# KAT\n" + RECEIPT_ONLY)
-    _write(tmp_path, "test_unrelated.py", RECEIPT_ONLY)
-    r = subprocess.run(
-        [sys.executable, str(SCRIPT), "--root", str(tmp_path)],
-        capture_output=True,
-        text=True,
-        check=False,
+    _write(tmp_path, "sub/test_k3_nested.py", RECEIPT_ONLY)
+    _write(tmp_path, "test_K5_upper.py", RECEIPT_ONLY)
+    # Shape of an open PR that escaped name-based discovery: no K in the name,
+    # no marker, but it checks a receipts/ path.
+    _write(
+        tmp_path,
+        "test_windows_grant_acl.py",
+        "from pathlib import Path\n\n\n"
+        "def test_receipt_exists():\n"
+        '    assert (Path(__file__).parents[1] / "receipts" / "X.md").is_file()\n',
     )
+    _write(tmp_path, "test_unrelated.py", RECEIPT_ONLY)
+    r = _lint("--root", tmp_path)
     assert r.returncode == 1
-    assert "in 3 KAT file(s)" in r.stdout
+    assert "in 6 KAT file(s)" in r.stdout
+    for name in ("test_k3_nested.py", "test_K5_upper.py", "test_windows_grant_acl.py"):
+        assert name in r.stdout
     assert "test_unrelated.py" not in r.stdout
 
 
 def test_this_repo_kats_pass() -> None:
-    r = subprocess.run(
-        [sys.executable, str(SCRIPT)], capture_output=True, text=True, check=False
-    )
+    r = _lint()
     assert r.returncode == 0, r.stdout
