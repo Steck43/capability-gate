@@ -8,6 +8,7 @@ removing one needs this file changed too, in plain sight of review.
 from __future__ import annotations
 
 import configparser
+import re
 import tomllib
 from pathlib import Path
 
@@ -23,16 +24,46 @@ def _workflow() -> dict:
     )
 
 
+def _strip_comments(run: str) -> str:
+    """Shell text without comment lines, so a needle kept in a comment does not count."""
+    return "\n".join(
+        line for line in run.splitlines() if not line.strip().startswith("#")
+    )
+
+
 def _runs(job: dict) -> str:
-    return "\n".join(str(s.get("run", "")) for s in job.get("steps", []))
+    return "\n".join(
+        _strip_comments(str(s.get("run", ""))) for s in job.get("steps", [])
+    )
+
+
+# Jobs whose failure must fail the floor, and the only `if:` each may carry.
+GUARDRAIL_JOBS = {
+    "secrets": None,
+    "leak-denylist": "github.event_name == 'pull_request' || github.event_name == 'push'",
+    "kat-lint": None,
+    "tests": None,
+    "lint": None,
+    "authorship": None,
+}
+ALLOWED_STEP_IFS = {"github.event_name == 'pull_request'"}
+NEUTRALIZERS = re.compile(r"\|\|\s*(true|:)(\s|$)|\bexit\s+0\b|\bset\s+\+e\b")
 
 
 def test_pytest_ini_keeps_strict_xfail_and_syntax_warning_errors() -> None:
     cfg = configparser.ConfigParser()
     cfg.read(ROOT / "pytest.ini", encoding="utf-8")
     assert cfg.get("pytest", "xfail_strict").strip().lower() == "true"
-    warnings = cfg.get("pytest", "filterwarnings").split()
-    assert "error::SyntaxWarning" in warnings
+    filters = cfg.get("pytest", "filterwarnings").split()
+    assert "error::SyntaxWarning" in filters
+    # Later filters win, so nothing after the error filter may relax it.
+    for f in filters[filters.index("error::SyntaxWarning") + 1 :]:
+        action, _, rest = f.partition("::")
+        category = rest.split(":")[0]
+        assert action == "error" or category not in ("", "Warning", "SyntaxWarning"), f
+    # addopts can switch off strict xfail (--runxfail, -o) or warnings
+    # (-p no:warnings, -W) without touching the lines above.
+    assert not cfg.has_option("pytest", "addopts"), cfg.get("pytest", "addopts")
 
 
 @pytest.mark.parametrize(
@@ -93,3 +124,39 @@ def test_pull_request_trigger_reruns_on_title_or_body_edit() -> None:
     # Without "edited", a title or body changed after the last push is never
     # rescanned, so the leak check could pass on text it never read.
     assert {"opened", "synchronize", "reopened", "edited"} <= types
+
+
+def test_guardrail_jobs_cannot_be_skipped_or_soft_failed() -> None:
+    wf = _workflow()
+    jobs = wf["jobs"]
+    assert "PYTEST_ADDOPTS" not in (wf.get("env") or {})
+    for name, allowed_if in GUARDRAIL_JOBS.items():
+        job = jobs[name]
+        assert job.get("if") == allowed_if, (name, job.get("if"))
+        assert not job.get("continue-on-error"), name
+        assert "PYTEST_ADDOPTS" not in (job.get("env") or {}), name
+        for s in job.get("steps", []):
+            label = (name, s.get("name") or s.get("uses") or s.get("run"))
+            assert not s.get("continue-on-error"), label
+            assert s.get("if") in (None, *ALLOWED_STEP_IFS), label
+            assert "PYTEST_ADDOPTS" not in (s.get("env") or {}), label
+            assert not NEUTRALIZERS.search(_strip_comments(str(s.get("run", "")))), (
+                label
+            )
+
+
+def test_guardrail_commands_run_as_written() -> None:
+    jobs = _workflow()["jobs"]
+    pytest_runs = [
+        _strip_comments(str(s.get("run", ""))).strip()
+        for s in jobs["tests"]["steps"]
+        if "pytest" in str(s.get("run", ""))
+        and "pip install" not in str(s.get("run", ""))
+    ]
+    assert pytest_runs == ["pytest -q"], pytest_runs
+    assert "python scripts/kat_lint.py" in _runs(jobs["kat-lint"]).splitlines()
+    leak = _runs(jobs["leak-denylist"])
+    load = 'git show origin/main:scripts/leak_denylist_scan.py > "$RUNNER_TEMP/leak_scan.py"'
+    assert load in leak
+    assert 'python "$RUNNER_TEMP/leak_scan.py" --ci --base "$BASE" --head HEAD' in leak
+    assert '| python "$RUNNER_TEMP/leak_scan.py" --text' in leak
