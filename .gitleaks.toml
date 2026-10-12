@@ -1,0 +1,31 @@
+# Extends the gitleaks default rules with personal-path and private-network
+# shapes. Credentials are not the only leak a public repo can ship: a home
+# folder names its owner and a private address maps the network behind it.
+#
+# Names (machines, agents, people) are deliberately NOT listed here, because a
+# list of names in a public file is itself the leak. Those live outside the tree
+# and are checked by scripts/leak_denylist_scan.py.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "windows-user-home-path"
+description = "Windows user-home path (single or doubled backslashes)"
+regex = '''(?i)\b[A-Z]:\\{1,2}Users\\{1,2}[^\\/\s"'`]+'''
+keywords = ["users"]
+
+[[rules]]
+id = "posix-home-path"
+description = "POSIX home path with a user name"
+# The capture group is the reported secret. Without it the default config's
+# global allowlist suppresses the whole match.
+regex = '''/home/([A-Za-z0-9._-]+)/'''
+secretGroup = 1
+keywords = ["/home/"]
+
+[[rules]]
+id = "private-ipv4"
+description = "Private, shared, or CGNAT IPv4 address (10/8, 172.16/12, 192.168/16, 100.64/10)"
+regex = '''\b(?:10\.(?:25[0-5]|2[0-4]\d|1?\d?\d)|172\.(?:1[6-9]|2\d|3[01])|192\.168|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))\.(?:25[0-5]|2[0-4]\d|1?\d?\d)\.(?:25[0-5]|2[0-4]\d|1?\d?\d)\b'''
+keywords = ["10.", "172.", "192.168", "100."]
