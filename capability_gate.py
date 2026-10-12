@@ -580,7 +580,12 @@ def _absolute(path: str, base_dir: str | None) -> str | None:
         return path
     if not base_dir or not os.path.isabs(base_dir):
         return None
-    return os.path.normpath(os.path.join(base_dir, path))
+    # Never normpath first: collapsing "link/.." as text names a different file
+    # than a POSIX open, which follows the link before "..". realpath on the
+    # folder part follows links in order; the last part stays as named so the
+    # checks after this still see a symlinked file as a symlink.
+    parent, name = os.path.split(os.path.join(base_dir, path))
+    return os.path.join(os.path.realpath(parent), name)
 
 
 def _decide(

@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A relative path through a symlinked folder and then `..` (for example `sl/../secret.txt`, where `sl` links outside the grant) is judged as the file a POSIX system opens. The gate no longer collapses `..` as text before resolving links; it resolves the folder part with `realpath`, which follows links in order. Windows collapses `..` as text when it opens a path, and the gate matches that. `tests/test_path_escapes.py` is the known-answer test for this class, through the gate and the Hermes hook.
 - Claude Code Glob canaries now deny five additional segment spellings that can match `..`: `.?`, `?.`, `[.x][.x]`, `[!a][!a]`, and `[.-.][.-.]`.
 - T-FAIL-05 path coercion now runs inside `Gate.evaluate`'s recorded fail-closed boundary. A path whose string conversion raises returns DENY and appends a deny row instead of escaping before the boundary.
 - Claude Code adapter Glob climb residuals (K2b): deny escaped character-class parents (`[\.][\.]/*`), mixed `.`/`[.]` segments, `..*`, nested brace alternatives, and absolute brace alts before separator normalize. Collapse `[.]` / `[\.]` / `[..]` to literal dots first so a global `\`→`/` rewrite cannot turn `[\.]` into `[/.]`. Still a denylist over climb shapes, not a full Glob semantic model.
