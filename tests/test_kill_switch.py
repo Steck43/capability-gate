@@ -326,10 +326,11 @@ def test_throw_fails_loudly_when_no_location_works(root, log):
         halt_path=_not_a_dir_parent(root, "a"),
         fallback_halt_path=_not_a_dir_parent(root, "b"),
     )
-    from capability_gate import KillSwitchUnthrowable
-
-    with pytest.raises(KillSwitchUnthrowable):
+    # Other tests reload capability_gate, so match on the builtin base class and
+    # the class name rather than on one module object's class.
+    with pytest.raises(RuntimeError, match="kill switch NOT thrown") as exc:
         g.throw("drill")
+    assert type(exc.value).__name__ == "KillSwitchUnthrowable"
     d = g.evaluate("writer", "write_file", [_granted(root)])
     assert d.verdict is Verdict.DENY
     assert "cannot be thrown" in d.reason
