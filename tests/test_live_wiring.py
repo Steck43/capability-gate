@@ -490,3 +490,100 @@ def test_unwired_look_alikes_fail(shape: str) -> None:
     assert _missing_src(src, "_pre", ["verdict:gate.evaluate"]) == [
         "verdict:gate.evaluate"
     ]
+
+
+_ALLOW_EXITS = {"os._exit", "sys.exit", "_exit", "exit"}
+_TOOL_NAMES = {"tool", "tool_name"}
+
+
+def _allows(node: ast.AST) -> bool:
+    """A statement that ends a hook with an allow: exit code 0, or returning None."""
+    if isinstance(node, ast.Return):
+        return node.value is None or (
+            isinstance(node.value, ast.Constant) and node.value.value is None
+        )
+    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+        if _dotted(node.value.func) in _ALLOW_EXITS:
+            args = node.value.args
+            return not args or (
+                isinstance(args[0], ast.Constant) and args[0].value in (0, None)
+            )
+    return False
+
+
+def _kind(test: ast.expr) -> str:
+    text = ast.unparse(test)
+    names = {n.id for n in ast.walk(test) if isinstance(n, ast.Name)}
+    if "environ" in text or "getenv" in text:
+        return "env-gated"
+    if names & _TOOL_NAMES:
+        return "tool-specific"
+    return "conditional"
+
+
+def _early_allows(tree: ast.Module, fn: ast.FunctionDef) -> list[str]:
+    """Branches that allow before the gate decides: each one is a bypass."""
+    names = _Names(tree, fn)
+    straight, _ = _straight(fn.body)
+    end = next(
+        (
+            i
+            for i, s in enumerate(straight)
+            if isinstance(s, ast.Assign)
+            and isinstance(s.value, ast.Call)
+            and names.matches_name(s.value, "gate.evaluate")
+        ),
+        len(straight),
+    )
+    found = []
+    for s in straight[:end]:
+        if not isinstance(s, (ast.If, ast.While, ast.For, ast.With)):
+            continue
+        test = getattr(s, "test", None)
+        for n in ast.walk(s):
+            if _allows(n):
+                kind = _kind(test) if test is not None else "conditional"
+                found.append(f"{kind} early allow at line {n.lineno}")
+    return found
+
+
+@pytest.mark.parametrize("hook", HOOKS)
+def test_no_branch_allows_before_the_gate(hook: str) -> None:
+    rel, func = hook.split("::")
+    tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"), filename=rel)
+    assert _early_allows(tree, _entry_in(tree, func, hook)) == []
+
+
+EARLY_EXIT_SHAPES = {
+    "tool-specific": "    if tool == 'Grep':\n        os._exit(0)\n",
+    "env-gated": "    if os.environ.get('FAST_PATH'):\n        return None\n",
+    "conditional": "    if event.get('trusted'):\n        return\n",
+}
+HARMLESS_EARLY_EXITS = {
+    "deny": "    if tool == 'Grep':\n        _deny('no')\n",
+    "block result": "    if tool == 'Grep':\n        return {'action': 'block'}\n",
+    "raise": "    if tool == 'Grep':\n        raise ValueError('no')\n",
+}
+
+
+def _early_src(prefix: str) -> str:
+    return (
+        _PRELUDE
+        + "def _pre(event):\n    tool = event['tool']\n    gate = _G({})\n"
+        + prefix
+        + "    decision = gate.evaluate('s', tool, [])\n"
+        + _TAIL
+    )
+
+
+@pytest.mark.parametrize("kind", sorted(EARLY_EXIT_SHAPES))
+def test_early_allow_shapes_are_flagged(kind: str) -> None:
+    tree = ast.parse(_early_src(EARLY_EXIT_SHAPES[kind]))
+    found = _early_allows(tree, _entry_in(tree, "_pre", "_pre"))
+    assert found and found[0].startswith(kind), found
+
+
+@pytest.mark.parametrize("shape", sorted(HARMLESS_EARLY_EXITS))
+def test_early_deny_shapes_are_not_flagged(shape: str) -> None:
+    tree = ast.parse(_early_src(HARMLESS_EARLY_EXITS[shape]))
+    assert _early_allows(tree, _entry_in(tree, "_pre", "_pre")) == []
