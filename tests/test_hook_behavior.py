@@ -240,3 +240,59 @@ def test_hermes_registered_hook_allows_every_tool_in_grant(hermes, tool) -> None
 def test_hermes_registered_hook_denies_ungranted_tools(hermes, tool, args) -> None:
     pre, _, _ = hermes
     assert blocked(pre(tool, args, "t")), tool
+
+
+# Names a bypass is likely to hide behind. A hook must decide the same way
+# with any of them set.
+BYPASS_ENV = {
+    name: "1"
+    for name in (
+        "CG_FAST_PATH",
+        "CG_BYPASS",
+        "CG_DISABLE",
+        "CG_CC_BYPASS",
+        "CG_CC_DISABLE",
+        "CAPABILITY_GATE_DISABLE",
+        "CAPABILITY_GATE_OFF",
+        "GATE_OFF",
+        "SKIP_GATE",
+        "NO_GATE",
+        "HERMES_GATE_OFF",
+        "DEBUG",
+        "CI",
+    )
+}
+
+
+@pytest.mark.parametrize("tool", sorted(CC_TOOLS))
+def test_cc_hook_main_denies_with_bypass_variables_set(area, tool: str) -> None:
+    tmp, inside, outside = area
+    r = _cc(tmp, inside.parent, _target(tool, outside), tool=tool, extra_env=BYPASS_ENV)
+    assert _cc_denied(r), (tool, r.returncode, r.stderr)
+
+
+def test_cc_hook_main_decides_the_same_in_a_scrubbed_environment(area) -> None:
+    tmp, inside, outside = area
+    keep = ("SYSTEMROOT", "PATH", "TEMP", "TMP")
+    scrubbed = {k: v for k, v in os.environ.items() if k in keep}
+    real = os.environ.copy()
+    try:
+        os.environ.clear()
+        os.environ.update(scrubbed)
+        denied = _cc(tmp, inside.parent, outside)
+        allowed = _cc(tmp, inside.parent, inside)
+    finally:
+        os.environ.clear()
+        os.environ.update(real)
+    assert _cc_denied(denied), (denied.returncode, denied.stderr)
+    assert allowed.returncode == 0, (allowed.returncode, allowed.stderr)
+
+
+@pytest.mark.parametrize("tool", sorted(H_TOOLS))
+def test_hermes_registered_hook_denies_with_bypass_variables_set(
+    hermes, monkeypatch, tool
+) -> None:
+    for name, value in BYPASS_ENV.items():
+        monkeypatch.setenv(name, value)
+    pre, _, outside = hermes
+    assert blocked(pre(tool, H_TOOLS[tool](str(_target(tool, outside))), "t")), tool
