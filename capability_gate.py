@@ -49,6 +49,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import stat
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -372,13 +373,33 @@ def _is_same_or_ancestor(path: str, folder: str) -> bool:
     return a == f or f.startswith(a.rstrip(os.sep) + os.sep)
 
 
-def _folder_id(folder: str) -> tuple[int, int] | None:
-    """(device, inode) of a folder, or None when it is gone or not a folder."""
+FOLDER_TOKEN_NAME = ".capability-gate-folder"
+
+
+def _folder_token(folder: str, create: bool = False) -> str | None:
+    """The random token that names this log folder, or None when it is gone.
+
+    Created once, by the first gate to use the folder, and only read after
+    that. A folder that was removed and made again has no token or a new one,
+    which an inode number cannot show: filesystems reuse inode numbers.
+    """
+    path = os.path.join(folder, FOLDER_TOKEN_NAME)
+    if create:
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            try:
+                os.write(fd, secrets.token_hex(16).encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
     try:
-        st = os.stat(folder)
-    except OSError:
+        with open(path, encoding="ascii") as f:
+            return f.read().strip() or None
+    except (OSError, UnicodeError):
         return None
-    return (st.st_dev, st.st_ino) if stat.S_ISDIR(st.st_mode) else None
 
 
 def _can_create_in(folder: str) -> bool:
@@ -722,7 +743,7 @@ class Gate:
         # run: the gate denies and does not re-create it.
         log_dir = os.path.dirname(self._log_path) or "."
         os.makedirs(log_dir, exist_ok=True)
-        self._log_dir_id = _folder_id(log_dir)
+        self._log_dir_token = _folder_token(log_dir, create=True)
         self._log_folder_lost = False
         self._mode = mode
 
@@ -804,13 +825,14 @@ class Gate:
         for path in self._halt_paths:
             try:
                 os.lstat(path)
-            except FileNotFoundError:
+            except (FileNotFoundError, NotADirectoryError):
+                # Not there, or a parent is a file so it can never be there.
                 continue
             except Exception as exc:
                 return f"kill switch state unreadable, failing closed: {exc!r}"
             return f"kill switch thrown: {path} exists; a human removes it"
         log_dir = os.path.dirname(self._log_path) or "."
-        if _folder_id(log_dir) != self._log_dir_id:
+        if self._log_dir_token is None or _folder_token(log_dir) != self._log_dir_token:
             # Writing a row now would re-create the folder and start a fresh
             # chain, so this denial is returned without a log row.
             self._log_folder_lost = True
@@ -829,7 +851,9 @@ class Gate:
         log = self._log_path
         if any(_same_file_name(a, h) for h in self._halt_paths):
             return f"path '{p}' is the kill switch marker"
-        if any(_same_file_name(a, f) for f in (log, log + ".lock", log + ".witness")):
+        token = os.path.join(os.path.dirname(log), FOLDER_TOKEN_NAME)
+        own = (log, log + ".lock", log + ".witness", token)
+        if any(_same_file_name(a, f) for f in own):
             return f"path '{p}' is the gate's own decision log file"
         folders = {os.path.dirname(h) for h in self._halt_paths}
         folders.add(os.path.dirname(log))
