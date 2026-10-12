@@ -587,3 +587,63 @@ def test_early_allow_shapes_are_flagged(kind: str) -> None:
 def test_early_deny_shapes_are_not_flagged(shape: str) -> None:
     tree = ast.parse(_early_src(HARMLESS_EARLY_EXITS[shape]))
     assert _early_allows(tree, _entry_in(tree, "_pre", "_pre")) == []
+
+
+# Every environment variable each hook module may read. A new read, anywhere in
+# the module, has to be added here in the same review, because a branch on an
+# environment variable is how a bypass hides from tests that never set it.
+ALLOWED_ENV = {
+    "adapters/claude_code_hook.py": {
+        "CG_CC_DEADLINE_S",
+        "CG_CC_ALLOWLIST",
+        "CG_CC_LOG",
+    },
+    "__init__.py": {"HERMES_HOME"},
+}
+
+
+def _env_reads(tree: ast.Module) -> list[tuple[int, str | None]]:
+    """(line, key) per environment read; key None when it is not a constant."""
+    out = []
+    for n in ast.walk(tree):
+        key_node = None
+        if isinstance(n, ast.Call):
+            d = _dotted(n.func) or ""
+            if d in ("os.getenv", "getenv") or (
+                d.startswith("os.environ.") and d != "os.environ.copy"
+            ):
+                key_node = n.args[0] if n.args else None
+                out.append((n.lineno, _const_key(key_node)))
+        elif isinstance(n, ast.Subscript) and _dotted(n.value) == "os.environ":
+            out.append((n.lineno, _const_key(n.slice)))
+        elif isinstance(n, ast.Compare) and any(
+            _dotted(c) == "os.environ" for c in n.comparators
+        ):
+            out.append((n.lineno, _const_key(n.left)))
+    return out
+
+
+def _const_key(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+@pytest.mark.parametrize("rel", sorted(ALLOWED_ENV))
+def test_hook_modules_read_only_listed_environment_variables(rel: str) -> None:
+    tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"), filename=rel)
+    bad = [(line, key) for line, key in _env_reads(tree) if key not in ALLOWED_ENV[rel]]
+    assert bad == [], bad
+
+
+def test_env_read_rule_sees_each_read_form() -> None:
+    src = (
+        "import os\n"
+        "a = os.environ.get('X')\n"
+        "b = os.getenv('Y')\n"
+        "c = os.environ['Z']\n"
+        "d = 'W' in os.environ\n"
+        "e = os.environ.get(name)\n"
+    )
+    keys = [key for _, key in _env_reads(ast.parse(src))]
+    assert keys == ["X", "Y", "Z", "W", None]
