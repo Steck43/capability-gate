@@ -11,9 +11,30 @@ useDefault = true
 
 [[rules]]
 id = "windows-user-home-path"
-description = "Windows user-home path (single or doubled backslashes)"
-regex = '''(?i)\b[A-Z]:\\{1,2}Users\\{1,2}[^\\/\s"'`]+'''
+description = "Windows user-home path (backslashes, doubled backslashes, or forward slashes)"
+regex = '''(?i)\b[A-Z]:(?:\\{1,2}|/)Users(?:\\{1,2}|/)[^\\/\s"'`]+'''
 keywords = ["users"]
+
+[[rules]]
+id = "macos-user-home-path"
+description = "macOS user-home path"
+regex = '''(?:^|[^\w.:/])/Users/([A-Za-z0-9._-]+)'''
+secretGroup = 1
+keywords = ["/users/"]
+
+[[rules]]
+id = "wsl-mount-home-path"
+description = "Windows user home reached through a WSL mount"
+regex = '''(?i)/mnt/[a-z]/Users/([^\\/\s"'`]+)'''
+secretGroup = 1
+keywords = ["/mnt/"]
+
+[[rules]]
+id = "wsl-network-home-path"
+description = "WSL home reached through its network path"
+regex = '''(?i)\\{2,4}wsl(?:\$|\.localhost)\\{1,2}[^\\\s]+\\{1,2}home\\{1,2}([^\\/\s"'`]+)'''
+secretGroup = 1
+keywords = ["wsl"]
 
 [[rules]]
 id = "posix-home-path"

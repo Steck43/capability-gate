@@ -1,7 +1,8 @@
 """Leak scan: a name or a personal path in the scanned text fails the check.
 
-Every leak fixture is assembled at runtime so this file cannot trip the scan
-it tests.
+Every leak fixture is assembled at runtime through _j, never by adjacent string
+literals, so this file cannot trip the scan it tests (the scan also joins
+"a" + "b" literals on one line).
 """
 
 from __future__ import annotations
@@ -15,12 +16,21 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "leak_denylist_scan.py"
+GH_WRAPPER = ROOT / "scripts" / "gh_pr.py"
 
-SYNTHETIC_NAME = "Ze" + "ta"
-SYNTHETIC_WIN_PATH = "C:" + "\\" + "Users" + "\\" + "someone" + "\\" + "x"
-SYNTHETIC_WIN_PATH_DOUBLED = SYNTHETIC_WIN_PATH.replace("\\", "\\\\")
-SYNTHETIC_POSIX_PATH = "/" + "home" + "/someone/x"
-SYNTHETIC_PRIVATE_IP = "192" + ".168.4.20"
+
+def _j(sep: str, *parts: str) -> str:
+    return sep.join(parts)
+
+
+BS = chr(92)
+SYNTHETIC_NAME = _j("", "Ze", "ta")
+SYNTHETIC_WIN_PATH = _j(BS, "C:", "Users", "someone", "x")
+SYNTHETIC_WIN_PATH_DOUBLED = SYNTHETIC_WIN_PATH.replace(BS, BS * 2)
+SYNTHETIC_POSIX_PATH = _j("/", "", "home", "someone", "x")
+SYNTHETIC_PRIVATE_IP = _j(".", "192", "168", "4", "20")
+EM_DASH = chr(0x2014)
+EN_DASH = chr(0x2013)
 
 
 def _run(
@@ -95,7 +105,7 @@ def test_regex_entry_can_keep_word_boundaries(repo: Path) -> None:
 
 
 def test_home_path_without_trailing_slash_fails(repo: Path) -> None:
-    f = _write(repo, "cd " + "/" + "home" + "/someone\n")
+    f = _write(repo, "cd " + _j("/", "", "home", "someone") + "\n")
     r = _run([str(f)], repo, denylist=SYNTHETIC_NAME)
     assert r.returncode == 1, r.stdout
     assert "posix-home-path" in r.stdout

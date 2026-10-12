@@ -84,6 +84,9 @@ jobs:
           LEAK_DENYLIST: ${{ secrets.LEAK_DENYLIST }}
           EVENT_NAME: ${{ github.event_name }}
           PUSH_BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        # A pull request is judged on the commits it adds over its own base, so a
+        # change stacked on another open pull request is not judged on that one.
         run: |
           ZERO=0000000000000000000000000000000000000000
           if [ "$EVENT_NAME" = "push" ]; then
@@ -92,8 +95,11 @@ jobs:
               exit 3
             fi
             BASE="$PUSH_BEFORE"
+          elif [ -n "$PR_BASE" ]; then
+            BASE="$PR_BASE"
           else
-            BASE=origin/main
+            echo "::error::pull request with no base commit; cannot set the scan range"
+            exit 3
           fi
           if [ "$(git rev-list --count "$BASE..HEAD")" = "0" ]; then
             echo "::error::empty range $BASE..HEAD; the scan would inspect nothing"

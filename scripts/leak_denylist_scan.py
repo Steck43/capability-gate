@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
 """Fail on private names and personal paths in text headed for a public repo.
 
-Two pattern sources:
+Pattern sources:
 
-* Built-in shapes: Windows and POSIX user-home paths, and private IPv4 ranges.
-  Same shapes as .gitleaks.toml, repeated here so the commit-message check and
-  the pre-commit check do not depend on a gitleaks install.
-* A denylist of names (machines, agents, people, hosts). The list never lives in
-  the tree, because publishing it would be the leak. It is read from the
-  LEAK_DENYLIST environment variable (one pattern per line) or, locally, from
-  the untracked file .git/info/leak-denylist. A line is a case-insensitive
-  substring, so a name glued to other text ("NameReview") still matches;
-  prefix it with "re:" for a raw regex, for example word boundaries on a name
-  that is also part of common words. Blank lines and lines starting with "#"
-  are skipped.
+* Built-in shapes: user-home paths (Windows with either slash, POSIX, macOS,
+  WSL mounts and WSL network paths) and private IPv4 ranges. The same shapes
+  are in .gitleaks.toml, repeated here so the commit-message check and the
+  pre-commit check do not depend on a gitleaks install.
+* Style shapes that must not reach public text: em and en dashes, and AI
+  authorship trailers.
+* A denylist of names (machines, agents, people, hosts, folder names). The
+  list never lives in the tree, because publishing it would be the leak. It is
+  read from the LEAK_DENYLIST environment variable (one pattern per line) or,
+  locally, from the untracked file .git/info/leak-denylist. A line is a
+  case-insensitive substring, so a name glued to other text ("NameReview")
+  still matches; prefix it with "re:" for a raw regex, for example word
+  boundaries on a name that is also part of common words. Blank lines and lines
+  starting with "#" are skipped.
+
+Each line is also checked with adjacent string literals joined ("C:" + "..."
+or "Ze" "ta" on one line), so a value split across literals still matches.
+Files that start with a UTF-16 byte-order mark are decoded and scanned whole,
+since git diffs them as binary. The names of new files are scanned as text.
 
 Modes:
 
-  --staged            lines the staged change adds (pre-commit)
-  --ci --base B       lines each commit in B..HEAD adds, judged commit by commit
-                      so a name added and later removed is still caught, plus
-                      those commits' messages
+  --staged            lines and new file names the staged change adds
+                      (pre-commit)
+  --ci --base B       lines and new file names each commit in B..HEAD adds,
+                      judged commit by commit so a name added and later
+                      removed is still caught, plus those commits' messages
   --text LABEL        text on stdin (for example a pull request title and body)
   --tree              every tracked file at HEAD (reports counts by file)
   FILE ...            the named files
@@ -28,15 +37,16 @@ Modes:
 Output names file and line only. The matched text is never printed, so a CI log
 cannot republish what the scan exists to stop.
 
-Exit 0 = clean. Exit 1 = hit, or no denylist configured in --ci mode (fail
-closed: a scan with no list would pass everything). Exit 2 = usage or git
+Exit 0 = clean. Exit 1 = hit, or no denylist configured in --ci or --text mode
+(fail closed: a scan with no list would pass everything). Exit 2 = usage or git
 error, including a diff header this script cannot parse, so an unreadable file
-name fails instead of being skipped.
+name fails instead of being skipped. Exit 3 = an empty --ci range, which would
+otherwise pass having read nothing.
 
-Known gaps: text in encodings other than UTF-8 (UTF-16 diffs as binary),
-binary files, file names themselves, "~" and environment-variable home paths,
-forward-slash Windows paths, IP addresses written in other forms, and anything
-committed with --no-verify before CI runs.
+Known gaps: "~" and environment-variable home paths, IP addresses written in
+other forms, binary files other than UTF-16 text, values split across lines or
+built through variables, and anything committed with --no-verify before CI
+runs.
 """
 
 from __future__ import annotations
@@ -53,12 +63,21 @@ ENV_VAR = "LEAK_DENYLIST"
 LOCAL_FILE = "leak-denylist"
 
 _OCTET = r"(?:25[0-5]|2[0-4]\d|1?\d?\d)"
+_SEG = r"[^\\/\s\"'`]+"
 BUILTIN: list[tuple[str, re.Pattern[str]]] = [
     (
         "windows-user-home-path",
-        re.compile(r"(?i)\b[A-Z]:\\{1,2}Users\\{1,2}[^\\/\s\"'`]+"),
+        re.compile(r"(?i)\b[A-Z]:(?:\\{1,2}|/)Users(?:\\{1,2}|/)" + _SEG),
     ),
     ("posix-home-path", re.compile(r"/home/[A-Za-z0-9._-]+")),
+    ("macos-user-home-path", re.compile(r"(?<![\w.:/])/Users/[A-Za-z0-9._-]+")),
+    ("wsl-mount-home-path", re.compile(r"(?i)/mnt/[a-z]/Users/" + _SEG)),
+    (
+        "wsl-network-home-path",
+        re.compile(
+            r"(?i)\\{2,4}wsl(?:\$|\.localhost)\\{1,2}[^\\\s]+\\{1,2}home\\{1,2}" + _SEG
+        ),
+    ),
     (
         "private-ipv4",
         re.compile(
@@ -67,7 +86,19 @@ BUILTIN: list[tuple[str, re.Pattern[str]]] = [
             r"\." + _OCTET + r"\." + _OCTET + r"\b"
         ),
     ),
+    ("em-dash", re.compile(chr(0x2014))),
+    ("en-dash", re.compile(chr(0x2013))),
+    (
+        "ai-trailer",
+        re.compile(
+            r"(?i)co-authored-b[y]:.*\b(claude|cursor|copilot|gpt|gemini|assistant"
+            r"|anthropic|openai)\b|generat[e]d (with|by) .*\b(claude|cursor|copilot)\b"
+            r"|claude\.ai/code/session"
+        ),
+    ),
 ]
+# A closing quote, an optional "+", and an opening quote of the same kind.
+_JOIN = re.compile(r"(['\"])\s*\+?\s*\1")
 
 
 def _git(*args: str, check: bool = True) -> str:
@@ -86,6 +117,23 @@ def _git(*args: str, check: bool = True) -> str:
         )
         raise SystemExit(2)
     return r.stdout
+
+
+def _git_bytes(*args: str) -> bytes:
+    r = subprocess.run(["git", *args], capture_output=True, check=False)
+    if r.returncode != 0:
+        print(f"leak scan: git {' '.join(args)} failed", file=sys.stderr)
+        raise SystemExit(2)
+    return r.stdout
+
+
+def _decode(data: bytes) -> tuple[str | None, bool]:
+    """(text, is UTF-16). Text is None for a binary file this scan cannot read."""
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16", errors="replace"), True
+    if b"\0" in data[:8192]:
+        return None, False
+    return data.decode("utf-8-sig", errors="replace"), False
 
 
 def _compile_line(line: str) -> re.Pattern[str]:
@@ -108,16 +156,25 @@ def load_denylist() -> list[re.Pattern[str]] | None:
     return pats or None
 
 
+def _labels(line: str, names: list[re.Pattern[str]]) -> list[str]:
+    out = [label for label, pat in BUILTIN if pat.search(line)]
+    out += [f"denylist entry {i}" for i, pat in enumerate(names, 1) if pat.search(line)]
+    return out
+
+
 def scan_text(text: str, names: list[re.Pattern[str]]) -> list[tuple[int, str]]:
     """(line number, rule label) per hit. Labels never contain the matched text."""
     hits: list[tuple[int, str]] = []
     for n, line in enumerate(text.splitlines(), 1):
-        for label, pat in BUILTIN:
-            if pat.search(line):
-                hits.append((n, label))
-        for i, pat in enumerate(names, 1):
-            if pat.search(line):
-                hits.append((n, f"denylist entry {i}"))
+        raw = _labels(line, names)
+        hits += [(n, label) for label in raw]
+        joined = _JOIN.sub("", line)
+        if joined != line:
+            hits += [
+                (n, f"{label} (split string)")
+                for label in _labels(joined, names)
+                if label not in raw
+            ]
     return hits
 
 
@@ -126,13 +183,14 @@ def _tree() -> list[tuple[str, str]]:
     for path in _git("ls-files", "-z").split("\0"):
         p = Path(path)
         if path and p.is_file():
-            data = p.read_bytes()
-            if b"\0" not in data[:8192]:
-                out.append((path, data.decode("utf-8", errors="replace")))
+            text, wide = _decode(p.read_bytes())
+            if text is not None:
+                out.append((f"{path} (UTF-16)" if wide else path, text))
     return out
 
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_BINARY = re.compile(r"^Binary files (.+) and (.+) differ$")
 _C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13}
 
 
@@ -160,20 +218,26 @@ def _unquote(name: str) -> str:
 
 def _target(header: str) -> str | None:
     """Path from a '+++ ' header line; None for /dev/null. Unparseable exits 2."""
-    name = _unquote(header[4:].rstrip("\t"))
+    return _b_path(header[4:].rstrip("\t"), header)
+
+
+def _b_path(name: str, context: str) -> str | None:
+    name = _unquote(name)
     if name == "/dev/null":
         return None
     if not name.startswith("b/"):
-        print(f"leak scan: cannot parse diff header {header!r}", file=sys.stderr)
+        print(f"leak scan: cannot parse diff header {context!r}", file=sys.stderr)
         raise SystemExit(2)
     return name[2:]
 
 
-def _added_lines(*diff_args: str) -> list[tuple[str, str]]:
+def _added_lines(rev: str, *diff_args: str) -> list[tuple[str, str]]:
     """Added lines only, placed at their real line numbers (other lines left blank).
 
     Scanning whole files would fail every edit to a file that already carries a
-    known hit, so pre-commit and CI judge only what the change adds.
+    known hit, so pre-commit and CI judge only what the change adds. A file git
+    reports as binary is read from rev ("" for the index) and scanned whole when
+    it is UTF-16 text.
     """
     diff = _git(
         "-c",
@@ -186,17 +250,23 @@ def _added_lines(*diff_args: str) -> list[tuple[str, str]]:
         *diff_args,
     )
     by_file: dict[str, dict[int, str]] = {}
+    out = []
     current = None
     lineno = 0
     for line in diff.splitlines():
         if line.startswith("+++ "):
             current = _target(line)
+        elif m := _BINARY.match(line):
+            path = _b_path(m.group(2), line)
+            if path is not None:
+                text, wide = _decode(_git_bytes("show", f"{rev}:{path}"))
+                if text is not None and wide:
+                    out.append((f"{path} (UTF-16)", text))
         elif m := _HUNK.match(line):
             lineno = int(m.group(1))
         elif current and line.startswith("+"):
             by_file.setdefault(current, {})[lineno] = line[1:]
             lineno += 1
-    out = []
     for path, added in by_file.items():
         rows = [""] * max(added)
         for n, text in added.items():
@@ -205,11 +275,25 @@ def _added_lines(*diff_args: str) -> list[tuple[str, str]]:
     return out
 
 
+def _new_names(*diff_args: str) -> list[str]:
+    names = _git(
+        "-c",
+        "core.quotepath=false",
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "--diff-filter=A",
+        "-z",
+        *diff_args,
+    )
+    return [n for n in names.split("\0") if n]
+
+
 _EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 def _per_commit(base: str, head: str) -> list[tuple[str, str]]:
-    """Added lines of each commit on its own, against its first parent."""
+    """Added lines and new file names of each commit on its own, against its first parent."""
     out = []
     for row in _git("rev-list", "--parents", f"{base}..{head}").splitlines():
         sha, *parents = row.split()
@@ -218,7 +302,8 @@ def _per_commit(base: str, head: str) -> list[tuple[str, str]]:
             if len(parents) == 1
             else [parents[0] if parents else _EMPTY_TREE, sha]
         )
-        out += [(f"{path} @ {sha[:12]}", text) for path, text in _added_lines(*args)]
+        out += [(f"{p} @ {sha[:12]}", t) for p, t in _added_lines(sha, *args)]
+        out += [(f"{p} @ {sha[:12]} (file name)", p) for p in _new_names(*args)]
     return out
 
 
@@ -229,6 +314,13 @@ def _messages(base: str, head: str) -> list[tuple[str, str]]:
             (f"commit {sha[:12]} message", _git("log", "-1", "--format=%B", sha))
         )
     return out
+
+
+def _read_file(f: str) -> tuple[str, str] | None:
+    text, wide = _decode(Path(f).read_bytes())
+    if text is None:
+        return None
+    return (f"{f} (UTF-16)" if wide else f, text)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -252,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(
             f"leak scan: no denylist configured ({ENV_VAR} or .git/info/{LOCAL_FILE}); "
-            "checking built-in path and address shapes only",
+            "checking built-in shapes only",
             file=sys.stderr,
         )
         names = []
@@ -260,17 +352,20 @@ def main(argv: list[str] | None = None) -> int:
     if a.ci:
         if not a.base:
             ap.error("--ci needs --base")
+        count = _git("rev-list", "--count", f"{a.base}..{a.head}").strip()
+        if count == "0":
+            print(f"leak scan: empty range {a.base}..{a.head}; nothing to scan")
+            return 3
         targets = _per_commit(a.base, a.head) + _messages(a.base, a.head)
     elif a.text:
         targets = [(a.text, sys.stdin.read())]
     elif a.staged:
-        targets = _added_lines("--cached")
+        targets = _added_lines("", "--cached")
+        targets += [(f"{p} (file name)", p) for p in _new_names("--cached")]
     elif a.tree:
         targets = _tree()
     else:
-        targets = [
-            (f, Path(f).read_text(encoding="utf-8", errors="replace")) for f in a.files
-        ]
+        targets = [t for t in map(_read_file, a.files) if t is not None]
 
     total = 0
     per_file: Counter[str] = Counter()
