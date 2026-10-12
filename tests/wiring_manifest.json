@@ -1,0 +1,8 @@
+{
+  "__init__.py::pre_tool_call": ["gate.evaluate"],
+  "adapters/claude_code_hook.py::_pre": ["gate.evaluate"],
+  "_pending": {
+    "__init__.py::pre_tool_call": ["any:open_authorized_read"],
+    "adapters/claude_code_hook.py::_pre": ["any:open_authorized_read"]
+  }
+}
