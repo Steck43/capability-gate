@@ -362,6 +362,44 @@ def _same_file_name(a: str, b: str) -> bool:
     )
 
 
+def _canon_path(p: str) -> str:
+    return os.path.normcase(os.path.realpath(p))
+
+
+def _is_same_or_ancestor(path: str, folder: str) -> bool:
+    """True when path is folder or a folder that contains it."""
+    a, f = _canon_path(path), _canon_path(folder)
+    return a == f or f.startswith(a.rstrip(os.sep) + os.sep)
+
+
+def _folder_id(folder: str) -> tuple[int, int] | None:
+    """(device, inode) of a folder, or None when it is gone or not a folder."""
+    try:
+        st = os.stat(folder)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino) if stat.S_ISDIR(st.st_mode) else None
+
+
+def _can_create_in(folder: str) -> bool:
+    """Whether a marker could be made at folder, creating missing parents first.
+
+    The nearest existing ancestor decides: it must be a folder this process can
+    write, as os.makedirs would need.
+    """
+    folder = os.path.abspath(folder)
+    while not os.path.lexists(folder):
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            return False
+        folder = parent
+    return os.path.isdir(folder) and os.access(folder, os.W_OK | os.X_OK)
+
+
+class KillSwitchUnthrowable(RuntimeError):
+    """No halt location could take the marker; the switch is not thrown."""
+
+
 @dataclass(frozen=True)
 class Decision:
     verdict: Verdict
@@ -663,6 +701,7 @@ class Gate:
         mode: str = ENFORCE,
         *,
         halt_path: str | None = None,
+        fallback_halt_path: str | None = None,
     ):
         if mode not in (ENFORCE, OBSERVE):
             raise ValueError(f"mode must be '{ENFORCE}' or '{OBSERVE}', got {mode!r}")
@@ -670,8 +709,21 @@ class Gate:
         # Absolute paths so a relative HERMES_HOME does not move the marker
         # when the process cwd changes (independent review R2-3).
         self._log_path = os.path.abspath(log_path)
-        raw_halt = halt_path if halt_path else halt_marker_path(self._log_path)
-        self._halt_path = os.path.abspath(raw_halt)
+        beside_log = halt_marker_path(self._log_path)
+        self._halt_path = os.path.abspath(halt_path or beside_log)
+        # An operator-set marker location falls back to the one beside the log,
+        # so one unwritable folder cannot make the switch unthrowable.
+        fallback = fallback_halt_path or (beside_log if halt_path else None)
+        self._halt_paths = tuple(
+            dict.fromkeys(os.path.abspath(p) for p in (self._halt_path, fallback) if p)
+        )
+        # The log folder exists from here on, and this gate remembers which
+        # folder it is. Its removal or replacement later is tamper, not a first
+        # run: the gate denies and does not re-create it.
+        log_dir = os.path.dirname(self._log_path) or "."
+        os.makedirs(log_dir, exist_ok=True)
+        self._log_dir_id = _folder_id(log_dir)
+        self._log_folder_lost = False
         self._mode = mode
 
     @property
@@ -688,18 +740,43 @@ class Gate:
     def halt_path(self) -> str:
         return self._halt_path
 
+    @property
+    def halt_paths(self) -> tuple[str, ...]:
+        """Every marker location, primary first; a marker at any of them is thrown."""
+        return self._halt_paths
+
     def throw(self, reason: str = "") -> bool:
         """Throw the kill switch. True if this call threw it, False if already thrown.
 
-        The marker goes down before the THROWN row. If the log write then fails,
-        the switch is still thrown and the error is raised.
+        The marker goes in the first location that takes it. If none does, this
+        raises KillSwitchUnthrowable rather than returning as if it worked; the
+        gate already denies every call in that state. The marker goes down before
+        the THROWN row. If the log write then fails, the switch is still thrown
+        and the error is raised.
         """
-        os.makedirs(os.path.dirname(self._halt_path) or ".", exist_ok=True)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        try:
-            fd = os.open(self._halt_path, flags, 0o600)
-        except FileExistsError:
+        if any(os.path.lexists(p) for p in self._halt_paths):
             return False
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        failures = []
+        for path in self._halt_paths:
+            try:
+                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            except OSError as exc:
+                failures.append(f"{path}: {exc!r}")
+                continue
+            try:
+                fd = os.open(path, flags, 0o600)
+            except FileExistsError:
+                return False
+            except OSError as exc:
+                failures.append(f"{path}: {exc!r}")
+                continue
+            break
+        else:
+            raise KillSwitchUnthrowable(
+                "kill switch NOT thrown, no halt location took the marker: "
+                + "; ".join(failures)
+            )
         try:
             os.write(fd, f"thrown at {time.time()}: {reason}\n".encode())
             os.fsync(fd)
@@ -710,37 +787,70 @@ class Gate:
             f"kill switch thrown: {reason or 'no reason given'}",
             "",
             "",
-            (self._halt_path,),
+            (path,),
             enforced=True,
         )
         record_decision(self._log_path, self._mode, decision)
         return True
 
     def _halt_state(self) -> str | None:
-        """Deny reason from the marker, or None when it is not there.
+        """Deny reason from the switch, or None when calls may proceed.
 
-        Read on every call and never cached. Only FileNotFoundError means not
-        thrown. Any other error reading the marker is a deny.
+        Read on every call and never cached. Only FileNotFoundError means a
+        marker is absent; any other error reading one is a deny. A switch that
+        could not be thrown (no marker location writable) and a missing log
+        folder are both denies: the operator would have no way to stop the gate.
         """
-        try:
-            os.lstat(self._halt_path)
-        except FileNotFoundError:
-            return None
-        except Exception as exc:
-            return f"kill switch state unreadable, failing closed: {exc!r}"
-        return f"kill switch thrown: {self._halt_path} exists; a human removes it"
+        for path in self._halt_paths:
+            try:
+                os.lstat(path)
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                return f"kill switch state unreadable, failing closed: {exc!r}"
+            return f"kill switch thrown: {path} exists; a human removes it"
+        log_dir = os.path.dirname(self._log_path) or "."
+        if _folder_id(log_dir) != self._log_dir_id:
+            # Writing a row now would re-create the folder and start a fresh
+            # chain, so this denial is returned without a log row.
+            self._log_folder_lost = True
+            return (
+                f"decision log folder {log_dir} was removed or replaced, failing closed"
+            )
+        if not any(_can_create_in(os.path.dirname(p) or ".") for p in self._halt_paths):
+            return (
+                "kill switch cannot be thrown (no halt location is writable), "
+                "failing closed"
+            )
+        return None
+
+    def _guarded_name(self, p: str, a: str) -> str | None:
+        """Why a tool path would reach the switch or the log, or None."""
+        log = self._log_path
+        if any(_same_file_name(a, h) for h in self._halt_paths):
+            return f"path '{p}' is the kill switch marker"
+        if any(_same_file_name(a, f) for f in (log, log + ".lock", log + ".witness")):
+            return f"path '{p}' is the gate's own decision log file"
+        folders = {os.path.dirname(h) for h in self._halt_paths}
+        folders.add(os.path.dirname(log))
+        for folder in folders:
+            if _is_same_or_ancestor(a, folder):
+                return f"path '{p}' holds the kill switch or decision log folder"
+        return None
 
     def _kill_switch(
         self, skill: str, tool: str, paths: Sequence[str], base_dir: str | None
     ) -> Decision | None:
         reason = self._halt_state()
         if reason is None:
-            # The agent must not clear or throw the switch through a tool path.
+            # The agent must not clear or throw the switch through a tool path,
+            # nor remove the folder that holds it or the log.
             for p in paths:
                 a = _absolute(p, base_dir)
-                if a is not None and _same_file_name(a, self._halt_path):
-                    reason = f"path '{p}' is the kill switch marker"
-                    break
+                if a is not None:
+                    reason = self._guarded_name(p, a)
+                    if reason is not None:
+                        break
         if reason is None:
             return None
         return Decision(Verdict.DENY, reason, skill, tool, tuple(paths))
@@ -792,7 +902,8 @@ class Gate:
                 )
             # observe mode records the true verdict but does not act on it
             decision = replace(decision, enforced=(self._mode == ENFORCE))
-            self._log(decision, trace=norm_trace, arg_summary=arg_summary)
+            if not self._log_folder_lost:
+                self._log(decision, trace=norm_trace, arg_summary=arg_summary)
             return decision
         except Exception as exc:  # any failure is a denial, on purpose
             decision = Decision(
