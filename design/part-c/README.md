@@ -18,5 +18,5 @@ design scaffold. None of these files change the gate decision path.
 
 ## NOT measured
 
-Implementation, runtime, benchmark, live Hermes, aegisbox, judge apply, B7,
+Implementation, runtime, benchmark, live Hermes, test box, judge apply, B7,
 Zenodo, release, or tag.
