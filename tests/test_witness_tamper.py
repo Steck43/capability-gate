@@ -195,3 +195,76 @@ def test_tool_path_naming_the_anchor_is_denied(area, gate) -> None:
     d = g.evaluate("s", "write_file", [str(anchor)])
     assert d.verdict is Verdict.DENY
     assert "anchor" in d.reason
+
+
+def _witness_only_deleted(gate: Gate, log: Path, work: Path) -> None:
+    os.remove(str(log) + ".witness")
+    try:
+        d = gate.evaluate("s", "write_file", [str(work / "a.md")])
+    except ValueError as exc:
+        assert "witness missing" in str(exc)
+        return
+    assert d.verdict is Verdict.DENY, d.reason
+    assert "witness missing" in d.reason
+
+
+def test_witness_alone_deleted_is_denied(area, gate) -> None:
+    _, work, log, anchor = area
+    lines_before = len(_lines(log))
+    _witness_only_deleted(gate, log, work)
+    assert len(_lines(log)) == lines_before
+    assert not Path(str(log) + ".witness").exists()
+
+
+def test_witness_alone_deleted_is_denied_with_default_anchor(tmp_path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    log = tmp_path / "logs" / "decisions.jsonl"
+    g = Gate(_policy(work), log_path=str(log))
+    for _ in range(3):
+        g.evaluate("s", "write_file", [str(work / "a.md")])
+    _witness_only_deleted(g, log, work)
+    assert len(_lines(log)) == 3
+
+
+# Known gap. With the default anchor beside the log, whoever can write the log
+# folder can also rewrite the witness and the anchor. These cases are caught
+# only when the anchor lives outside the agent's writable tree, and neither
+# hook sets such a location yet. Strict, so a fix turns them into failures that
+# force the marker off.
+_DEFAULT_ANCHOR_GAP = (
+    "default anchor sits beside the log; an agent that can write the log "
+    "folder can rewrite all three"
+)
+
+
+def _default_anchor_gate(tmp_path: Path):
+    work = tmp_path / "work"
+    work.mkdir()
+    log = tmp_path / "logs" / "decisions.jsonl"
+    g = Gate(_policy(work), log_path=str(log))
+    for _ in range(4):
+        g.evaluate("s", "write_file", [str(work / "a.md")])
+    return g, work, log
+
+
+@pytest.mark.xfail(strict=True, reason=_DEFAULT_ANCHOR_GAP)
+def test_default_anchor_log_witness_and_anchor_rewritten(tmp_path) -> None:
+    g, work, log = _default_anchor_gate(tmp_path)
+    kept = _lines(log)[:2]
+    log.write_text("".join(kept), encoding="utf-8")
+    import hashlib
+
+    head = hashlib.sha256(kept[-1].rstrip("\n").encode("utf-8")).hexdigest()
+    for suffix in (".witness", ".anchor"):
+        Path(str(log) + suffix).write_text(
+            json.dumps({"count": 2, "head": head}) + "\n", encoding="utf-8"
+        )
+    _not_allowed(g, work / "a.md")
+
+
+@pytest.mark.xfail(strict=True, reason=_DEFAULT_ANCHOR_GAP)
+def test_default_anchor_log_folder_deleted(tmp_path) -> None:
+    g, work, log = _default_anchor_gate(tmp_path)
+    shutil.rmtree(log.parent)
+    _not_allowed(g, work / "a.md")
