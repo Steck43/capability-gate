@@ -48,6 +48,28 @@ GUARDRAIL_JOBS = {
 }
 ALLOWED_STEP_IFS = {"github.event_name == 'pull_request'"}
 NEUTRALIZERS = re.compile(r"\|\|\s*(true|:)(\s|$)|\bexit\s+0\b|\bset\s+\+e\b")
+_ENV_SINK = re.compile(r"GITHUB_(?:ENV|PATH)")
+_PY_ASSIGN = re.compile(r"(?<![A-Za-z0-9_])(?:PYTEST|PYTHON)[A-Za-z0-9_]*\s*=")
+_ERREXIT = re.compile(r"(?:^|\s)-[A-Za-z]*e[A-Za-z]*(?:\s|$)")
+
+
+def _step_fault(step: dict) -> str | None:
+    """Why this guardrail step would let a failing check pass, or None."""
+    run = _strip_comments(str(step.get("run", "")))
+    if step.get("continue-on-error"):
+        return "continue-on-error"
+    if step.get("if") not in (None, *ALLOWED_STEP_IFS):
+        return f"if: {step.get('if')}"
+    if "PYTEST_ADDOPTS" in (step.get("env") or {}):
+        return "PYTEST_ADDOPTS"
+    if NEUTRALIZERS.search(run):
+        return "neutralizer"
+    if _ENV_SINK.search(run) and _PY_ASSIGN.search(run):
+        return "env-write"
+    shell = step.get("shell")
+    if shell is not None and not _ERREXIT.search(str(shell)):
+        return "shell"
+    return None
 
 
 def test_pytest_ini_keeps_strict_xfail_and_syntax_warning_errors() -> None:
@@ -137,12 +159,8 @@ def test_guardrail_jobs_cannot_be_skipped_or_soft_failed() -> None:
         assert "PYTEST_ADDOPTS" not in (job.get("env") or {}), name
         for s in job.get("steps", []):
             label = (name, s.get("name") or s.get("uses") or s.get("run"))
-            assert not s.get("continue-on-error"), label
-            assert s.get("if") in (None, *ALLOWED_STEP_IFS), label
-            assert "PYTEST_ADDOPTS" not in (s.get("env") or {}), label
-            assert not NEUTRALIZERS.search(_strip_comments(str(s.get("run", "")))), (
-                label
-            )
+            fault = _step_fault(s)
+            assert fault is None, (label, fault)
 
 
 def test_guardrail_commands_run_as_written() -> None:
@@ -160,3 +178,33 @@ def test_guardrail_commands_run_as_written() -> None:
     assert load in leak
     assert 'python "$RUNNER_TEMP/leak_scan.py" --ci --base "$BASE" --head HEAD' in leak
     assert '| python "$RUNNER_TEMP/leak_scan.py" --text' in leak
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        "echo 'PYTEST_ADDOPTS=--co' >> \"$GITHUB_ENV\"\npytest -q",
+        "echo 'PYTHONPATH=/opt/py' >> \"$GITHUB_PATH\"\npython scripts/kat_lint.py",
+    ],
+)
+def test_guardrail_step_rejects_pytest_or_python_env_writes(run: str) -> None:
+    fault = _step_fault({"run": run})
+    assert fault == "env-write", fault
+
+
+@pytest.mark.parametrize(
+    "shell",
+    [
+        "bash --noprofile --norc {0}",
+        "bash {0}",
+    ],
+)
+def test_guardrail_step_rejects_shell_without_errexit(shell: str) -> None:
+    fault = _step_fault({"run": "python scripts/kat_lint.py", "shell": shell})
+    assert fault == "shell", fault
+
+
+def test_guardrail_step_allows_default_shell_and_errexit() -> None:
+    assert _step_fault({"run": "pytest -q"}) is None
+    assert _step_fault({"run": "pytest -q", "shell": "bash -e {0}"}) is None
+    assert _step_fault({"run": "pytest -q", "shell": "bash -eo pipefail {0}"}) is None
