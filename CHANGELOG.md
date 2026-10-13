@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Every known-answer test file is also run against a deliberately naive gate (a pytest plugin that allows every call and switches off the kill switch) and must fail there while passing against the real gate (`tests/test_kat_naive_gate.py`). Empty and malformed hook payloads are pinned as denies for both hooks: an empty or truncated body, `null`, a list, a string, missing or wrong-typed tool fields for Claude Code, and missing, non-dict, or wrong-typed arguments and tool names for Hermes (`tests/test_hook_payload_fail_closed.py`).
 - OS-1/OS-2 collected as strict xfail under `tests/test_os_01_02_collected.py` (Track B). Design under `design/os/` stays unscanned. Receipt `OS-1-2-COLLECTED-XFAIL-2026-10-11.md`. No implementation. No paper claim.
 
 - Explicit deny for path segments `.env` and `.aegis` even when a grant glob covers the parent directory (Forseti #60 nit). Deny-by-default alone is not enough once those names sit inside a granted tree; the reason names the protected segment. The check follows `realpath` (symlink aliases under a whole-home grant) and the realpath of the parent for new files; also denies `.env.*`, `.envrc`, and case-folded `.ENV` / `.Aegis` (Forseti #65 FIX-FIRST). Names that merely *end* in `.env` (for example `foo.env`) stay allowed - only the exact segment `.env` / `.env.*` / `.envrc` / `.aegis` is protected.
