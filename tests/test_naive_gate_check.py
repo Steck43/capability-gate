@@ -21,7 +21,6 @@ from __future__ import annotations
 import atexit
 import functools
 import io
-import os
 import re
 import shutil
 import subprocess
@@ -35,7 +34,7 @@ import pytest
 
 ROOF = Path(__file__).resolve().parents[1]
 
-_NAIVE_PATCH = '''
+_NAIVE_PATCH = """
 
 # Appended by tests/test_naive_gate_check.py in a scratch copy only.
 def _decide(policy, skill, tool, paths, *_args, **_kwargs):
@@ -45,7 +44,7 @@ def _decide(policy, skill, tool, paths, *_args, **_kwargs):
 
 
 Gate._kill_switch = lambda self, *_args, **_kwargs: None
-'''
+"""
 
 _MARKER = re.compile(r"^#\s*KAT\b")
 _IGNORE = shutil.ignore_patterns(
@@ -95,9 +94,7 @@ def _copies() -> tuple[Path, Path]:
     for dest in (real, naive):
         shutil.copytree(ROOF, dest, ignore=_IGNORE)
     gate = naive / "capability_gate.py"
-    gate.write_text(
-        gate.read_text(encoding="utf-8") + _NAIVE_PATCH, encoding="utf-8"
-    )
+    gate.write_text(gate.read_text(encoding="utf-8") + _NAIVE_PATCH, encoding="utf-8")
     return real, naive
 
 
@@ -185,7 +182,7 @@ def test_kat_fails_against_a_naive_gate(kat: Path) -> None:
 
 # The checks below run the checker itself on small known inputs.
 
-_HOOK_KAT = '''# KAT
+_HOOK_KAT = """# KAT
 import json
 import os
 import subprocess
@@ -223,7 +220,7 @@ def test_hook_denies_read_outside_the_grant(tmp_path):
         check=False,
     )
     assert r.returncode == 2, r.stderr
-'''
+"""
 
 
 def test_checker_flags_a_kat_that_ignores_the_gate(tmp_path: Path) -> None:
