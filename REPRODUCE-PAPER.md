@@ -71,9 +71,9 @@ Expected: exit 0. The check regenerates every path in `.floor/derived.tsv`,
 including `SHA256SUMS`, and refuses a committed derived artifact that differs.
 Return to `capability-gate` before running the other commands.
 
-## Live KVM / aegisbox evidence
+## Live KVM / test box evidence
 
-The offline command does not start a KVM or contact aegisbox. The live
+The offline command does not start a KVM or contact the test box. The live
 three-object replay is recorded separately in
 `Steck43/hermes-agent-estate:wsl/receipts/STEP-11b-2026-10-09.md`:
 call id `step11-20261010T050143Z`, raw artifact
@@ -83,9 +83,9 @@ and 7 passing behavioral negatives. That receipt proves the named replay only;
 it does not independently attest the host hypervisor or make a KVM path always
 invoked. Judge apply remains false.
 
-## Vör hand-off — T-REP-01
+## Independent reproduction hand-off: T-REP-01
 
-Vör should run the Cold clone block in an empty directory, then run the
+An independent tester should run the Cold clone block in an empty directory, then run the
 one-command offline reproduction without a vault, host allowlist, or existing
 sibling worktree. Return the three checked-out SHAs, Python and operating-system
 versions, the exact pytest summary, exit code, and a sha256 of the captured
@@ -95,7 +95,7 @@ test.
 
 ## Claim boundary
 
-These commands do not run Hermes, AgentDojo, a model, or aegisbox. They do not
+These commands do not run Hermes, AgentDojo, a model, or the test box. They do not
 establish live mount coverage, end-to-end utility, attack success rate, box
 containment, judge application, or benign-day performance. Live tiers must
 write separate receipts with immutable raw artifacts and final sha256 values.
