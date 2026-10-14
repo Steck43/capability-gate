@@ -134,15 +134,20 @@ def test_ks_state_error_fails_closed(root, log, monkeypatch):
 def test_ks_log_one_thrown_row_chain_holds_denies_logged(gate, root, log):
     # KS-LOG: one THROWN row on the existing chain, and the denies after it
     # are logged like any other deny.
-    gate.evaluate("writer", "write_file", [_granted(root)])
+    assert gate.evaluate("writer", "write_file", [_granted(root)]).verdict is (
+        Verdict.ALLOW
+    )
     assert _thrown_rows(log) == []
-    gate.throw("drill")
+    assert gate.throw("drill") is True
     thrown = _thrown_rows(log)
     assert len(thrown) == 1
     assert "kill switch" in thrown[0]["reason"]
     assert thrown[0]["paths"] == [gate.halt_path]
-    gate.evaluate("writer", "write_file", [_granted(root)])
-    gate.evaluate("writer", "read_file", [_granted(root)])
+    denies = [
+        gate.evaluate("writer", "write_file", [_granted(root)]),
+        gate.evaluate("writer", "read_file", [_granted(root)]),
+    ]
+    assert [d.verdict for d in denies] == [Verdict.DENY, Verdict.DENY]
     verify_hash_chain(str(log))
     after = _rows(log)[-2:]
     assert [r["verdict"] for r in after] == ["deny", "deny"]
@@ -163,8 +168,9 @@ def test_ks_tamper_thrown_row_breaks_chain(gate, root, log):
     # so its parent link no longer matches and the chain check raises. An
     # edit to the very last line is not caught by the chain; that limit is
     # older than this switch.
-    gate.throw("drill")
-    gate.evaluate("writer", "write_file", [_granted(root)])
+    assert gate.throw("drill") is True
+    d = gate.evaluate("writer", "write_file", [_granted(root)])
+    assert d.verdict is Verdict.DENY
     lines = log.read_text(encoding="utf-8").splitlines(keepends=True)
     idx = next(i for i, x in enumerate(lines) if '"thrown"' in x)
     rec = json.loads(lines[idx])

@@ -14,7 +14,7 @@
     "pytest.ini": "f26f5057babf7775f4a689365a0d82344e44417313f8c390c9c7a3b2a1bd5e38",
     "requirements-ci.lock": "b0883c22e6b31cca54a2180736c25294afac5e2f119c39c6ed6a4cb6e21ee6b7",
     "scripts/floor_guard.py": "0d32ad8605b73194f85a8cd3e4f224e652a5a11488156b0f9600ed3a262dee05",
-    "scripts/kat_lint.py": "5556b62a406d2a47a933456dc77fcb33ee029a96849bb34c3e626143e76bbe00",
+    "scripts/kat_lint.py": "88beb1d41bf2fe217b15847d1126af133fce6001bba83d7bdfeb43f0f09d625f",
     "scripts/leak_denylist_scan.py": "e44934d6ac19235c024d2cc3b86667ef04f955dc6a555c0878aee99eb737a136",
     "tests/test_floor_config.py": "4acaaccc0ea7b13e1f5cb87354e3ed398ded4d3b554ff820f89a76ce79f3414e"
   },
