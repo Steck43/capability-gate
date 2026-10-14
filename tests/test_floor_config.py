@@ -83,8 +83,10 @@ ALLOWED_ENV = {
         "LEAK_DENYLIST": "${{ secrets.LEAK_DENYLIST }}",
         "EVENT_NAME": "${{ github.event_name }}",
         "PUSH_BEFORE": "${{ github.event.before }}",
+        "PR_BASE": "${{ github.event.pull_request.base.sha }}",
         "PR_TITLE": "${{ github.event.pull_request.title }}",
         "PR_BODY": "${{ github.event.pull_request.body }}",
+        "PR_BRANCH": "${{ github.head_ref }}",
     },
     "tests": {
         "AEGIS_ATOMS_ROOT": "${{ github.workspace }}/aegis-atoms",
@@ -327,7 +329,10 @@ def test_guardrail_commands_run_as_written() -> None:
         and "pip install" not in str(s.get("run", ""))
     ]
     assert pytest_runs == ["pytest -q"], pytest_runs
-    assert "python scripts/kat_lint.py" in _runs(jobs["kat-lint"]).splitlines()
+    kat = _runs(jobs["kat-lint"])
+    assert "origin/main:scripts/kat_lint.py" in kat
+    assert 'python "$RUNNER_TEMP/kat_lint.py"' in kat
+    assert "cp scripts/kat_lint.py" in kat
     leak = _runs(jobs["leak-denylist"])
     load = 'git show origin/main:scripts/leak_denylist_scan.py > "$RUNNER_TEMP/leak_scan.py"'
     assert load in leak

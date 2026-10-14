@@ -52,11 +52,13 @@ runs.
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 import re
 import subprocess
 import sys
 from collections import Counter
+from urllib.parse import unquote
 from pathlib import Path
 
 ENV_VAR = "LEAK_DENYLIST"
@@ -162,19 +164,49 @@ def _labels(line: str, names: list[re.Pattern[str]]) -> list[str]:
     return out
 
 
+def _views(line: str) -> list[str]:
+    """Plain text plus the encodings a line can hide a name in."""
+    found = [line]
+    unescaped = re.sub(
+        r"\\u([0-9a-fA-F]{4})", lambda match: chr(int(match.group(1), 16)), line
+    )
+    if unescaped != line:
+        found.append(unescaped)
+    decoded = unquote(line)
+    if decoded != line:
+        found.append(decoded)
+    for blob in re.findall(r"[A-Za-z0-9+/]{4,}={0,2}", line):
+        if len(blob) < 8:
+            continue
+        try:
+            raw = base64.b64decode(blob, validate=True)
+            text = raw.decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if text.isprintable() and text not in found:
+            found.append(text)
+    return found
+
+
 def scan_text(text: str, names: list[re.Pattern[str]]) -> list[tuple[int, str]]:
     """(line number, rule label) per hit. Labels never contain the matched text."""
     hits: list[tuple[int, str]] = []
     for n, line in enumerate(text.splitlines(), 1):
-        raw = _labels(line, names)
-        hits += [(n, label) for label in raw]
-        joined = _JOIN.sub("", line)
-        if joined != line:
-            hits += [
-                (n, f"{label} (split string)")
-                for label in _labels(joined, names)
-                if label not in raw
-            ]
+        seen: set[str] = set()
+        for view in _views(line):
+            raw = _labels(view, names)
+            hits += [(n, label) for label in raw if label not in seen]
+            seen.update(raw)
+            joined = _JOIN.sub("", view)
+            if joined != view:
+                hits += [
+                    (n, f"{label} (split string)")
+                    for label in _labels(joined, names)
+                    if label not in seen and f"{label} (split string)" not in seen
+                ]
+                seen.update(
+                    f"{label} (split string)" for label in _labels(joined, names)
+                )
     return hits
 
 
@@ -253,18 +285,34 @@ def _added_lines(rev: str, *diff_args: str) -> list[tuple[str, str]]:
     out = []
     current = None
     lineno = 0
+    in_hunk = False
+    saw_old = False
     for line in diff.splitlines():
-        if line.startswith("+++ "):
+        if line.startswith("diff --git "):
+            in_hunk = False
+            saw_old = False
+            current = None
+            continue
+        if line.startswith("--- ") and not in_hunk:
+            saw_old = True
+            continue
+        if line.startswith("+++ ") and not in_hunk and saw_old:
             current = _target(line)
-        elif m := _BINARY.match(line):
+            saw_old = False
+            continue
+        if m := _BINARY.match(line):
             path = _b_path(m.group(2), line)
             if path is not None:
                 text, wide = _decode(_git_bytes("show", f"{rev}:{path}"))
                 if text is not None and wide:
                     out.append((f"{path} (UTF-16)", text))
         elif m := _HUNK.match(line):
+            in_hunk = True
+            saw_old = False
             lineno = int(m.group(1))
-        elif current and line.startswith("+"):
+        elif current and in_hunk and line.startswith("+"):
+            # Inside a hunk, one leading "+" is the diff marker. Text that
+            # itself starts with "++" is content, not the next file header.
             by_file.setdefault(current, {})[lineno] = line[1:]
             lineno += 1
     for path, added in by_file.items():

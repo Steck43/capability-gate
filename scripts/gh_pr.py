@@ -26,6 +26,21 @@ import leak_denylist_scan as scan  # noqa: E402
 
 _TEXT = {"--title": "title", "-t": "title", "--body": "body", "-b": "body"}
 _FILE = {"--body-file", "-F"}
+_REFUSE = {
+    "--fill",
+    "--fill-first",
+    "--fill-verbose",
+    "--editor",
+    "-T",
+    "--web",
+    "--template",
+}
+_ATTACHED = (("-t", "title", False), ("-b", "body", False), ("-F", "body file", True))
+
+
+class _Bypass(Exception):
+    def __init__(self, flag: str) -> None:
+        self.flag = flag
 
 
 def _pieces(args: list[str]) -> tuple[list[tuple[str, str]], list[str]]:
@@ -36,6 +51,25 @@ def _pieces(args: list[str]) -> tuple[list[tuple[str, str]], list[str]]:
     while i < len(args):
         arg = args[i]
         flag, eq, inline = arg.partition("=")
+        if flag in _REFUSE:
+            raise _Bypass(flag)
+        attached = False
+        for short, label, is_file in _ATTACHED:
+            if (
+                arg.startswith(short)
+                and len(arg) > len(short)
+                and not arg.startswith("--")
+                and not eq
+            ):
+                value = arg[len(short) :]
+                text = Path(value).read_text(encoding="utf-8") if is_file else value
+                out.append((label, text))
+                passed.append(arg)
+                attached = True
+                break
+        if attached:
+            i += 1
+            continue
         if flag in _TEXT or flag in _FILE:
             value = inline if eq else (args[i + 1] if i + 1 < len(args) else "")
             if flag in _FILE:
@@ -69,7 +103,11 @@ def main(argv: list[str]) -> int:
     if names is None:
         print("gh_pr: denylist not configured; refusing to send text unchecked")
         return 1
-    pieces, passed = _pieces(argv)
+    try:
+        pieces, passed = _pieces(argv)
+    except _Bypass as exc:
+        print(f"gh_pr: {exc.flag} composes text outside the scan; gh was not called")
+        return 2
     hits = [
         (label, n, rule)
         for label, text in pieces

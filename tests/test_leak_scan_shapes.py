@@ -6,9 +6,12 @@ Fixtures are assembled at runtime through _j so this file cannot trip the scan.
 
 from __future__ import annotations
 
+import base64
 import os
+import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -222,6 +225,66 @@ def test_gh_wrapper_passes_clean_text_through(tmp_path: Path) -> None:
             "main",
         ]
     )
+
+
+def test_added_line_that_looks_like_a_diff_header_is_scanned(repo: Path) -> None:
+    (repo / "notes.md").write_text("++ b/" + NAME + "\n", encoding="utf-8")
+    _git(repo, "add", "notes.md")
+    _git(repo, "commit", "-qm", "add a line")
+    r = _scan(["--ci", "--base", "HEAD~1"], repo)
+    assert r.returncode == 1, r.stdout + r.stderr
+
+
+def test_encoded_name_is_scanned(tmp_path: Path) -> None:
+    coded = base64.b64encode(NAME.encode()).decode()
+    target = tmp_path / "note.md"
+    target.write_text(coded + "\n", encoding="utf-8")
+    r = _scan([str(target)], tmp_path)
+    assert r.returncode == 1, r.stdout
+
+
+def test_attached_short_flag_is_scanned(tmp_path: Path) -> None:
+    r, calls = _wrapper(tmp_path, "create", "-t" + "Fix for " + NAME, "-b" + "ok")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert not calls.exists()
+
+
+@pytest.mark.parametrize("flag", ["--fill", "--editor", "-T", "--web"])
+def test_unscanned_compose_modes_are_refused(tmp_path: Path, flag: str) -> None:
+    r, calls = _wrapper(tmp_path, "create", flag, "--title", "Plain")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert not calls.exists()
+
+
+def test_each_gitleaks_rule_has_a_hit_and_a_miss() -> None:
+    rules = {
+        item["id"]: item["regex"]
+        for item in tomllib.loads(
+            (ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
+        )["rules"]
+    }
+    samples = {
+        "windows-user-home-path": (
+            _j("/", "C:", "Users", "someone", "x"),
+            "C:/Temp/x",
+        ),
+        "macos-user-home-path": (_j("/", "", "Users", "someone"), "/opt/share"),
+        "wsl-mount-home-path": (
+            _j("/", "", "mnt", "c", "Users", "someone"),
+            "/mnt/c/tmp",
+        ),
+        "wsl-network-home-path": (
+            BS * 2 + _j(BS, "wsl$", "Ubuntu", "home", "someone"),
+            "wsl-docs",
+        ),
+        "posix-home-path": (_j("/", "", "home", "someone"), "/opt/home"),
+        "private-ipv4": (_j(".", "10", "1", "2", "3"), _j(".", "8", "8", "8", "8")),
+    }
+    assert set(samples) == set(rules)
+    for rule_id, (hit, miss) in samples.items():
+        pattern = re.compile(rules[rule_id])
+        assert pattern.search(hit), rule_id
+        assert pattern.search(miss) is None, rule_id
 
 
 def test_gh_wrapper_fails_closed_without_list(tmp_path: Path) -> None:
