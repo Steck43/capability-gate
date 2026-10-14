@@ -66,11 +66,11 @@
     },
     {
       "path": "scripts/leak_denylist_scan.py",
-      "sha256": "f925595a49c664fc4ba8f17c83a3cbca4e173afe80ed14812aadc793c3a7aeed"
+      "sha256": "e004625d16e28a262f9ca4009620bc2d2832767838a016ae8c463c0159be5ac7"
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "e3d5c78d06b5223a3d0ba8bb88856d28a61357fa97ed49525ee5504d1f668dae"
+      "sha256": "03db17c4aec9f7e0dd380ab0b3862389ea652a0b1d9de61712fc6c9a19c3351f"
     }
   ],
   "jobs": [

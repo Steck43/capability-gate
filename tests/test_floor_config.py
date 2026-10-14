@@ -802,3 +802,15 @@ def test_floor_guard_job_reads_guard_pins_and_lock_from_base() -> None:
 def test_the_tamper_list_covers_every_property() -> None:
     keys = {label.split()[0] for label, *_ in TAMPERS}
     assert keys == {"T1", "T2", "T3", "T4", "T5", "T6", "T7"}
+
+
+def test_branch_scan_reads_the_head_branch_with_the_list() -> None:
+    steps = _workflow()["jobs"]["leak-denylist"]["steps"]
+    step = [s for s in steps if s.get("name") == "scan pull request branch"]
+    assert len(step) == 1
+    assert step[0]["env"] == {
+        "LEAK_DENYLIST": "${{ secrets.LEAK_DENYLIST }}",
+        "PR_BRANCH": "${{ github.head_ref }}",
+    }
+    assert step[0]["if"] == "github.event_name == 'pull_request'"
+    assert '"$PR_BRANCH"' in step[0]["run"]
