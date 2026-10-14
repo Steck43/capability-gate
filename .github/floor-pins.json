@@ -1,36 +1,125 @@
 {
-  "files": {
-    ".floor/craft/changelog_gate.py": "d4cbe405689cf9836da7c70285cb959a44b4121d64284e550702db102ee23b7d",
-    ".floor/craft/comment_craft.py": "a49020805136111e913987cfab821052766cb2a59d6fb971086b34a36dafafa8",
-    ".floor/craft/comment_craft_staged.py": "456cb9767852d7de366d8f4e6b6d4f3cf1cfced23b4f00b472f3c9580cd74278",
-    ".floor/craft/empty_diff_gate.py": "4478fa415322a991afb39857d7eed9ab33295fd45e54fd6e8644743e20973399",
-    ".floor/craft/empty_range.py": "f344fc6c8e83a0671cf4cae779df419164b299dc7c4c9cd2d1ac10c0c2dbe82c",
-    ".floor/craft/voice_lint.py": "ccd6331d60d4de5b1edf996a8b2cbe90b4ce7bf07c3b1e5d65b3deb428dc018f",
-    ".github/workflows/floor.yml": "cb71cc2da15552eae6f4d0d503a89ec2d4f08031fe16365113e007f802082577",
-    ".github/workflows/plugin-bundle.yml": "d76ca70b443199ebf287bd3d2743af5ea7a53163a6e95f545c7e418f4f66403a",
-    ".github/workflows/scorecard.yml": "d2caaaf9df5d5d67440c32e0b1eb99b5dadbaecde9c9a7402fc9d733fe9b51fd",
-    ".gitleaks.toml": "72cd732aa8da3890e81c06a42dd49c1731f23cb3264db7fb10064e8c9eeac343",
-    ".pre-commit-config.yaml": "6e2a4c6e7857ff3931fdb42d383d21df199c938cc788306355f4e2b99df895b5",
-    "pytest.ini": "f26f5057babf7775f4a689365a0d82344e44417313f8c390c9c7a3b2a1bd5e38",
-    "requirements-ci.lock": "b0883c22e6b31cca54a2180736c25294afac5e2f119c39c6ed6a4cb6e21ee6b7",
-    "scripts/floor_guard.py": "0d32ad8605b73194f85a8cd3e4f224e652a5a11488156b0f9600ed3a262dee05",
-    "scripts/kat_lint.py": "88beb1d41bf2fe217b15847d1126af133fce6001bba83d7bdfeb43f0f09d625f",
-    "scripts/leak_denylist_scan.py": "e44934d6ac19235c024d2cc3b86667ef04f955dc6a555c0878aee99eb737a136",
-    "tests/test_floor_config.py": "4acaaccc0ea7b13e1f5cb87354e3ed398ded4d3b554ff820f89a76ce79f3414e"
-  },
-  "jobs": {
-    "authorship": "83275b07c86396684fe4df378e33499dcfd4d7f1789455f179f4be369bb6a583",
-    "craft-changelog": "13b7ba0794707ee54b9be356196f79c8619fecd2ceba5f1d88daf62c1b6ee313",
-    "craft-comments": "828c725f31591e4fd05b4514fa201ebce3f2d56a3752ee4504797f5fe1b0cbec",
-    "craft-empty-diff": "5c4960942e8679ae2427e1527e0c9ebbd0fdc7f9d9fe792cb1b92205e4eb4435",
-    "craft-voice": "65d86c60881a3d4e15a14a687828c36a2a5806dafa1b5b522a8ba0b7b2195921",
-    "floor-guard": "8d17d6c644167b1397a436976adaf3a8fdd55287edfc8b66303dee9dcb8ebd89",
-    "kat-lint": "1748cd53ba5c1a15a7f9ee2a9ec3247401170895854ca0b511145e59d6153fa0",
-    "leak-denylist": "b716352b513c165f70ccbce30d6db3231d03e98b4ac7879fad9444c104419072",
-    "lint": "b54b36abd2662587f57b5ff0a1515907b43dae6c171e7accbc808fd47db3513b",
-    "secrets": "c72dcbf82a9c0e7de22e75f4e0764ee579e7846709adb9f492f7bb456f1af704",
-    "tests": "e88d8821eb1acb062c2a096edb4a36868df7aff4b450428458e88c973951a7a7",
-    "workflow-lint": "587306b7386cc6d73bd4c1144d89ba61f2f189b96d90c580c0a2fde4692fe254"
-  },
-  "workflow": "00d9934e759a93c13e9902ec0412f12474574973fe134172b091d7fabf3222ee"
+  "files": [
+    {
+      "path": ".floor/craft/changelog_gate.py",
+      "sha256": "d4cbe405689cf9836da7c70285cb959a44b4121d64284e550702db102ee23b7d"
+    },
+    {
+      "path": ".floor/craft/comment_craft.py",
+      "sha256": "a49020805136111e913987cfab821052766cb2a59d6fb971086b34a36dafafa8"
+    },
+    {
+      "path": ".floor/craft/comment_craft_staged.py",
+      "sha256": "456cb9767852d7de366d8f4e6b6d4f3cf1cfced23b4f00b472f3c9580cd74278"
+    },
+    {
+      "path": ".floor/craft/empty_diff_gate.py",
+      "sha256": "4478fa415322a991afb39857d7eed9ab33295fd45e54fd6e8644743e20973399"
+    },
+    {
+      "path": ".floor/craft/empty_range.py",
+      "sha256": "f344fc6c8e83a0671cf4cae779df419164b299dc7c4c9cd2d1ac10c0c2dbe82c"
+    },
+    {
+      "path": ".floor/craft/voice_lint.py",
+      "sha256": "ccd6331d60d4de5b1edf996a8b2cbe90b4ce7bf07c3b1e5d65b3deb428dc018f"
+    },
+    {
+      "path": ".github/workflows/floor.yml",
+      "sha256": "cb71cc2da15552eae6f4d0d503a89ec2d4f08031fe16365113e007f802082577"
+    },
+    {
+      "path": ".github/workflows/plugin-bundle.yml",
+      "sha256": "d76ca70b443199ebf287bd3d2743af5ea7a53163a6e95f545c7e418f4f66403a"
+    },
+    {
+      "path": ".github/workflows/scorecard.yml",
+      "sha256": "d2caaaf9df5d5d67440c32e0b1eb99b5dadbaecde9c9a7402fc9d733fe9b51fd"
+    },
+    {
+      "path": ".gitleaks.toml",
+      "sha256": "72cd732aa8da3890e81c06a42dd49c1731f23cb3264db7fb10064e8c9eeac343"
+    },
+    {
+      "path": ".pre-commit-config.yaml",
+      "sha256": "6e2a4c6e7857ff3931fdb42d383d21df199c938cc788306355f4e2b99df895b5"
+    },
+    {
+      "path": "pytest.ini",
+      "sha256": "f26f5057babf7775f4a689365a0d82344e44417313f8c390c9c7a3b2a1bd5e38"
+    },
+    {
+      "path": "requirements-ci.lock",
+      "sha256": "b0883c22e6b31cca54a2180736c25294afac5e2f119c39c6ed6a4cb6e21ee6b7"
+    },
+    {
+      "path": "scripts/floor_guard.py",
+      "sha256": "ec90eba1c36f9cd1c16c1465428e75679a8905b11f9b6a85d6880dc5c060ed36"
+    },
+    {
+      "path": "scripts/kat_lint.py",
+      "sha256": "88beb1d41bf2fe217b15847d1126af133fce6001bba83d7bdfeb43f0f09d625f"
+    },
+    {
+      "path": "scripts/leak_denylist_scan.py",
+      "sha256": "e44934d6ac19235c024d2cc3b86667ef04f955dc6a555c0878aee99eb737a136"
+    },
+    {
+      "path": "tests/test_floor_config.py",
+      "sha256": "28be953b055f8be2c39e2517e6fea90ddba687fa7b957e8fe97098a6287b8809"
+    }
+  ],
+  "jobs": [
+    {
+      "job": "authorship",
+      "sha256": "83275b07c86396684fe4df378e33499dcfd4d7f1789455f179f4be369bb6a583"
+    },
+    {
+      "job": "craft-changelog",
+      "sha256": "13b7ba0794707ee54b9be356196f79c8619fecd2ceba5f1d88daf62c1b6ee313"
+    },
+    {
+      "job": "craft-comments",
+      "sha256": "828c725f31591e4fd05b4514fa201ebce3f2d56a3752ee4504797f5fe1b0cbec"
+    },
+    {
+      "job": "craft-empty-diff",
+      "sha256": "5c4960942e8679ae2427e1527e0c9ebbd0fdc7f9d9fe792cb1b92205e4eb4435"
+    },
+    {
+      "job": "craft-voice",
+      "sha256": "65d86c60881a3d4e15a14a687828c36a2a5806dafa1b5b522a8ba0b7b2195921"
+    },
+    {
+      "job": "floor-guard",
+      "sha256": "8d17d6c644167b1397a436976adaf3a8fdd55287edfc8b66303dee9dcb8ebd89"
+    },
+    {
+      "job": "kat-lint",
+      "sha256": "1748cd53ba5c1a15a7f9ee2a9ec3247401170895854ca0b511145e59d6153fa0"
+    },
+    {
+      "job": "leak-denylist",
+      "sha256": "b716352b513c165f70ccbce30d6db3231d03e98b4ac7879fad9444c104419072"
+    },
+    {
+      "job": "lint",
+      "sha256": "b54b36abd2662587f57b5ff0a1515907b43dae6c171e7accbc808fd47db3513b"
+    },
+    {
+      "job": "secrets",
+      "sha256": "c72dcbf82a9c0e7de22e75f4e0764ee579e7846709adb9f492f7bb456f1af704"
+    },
+    {
+      "job": "tests",
+      "sha256": "e88d8821eb1acb062c2a096edb4a36868df7aff4b450428458e88c973951a7a7"
+    },
+    {
+      "job": "workflow-lint",
+      "sha256": "587306b7386cc6d73bd4c1144d89ba61f2f189b96d90c580c0a2fde4692fe254"
+    }
+  ],
+  "workflow": {
+    "sha256": "00d9934e759a93c13e9902ec0412f12474574973fe134172b091d7fabf3222ee"
+  }
 }

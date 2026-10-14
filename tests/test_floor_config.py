@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import configparser
 import json
+import re
 import shutil
 import sys
 import tomllib
@@ -44,8 +45,8 @@ def test_live_floor_matches_its_pins_and_rules() -> None:
 
 
 def test_pins_cover_every_job_and_guard_file() -> None:
-    pins = json.loads(
-        (ROOT / ".github" / "floor-pins.json").read_text(encoding="utf-8")
+    pins = guard.pins_from_file(
+        json.loads((ROOT / ".github" / "floor-pins.json").read_text(encoding="utf-8"))
     )
     assert set(pins["jobs"]) == set(_workflow()["jobs"])
     for rel in (
@@ -590,7 +591,7 @@ def test_each_tamper_planted_in_the_real_workflow_turns_the_floor_red(
     # With the pins regenerated, as an attacker would: the rules still catch it,
     # except for values only an exact pin can judge.
     (root / guard.PINS).write_text(
-        json.dumps(guard.compute_pins(root)), encoding="utf-8"
+        json.dumps(guard.pins_to_file(guard.compute_pins(root))), encoding="utf-8"
     )
     found = guard.violations(root)
     if pin_only:
@@ -645,6 +646,99 @@ def test_a_missing_pin_file_fails_closed(tmp_path: Path) -> None:
     root = _copy_tree(tmp_path)
     (root / guard.PINS).unlink()
     assert guard.violations(root) == ["pin: .github/floor-pins.json is missing"]
+
+
+# Every digest in the pins file sits under a "sha256" field, so no line pairs a
+# credential-shaped name (a job called "secrets") with a 64-hex value.
+_NAMED_HEX = re.compile(r'"([^"]*)"\s*:\s*"[0-9a-fA-F]{64}"')
+
+
+def test_every_pinned_digest_sits_under_a_sha256_field() -> None:
+    text = (ROOT / ".github" / "floor-pins.json").read_text(encoding="utf-8")
+    names = _NAMED_HEX.findall(text)
+    assert len(names) >= 20
+    assert set(names) == {"sha256"}
+
+
+def test_pins_round_trip_through_the_file_form() -> None:
+    pins = guard.compute_pins(ROOT)
+    assert guard.pins_from_file(guard.pins_to_file(pins)) == pins
+    assert (
+        guard.pins_from_file(json.loads(json.dumps(guard.pins_to_file(pins)))) == pins
+    )
+
+
+_H = "a" * 64
+
+
+def _pin_doc(**over: object) -> dict:
+    doc: dict = {
+        "workflow": {"sha256": _H},
+        "files": [{"path": "x.py", "sha256": _H}],
+        "jobs": [{"job": "lint", "sha256": _H}],
+    }
+    doc.update(over)
+    return doc
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        pytest.param(
+            {"workflow": _H, "files": {"x.py": _H}, "jobs": {"lint": _H}},
+            id="old-map-form",
+        ),
+        pytest.param(_pin_doc(extra=1), id="extra-top-key"),
+        pytest.param(
+            {k: v for k, v in _pin_doc().items() if k != "jobs"}, id="missing-group"
+        ),
+        pytest.param(_pin_doc(workflow=_H), id="workflow-not-object"),
+        pytest.param(
+            _pin_doc(workflow={"sha256": _H, "x": 1}), id="workflow-extra-key"
+        ),
+        pytest.param(_pin_doc(workflow={"sha256": "A" * 64}), id="workflow-uppercase"),
+        pytest.param(_pin_doc(files={"x.py": _H}), id="group-not-list"),
+        pytest.param(_pin_doc(files={}), id="group-empty-object"),
+        pytest.param(_pin_doc(files=["x.py"]), id="entry-not-object"),
+        pytest.param(_pin_doc(files=[{"path": "x.py"}]), id="entry-missing-sha"),
+        pytest.param(
+            _pin_doc(files=[{"path": "x.py", "sha256": _H, "x": 1}]),
+            id="entry-extra-key",
+        ),
+        pytest.param(
+            _pin_doc(jobs=[{"path": "lint", "sha256": _H}]), id="wrong-name-field"
+        ),
+        pytest.param(_pin_doc(files=[{"path": "", "sha256": _H}]), id="empty-name"),
+        pytest.param(_pin_doc(files=[{"path": 7, "sha256": _H}]), id="name-not-string"),
+        pytest.param(
+            _pin_doc(files=[{"path": "x.py", "sha256": "a" * 63}]), id="short-digest"
+        ),
+        pytest.param(
+            _pin_doc(files=[{"path": "x.py", "sha256": 1}]), id="digest-not-string"
+        ),
+        pytest.param(
+            _pin_doc(
+                files=[{"path": "x.py", "sha256": _H}, {"path": "x.py", "sha256": _H}]
+            ),
+            id="duplicate-name",
+        ),
+        pytest.param([], id="not-an-object"),
+    ],
+)
+def test_a_malformed_pin_file_fails_closed(tmp_path: Path, doc: object) -> None:
+    root = _copy_tree(tmp_path)
+    (root / guard.PINS).write_text(json.dumps(doc), encoding="utf-8")
+    found = guard.violations(root)
+    assert len(found) == 1 and found[0].startswith(
+        "pin: .github/floor-pins.json is malformed"
+    ), found
+
+
+def test_a_pin_file_that_is_not_json_fails_closed(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    (root / guard.PINS).write_text("{not json", encoding="utf-8")
+    found = guard.violations(root)
+    assert len(found) == 1 and "is malformed" in found[0], found
 
 
 def test_another_workflow_cannot_shadow_a_check_name(tmp_path: Path) -> None:
