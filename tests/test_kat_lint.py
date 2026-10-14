@@ -189,6 +189,19 @@ def test_real_gate_call_asserting_deny_is_accepted(tmp_path: Path) -> None:
     assert run.returncode == 0, run.stdout + run.stderr
 
 
+def test_local_gate_class_is_not_the_real_receiver(tmp_path: Path) -> None:
+    src = (
+        "class Gate:\n"
+        "    def evaluate(self, *args):\n"
+        "        return 'DENY'\n\n\n"
+        "def test_k_local_class():\n"
+        "    assert Gate().evaluate('s', 'read_file', ['x']) == 'DENY'\n"
+    )
+    r = _lint(_write(tmp_path, "test_k_local_class.py", src))
+    assert r.returncode == 1, r.stdout
+    assert "never reaches the gate" in r.stdout
+
+
 def test_local_evaluate_method_is_rejected(tmp_path: Path) -> None:
     r = _lint(_write(tmp_path, "test_k90_local.py", LOCAL_EVALUATE))
     assert r.returncode == 1
@@ -302,6 +315,72 @@ def test_k_gt():
     g.throw(ValueError("x"))
 """,
     ),
+    "constant_comparison": (
+        "constant comparison",
+        """
+def test_k_cmp(gate):
+    gate.evaluate("s", "read_file", ["x"])
+    assert 1 == 2
+""",
+    ),
+    "bound_constant": (
+        "constant comparison",
+        """
+def test_k_bound(gate):
+    left = 1
+    right = 2
+    gate.evaluate("s", "read_file", ["x"])
+    assert left == right
+""",
+    ),
+    "forced_raise": (
+        "forced failure",
+        """
+def test_k_raise(gate):
+    gate.evaluate("s", "read_file", ["x"])
+    raise RuntimeError("fiat")
+""",
+    ),
+    "forced_exit": (
+        "forced exit",
+        """
+def test_k_exit(gate):
+    gate.evaluate("s", "read_file", ["x"])
+    sys.exit(1)
+""",
+    ),
+    "importorskip": (
+        "pytest.importorskip",
+        """
+def test_k_imp(gate):
+    pytest.importorskip("not_a_real_module")
+    gate.evaluate("s", "read_file", ["x"])
+""",
+    ),
+    "constant_skipif": (
+        "skipif on a constant",
+        """
+@pytest.mark.skipif(True, reason="fiat")
+def test_k_skipif(gate):
+    gate.evaluate("s", "read_file", ["x"])
+""",
+    ),
+    "xfail_raises": (
+        "xfail(raises=)",
+        """
+@pytest.mark.xfail(raises=RuntimeError)
+def test_k_xr():
+    raise RuntimeError("fiat")
+""",
+    ),
+    "dynamic_code": (
+        "dynamic code",
+        """
+def test_k_dyn(gate):
+    gate.evaluate("s", "read_file", ["x"])
+    eval("1")
+""",
+    ),
 }
 
 
@@ -342,8 +421,28 @@ def test_k_pl(gate):
             "import pytest\n\n\ndef test_c():\n    pytest.xfail('later')\n",
             "imperative pytest.xfail",
         ),
+        (
+            "import pytest\n\n\n@pytest.mark.skipif(True, reason='x')\n"
+            "def test_d():\n    assert 1\n",
+            "skipif on a constant",
+        ),
+        (
+            "import sys\n\n\ndef test_e():\n    sys.exit(0)\n",
+            "forced exit",
+        ),
+        (
+            "def test_f():\n    eval('1')\n",
+            "dynamic code",
+        ),
     ],
-    ids=["mark-strict-false", "param-strict-false", "imperative-xfail"],
+    ids=[
+        "mark-strict-false",
+        "param-strict-false",
+        "imperative-xfail",
+        "constant-skipif",
+        "forced-exit",
+        "dynamic-code",
+    ],
 )
 def test_xfail_escape_hatches_rejected_in_any_test_file(
     tmp_path: Path, src: str, reason: str

@@ -135,10 +135,30 @@ def _outcome_names(tree: ast.Module, outcome: str) -> set[str]:
     return names
 
 
-def _fiat(node: ast.AST, fail_names: set[str], aliases: set[str]) -> str | None:
+def _call_name(node: ast.AST) -> str:
+    if not isinstance(node, ast.Call):
+        return ""
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
+
+
+def _fiat(
+    node: ast.AST,
+    fail_names: set[str],
+    aliases: set[str],
+    bindings: dict[str, object] | None = None,
+) -> str | None:
     """Name of the fail-by-fiat form node is, if any."""
     if isinstance(node, ast.Call) and _dotted(node.func) in fail_names:
         return "pytest.fail"
+    if isinstance(node, ast.Call) and _dotted(node.func) in {"sys.exit", "os._exit"}:
+        return "forced exit"
+    if isinstance(node, ast.Call) and _call_name(node) in {"eval", "exec"}:
+        return "dynamic code"
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
@@ -151,10 +171,15 @@ def _fiat(node: ast.AST, fail_names: set[str], aliases: set[str]) -> str | None:
         exc = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
         if _dotted(exc) == "AssertionError":
             return "raise AssertionError"
+        return "forced failure"
     if isinstance(node, ast.Assert):
-        known, value = _const(node.test)
+        known, value = _const(node.test, bindings)
+        if known and isinstance(node.test, ast.Compare):
+            return "constant comparison"
         if known and not value:
             return "assert False"
+        if known:
+            return "constant comparison"
     return None
 
 
@@ -176,9 +201,41 @@ def _is_mark(node: ast.expr, mark: str) -> bool:
     return name == mark or name.endswith("." + mark)
 
 
+def _xfail_hides_the_check(
+    node: ast.Call, parents: dict[ast.AST, ast.AST], tree: ast.AST
+) -> bool:
+    """An xfail that never reaches the gate is the outcome. One that does is a known hole."""
+    owner: ast.AST | None = node
+    while owner in parents:
+        owner = parents[owner]
+        if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            break
+    else:
+        return False
+    if not owner.name.startswith("test"):
+        return False
+    parsed = _File(tree)
+    hit, _end = parsed.first_reach_in(owner, frozenset({owner.name}))
+    return not hit
+
+
+def _call_is_in_test(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+    owner: ast.AST | None = node
+    while owner in parents:
+        owner = parents[owner]
+        if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            break
+    else:
+        return False
+    return isinstance(
+        owner, (ast.FunctionDef, ast.AsyncFunctionDef)
+    ) and owner.name.startswith("test")
+
+
 def lint_hatches(src: str, label: str) -> list[str]:
     """Escape hatches that defeat xfail_strict, checked in every test file."""
     tree = ast.parse(src, filename=label)
+    parents = _parents(tree)
     xfail_calls = _outcome_names(tree, "xfail")
     problems = []
     for n in ast.walk(tree):
@@ -193,16 +250,114 @@ def lint_hatches(src: str, label: str) -> list[str]:
             problems.append(
                 f"{label}:{n.lineno}: imperative pytest.xfail is never strict"
             )
+        if isinstance(n, ast.Call) and _dotted(n.func) in {"sys.exit", "os._exit"}:
+            if _call_is_in_test(n, parents):
+                problems.append(f"{label}:{n.lineno}: forced exit decides the test")
+        if isinstance(n, ast.Call) and _call_name(n) in {"eval", "exec"}:
+            if _call_is_in_test(n, parents):
+                problems.append(f"{label}:{n.lineno}: dynamic code decides the test")
+        if isinstance(n, ast.Call) and _is_mark(n, "mark.skipif") and n.args:
+            known, value = _const(n.args[0])
+            if known and value and not _PLATFORM.search(ast.unparse(n.args[0])):
+                problems.append(
+                    f"{label}:{n.lineno}: skipif on a constant never runs the check"
+                )
+        if isinstance(n, ast.Call) and _is_mark(n, "mark.xfail"):
+            strict = any(
+                kw.arg == "strict" and _const(kw.value) == (True, True)
+                for kw in n.keywords
+            )
+            has_raises = any(kw.arg == "raises" for kw in n.keywords)
+            if has_raises and not strict and _xfail_hides_the_check(n, parents, tree):
+                problems.append(
+                    f"{label}:{n.lineno}: xfail(raises=) decides the outcome by fiat"
+                )
     return problems
 
 
-def _const(node: ast.expr) -> tuple[bool, bool]:
+def _value(
+    node: ast.AST | None, bindings: dict[str, object] | None = None
+) -> tuple[bool, object]:
+    """Fold literals, bound names, and one comparison. Unknown stays unknown."""
+    bound = bindings or {}
+    if isinstance(node, ast.Name) and node.id in bound:
+        return True, bound[node.id]
     if isinstance(node, ast.Constant):
-        return True, bool(node.value)
+        return True, node.value
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        known, value = _const(node.operand)
-        return known, not value
-    return False, False
+        known, value = _value(node.operand, bound)
+        return (True, not value) if known else (False, None)
+    if (
+        isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and len(node.comparators) == 1
+    ):
+        left_known, left = _value(node.left, bound)
+        right_known, right = _value(node.comparators[0], bound)
+        if not (left_known and right_known):
+            return False, None
+        op = node.ops[0]
+        if isinstance(op, ast.Eq):
+            return True, left == right
+        if isinstance(op, ast.NotEq):
+            return True, left != right
+        try:
+            if isinstance(op, ast.Lt):
+                return True, left < right
+            if isinstance(op, ast.LtE):
+                return True, left <= right
+            if isinstance(op, ast.Gt):
+                return True, left > right
+            if isinstance(op, ast.GtE):
+                return True, left >= right
+        except TypeError:
+            return False, None
+    return False, None
+
+
+def _const(
+    node: ast.expr, bindings: dict[str, object] | None = None
+) -> tuple[bool, bool]:
+    known, value = _value(node, bindings)
+    return (True, bool(value)) if known else (False, False)
+
+
+def _constants(fn: ast.AST) -> dict[str, object]:
+    """Names assigned once to a folded value. A later unknown write drops the name."""
+    env: dict[str, object] = {}
+    killed: set[str] = set()
+
+    def visit(stmts: list[ast.stmt]) -> None:
+        for stmt in stmts:
+            if isinstance(stmt, _SCOPES):
+                continue
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+            ):
+                name = stmt.targets[0].id
+                known, value = _value(stmt.value, env)
+                if known and name not in killed:
+                    env[name] = value
+                else:
+                    env.pop(name, None)
+                    killed.add(name)
+                continue
+            for child in ast.iter_child_nodes(stmt):
+                if isinstance(child, list):
+                    continue
+            body = getattr(stmt, "body", None)
+            if isinstance(body, list):
+                visit(body)
+            orelse = getattr(stmt, "orelse", None)
+            if isinstance(orelse, list):
+                visit(orelse)
+
+    body = getattr(fn, "body", [])
+    if isinstance(body, list):
+        visit(body)
+    return {name: value for name, value in env.items() if name not in killed}
 
 
 def _live_calls(node: ast.AST) -> list[ast.Call]:
@@ -268,6 +423,9 @@ class _File:
         self._typed: dict[str, set[str]] = {}
         self._current_typed: set[str] = set()
         # Same-file fixtures and helpers that return or yield a gate.
+        self.local_classes = {
+            n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)
+        }
         self.gate_makers: set[str] = set()
         changed = True
         while changed:
@@ -290,7 +448,11 @@ class _File:
             return expr.id in typed
         if isinstance(expr, ast.Call):
             name = _dotted(expr.func) or ""
-            return name.rsplit(".", 1)[-1] in _GATE_BUILDERS or name in self.gate_makers
+            base = name.rsplit(".", 1)[-1]
+            root = name.split(".", 1)[0]
+            if base in _GATE_BUILDERS and root not in self.local_classes:
+                return True
+            return name in self.gate_makers
         return False
 
     def typed_names(self, fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
@@ -304,6 +466,8 @@ class _File:
             or (
                 a.annotation is not None
                 and (_dotted(a.annotation) or "").endswith("Gate")
+                and (_dotted(a.annotation) or "").split(".", 1)[0]
+                not in self.local_classes
             )
         }
         changed = True
@@ -345,16 +509,21 @@ class _File:
         )
 
     def first_reach(
-        self, stmts: list[ast.stmt], seen: frozenset[str]
+        self,
+        stmts: list[ast.stmt],
+        seen: frozenset[str],
+        bindings: dict[str, object] | None = None,
     ) -> tuple[bool, ast.stmt | None]:
         """(gate reached, the return/raise that ended the path first, if any)."""
         for s in stmts:
             if isinstance(s, _SCOPES):
                 continue
             if isinstance(s, ast.If):
-                known, value = _const(s.test)
+                known, value = _const(s.test, bindings)
                 if known:
-                    hit, end = self.first_reach(s.body if value else s.orelse, seen)
+                    hit, end = self.first_reach(
+                        s.body if value else s.orelse, seen, bindings
+                    )
                     if hit or end:
                         return hit, end
                     continue
@@ -362,7 +531,7 @@ class _File:
                     return True, None
                 continue
             if isinstance(s, ast.Try):
-                hit, end = self.first_reach(s.body, seen)
+                hit, end = self.first_reach(s.body, seen, bindings)
                 if hit or end:
                     return hit, end
                 continue
@@ -376,7 +545,7 @@ class _File:
                     self._call_reaches(c, seen) for h in head for c in _live_calls(h)
                 ):
                     return True, None
-                hit, end = self.first_reach(s.body, seen)
+                hit, end = self.first_reach(s.body, seen, bindings)
                 if hit or end:
                     return hit, end
                 continue
@@ -394,7 +563,7 @@ class _File:
         outer = self._current_typed
         self._current_typed = self.typed_names(fn)
         try:
-            return self.first_reach(fn.body, seen)
+            return self.first_reach(fn.body, seen, _constants(fn))
         finally:
             self._current_typed = outer
 
@@ -419,10 +588,29 @@ def lint_source(src: str, label: str) -> list[str]:
     fail_names = _outcome_names(tree, "fail")
     aliases = _pytest_aliases(tree)
     parents = _parents(tree)
-    skip_like = {o: _outcome_names(tree, o) for o in ("skip", "xfail")}
+    skip_like = {o: _outcome_names(tree, o) for o in ("skip", "xfail", "importorskip")}
     problems = []
     for n in ast.walk(tree):
         what = _fiat(n, fail_names, aliases)
+        if what in {
+            "forced failure",
+            "raise AssertionError",
+            "forced exit",
+            "dynamic code",
+        }:
+            owner = n
+            while owner in parents:
+                owner = parents[owner]
+                if isinstance(
+                    owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    break
+            else:
+                owner = None
+            if not isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                what = None
+            elif not owner.name.startswith("test"):
+                what = None
         if what:
             problems.append(f"{label}:{n.lineno}: {what} in a KAT file fails by fiat")
         for outcome, names in skip_like.items():
@@ -444,6 +632,20 @@ def lint_source(src: str, label: str) -> list[str]:
                     )
 
     f = _File(tree)
+    for fn in f.funcs.values():
+        bindings = _constants(fn)
+        for n in ast.walk(fn):
+            if isinstance(n, _SCOPES) and n is not fn:
+                continue
+            if not isinstance(n, ast.Assert):
+                continue
+            if _fiat(n, fail_names, aliases) is not None:
+                continue
+            what = _fiat(n, fail_names, aliases, bindings)
+            if what:
+                problems.append(
+                    f"{label}:{n.lineno}: {what} in a KAT file fails by fiat"
+                )
     for name, fn in f.funcs.items():
         if not name.startswith("test"):
             continue
