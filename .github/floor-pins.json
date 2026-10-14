@@ -74,7 +74,7 @@
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "a96709247ce930e388a2bbec10297966136c31a7da85fb9065184c6d0409afa3"
+      "sha256": "3309ff558cbf203c5f73ea998f91aa04817964df1c722efbe2127209ca91eb9b"
     }
   ],
   "jobs": [

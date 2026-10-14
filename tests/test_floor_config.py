@@ -206,8 +206,8 @@ TAMPERS = [
             "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 10\n",
             "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 1\n",
         ),
-        "pin: job kat-lint changed",
-        True,
+        "timeout is not the pinned 10 minutes",
+        False,
     ),
     (
         "T1 matrix",
@@ -218,8 +218,8 @@ TAMPERS = [
     (
         "T1 run text",
         (KAT, "      - run: python scripts/kat_lint.py --root .\n"),
-        "pin: job kat-lint changed",
-        True,
+        "python scripts/kat_lint.py arguments are not the allowlisted ones",
+        False,
     ),
     (
         "T1 working directory",
@@ -233,8 +233,8 @@ TAMPERS = [
     (
         "T1 concurrency",
         ("  cancel-in-progress: true\n", "  cancel-in-progress: false\n"),
-        "pin: workflow settings changed",
-        True,
+        "concurrency is not the floor's pinned value",
+        False,
     ),
     (
         "T1 permissions",
@@ -1871,3 +1871,69 @@ def test_the_trailer_check_passes_clean_history_and_fails_on_none(
     assert run.returncode == 0, run.stdout
     assert "lines checked" in run.stdout
     assert _trailer_check(tmp_path, "").returncode == 1
+
+
+# --- the classes base pins caught alone are rules too (brief 82-84 item 10) -------
+
+EXACT_TAMPERS = [
+    pytest.param(
+        (KAT, "      - run: python scripts/kat_lint.py --root zqxwvk\n"),
+        "python scripts/kat_lint.py arguments are not the allowlisted ones",
+        id="guard-script-gains-an-argument",
+    ),
+    pytest.param(
+        (" --prose --fail-on-warn", " --prose"),
+        "python .floor/craft/voice_lint.py arguments are not the allowlisted ones",
+        id="craft-script-loses-an-argument",
+    ),
+    pytest.param(
+        (
+            '--pins "$RUNNER_TEMP/floor/floor-pins.json"',
+            "--pins .github/floor-pins.json",
+        ),
+        "arguments are not the allowlisted ones",
+        id="floor-guard-judged-with-the-tree-pins",
+    ),
+    pytest.param(
+        (RUFF, "      - run: ruff check scripts\n"),
+        "ruff arguments are not the allowlisted ones",
+        id="ruff-narrowed",
+    ),
+    pytest.param(
+        ("  cancel-in-progress: true\n", "  cancel-in-progress: false\n"),
+        "concurrency is not the floor's pinned value",
+        id="concurrency-changed",
+    ),
+    pytest.param(
+        ("name: floor\n", "name: floor\nrun-name: zqxwvk\n"),
+        "workflow: key run-name is not allowed",
+        id="top-level-key-added",
+    ),
+    pytest.param(
+        (
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 10\n",
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 2\n",
+        ),
+        "timeout is not the pinned 10 minutes",
+        id="timeout-inside-the-range",
+    ),
+]
+
+
+@pytest.mark.parametrize(("edit", "expect"), EXACT_TAMPERS)
+def test_a_value_only_pins_caught_is_now_a_rules_violation(
+    tmp_path: Path, edit: tuple[str, str], expect: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    text = wf.read_text(encoding="utf-8")
+    old, new = edit
+    assert old in text
+    wf.write_text(text.replace(old, new, 1), encoding="utf-8")
+    (root / guard.PINS).write_text(_pins_text(root), encoding="utf-8")
+    found = guard.violations(root)
+    assert any(expect in f for f in found), found
+
+
+def test_no_tamper_is_left_to_pins_alone() -> None:
+    assert [label for label, *_rest, pin_only in TAMPERS if pin_only] == []
