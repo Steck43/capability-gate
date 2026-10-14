@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a protected-jobs table pins each floor job's key, the check names it produces and text its steps must contain, so a renamed job, a decoy that takes a check name, or a protected key reused for a trivial step is caught, and a job missing from the table is a violation;
   - jobs keep only allowlisted conditions and no `needs`, run on `ubuntu-latest` with a 1 to 30 minute timeout and a matrix that expands to at least one run; step conditions and step environment (exact values) are allowlisted;
   - the floor workflow's triggers are exactly its pinned triggers, no workflow file may use a privileged trigger, and a workflow with any write permission may run only on push, dispatch, schedule or branch protection events;
-  - pytest takes only `-q`;
+  - pytest takes only `-q`; every allowlisted script and `ruff` runs with its exact allowlisted arguments; the floor's top-level keys and concurrency are fixed, and every job's timeout is exactly 10 minutes, so no value is left to the pins alone;
   - python runs only the allowlisted guard scripts, `-m pytest` or `-m pip`; only `git show` may write into the temp directory; the script variables in the craft jobs may name only their listed scripts;
   - every lock entry is a version-pinned, hash-locked requirement; pytest config is only `pytest.ini` with its three allowed keys, strict xfail and SyntaxWarning as an error, a norecursedirs that cannot hide `tests`, and no `conftest.py` or pytest section elsewhere;
   - root and nested `sitecustomize.py`, `usercustomize.py` and `*.pth` files are pinned guard files.

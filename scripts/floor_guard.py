@@ -358,6 +358,56 @@ PY_SCRIPTS = frozenset(
         "$RUNNER_TEMP/floor/floor_guard.py",
     }
 )
+# The exact arguments each allowlisted script is run with (quotes removed).
+# A guard that gains, loses or changes an argument is a different guard.
+SCRIPT_ARGS: dict[str, frozenset[tuple[str, ...]]] = {
+    "scripts/kat_lint.py": frozenset({()}),
+    "scripts/no_ai_trailers.py": frozenset({("$RUNNER_TEMP/history.txt",)}),
+    ".floor/craft/empty_range.py": frozenset(
+        {("--base", "$CRAFT_BASE", "--head", "$CRAFT_HEAD", "--event", "$EVENT_NAME")}
+    ),
+    ".floor/craft/voice_lint.py": frozenset(
+        {
+            (
+                "--commits",
+                "--base",
+                "$CRAFT_BASE",
+                "--head",
+                "HEAD",
+                "--prose",
+                "--fail-on-warn",
+            )
+        }
+    ),
+    ".floor/craft/changelog_gate.py": frozenset(
+        {("--base", "$CRAFT_BASE", "--head", "HEAD")}
+    ),
+    ".floor/craft/comment_craft.py": frozenset(
+        {("--base", "$CRAFT_BASE", "--head", "HEAD")}
+    ),
+    ".floor/craft/empty_diff_gate.py": frozenset(
+        {("--base", "$PR_BASE", "--head", "HEAD")}
+    ),
+    "$RUNNER_TEMP/leak_scan.py": frozenset(
+        {
+            ("--ci", "--base", "$SCAN_BASE", "--head", "HEAD"),
+            ("--text", "pull request title and body"),
+        }
+    ),
+    "$RUNNER_TEMP/floor/floor_guard.py": frozenset(
+        {("--root", ".", "--pins", "$RUNNER_TEMP/floor/floor-pins.json")}
+    ),
+}
+RUFF_ARGS = frozenset({("check", "."), ("format", "--check", ".")})
+# The floor workflow's top-level keys and concurrency, exactly.
+WORKFLOW_KEYS = frozenset(
+    {"name", "on", "concurrency", "permissions", "defaults", "jobs"}
+)
+FLOOR_CONCURRENCY = {
+    "group": "floor-${{ github.workflow }}-${{ github.ref }}",
+    "cancel-in-progress": True,
+}
+JOB_TIMEOUT = 10
 # pytest options a guardrail run may not add: they select, deselect, skip,
 # collect only, change config or root, disable plugins or relax xfail.
 PYTEST_OPTIONS = frozenset({"-q"})
@@ -713,6 +763,8 @@ def run_violations(run: str, where: str) -> list[str]:
             found += _pytest_violations(words[1:], where)
         if head == "ruff" and any(LINT_SOFTENERS.match(w) for w in words[1:]):
             found.append(f"{where}: lint made non-failing")
+        if head == "ruff" and tuple(words[1:]) not in RUFF_ARGS:
+            found.append(f"{where}: ruff arguments are not the allowlisted ones")
         if head == "exit" and (len(words) < 2 or words[1] not in {"1", "2", "3"}):
             found.append(f"{where}: exit with a success code")
         if head == "git" and (len(words) < 2 or words[1] not in GIT_READ_ONLY):
@@ -802,6 +854,10 @@ def _python_violations(words: list[str], where: str) -> list[str]:
             found.append(f"{where}: python -m runs a module other than pytest or pip")
     elif words[1] not in PY_SCRIPTS:
         found.append(f"{where}: python runs a script that is not allowlisted")
+    elif tuple(words[2:]) not in SCRIPT_ARGS.get(words[1], frozenset()):
+        found.append(
+            f"{where}: python {words[1]} arguments are not the allowlisted ones"
+        )
     return found
 
 
@@ -875,6 +931,12 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
     found: list[str] = []
     if wf.get("env"):
         found.append("workflow: env at workflow level")
+    for key in wf:
+        name = "on" if key is True else str(key)
+        if name not in WORKFLOW_KEYS:
+            found.append(f"workflow: key {name} is not allowed")
+    if wf.get("concurrency") != FLOOR_CONCURRENCY:
+        found.append("workflow: concurrency is not the floor's pinned value")
     if wf.get("permissions") != READ_ONLY:
         found.append("workflow: permissions beyond contents: read")
     if not shell_ok(((wf.get("defaults") or {}).get("run") or {}).get("shell")):
@@ -905,6 +967,8 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
             and 1 <= timeout <= MAX_TIMEOUT
         ):
             found.append(f"{where}: timeout is not 1 to {MAX_TIMEOUT} minutes")
+        if timeout != JOB_TIMEOUT:
+            found.append(f"{where}: timeout is not the pinned {JOB_TIMEOUT} minutes")
         if not _matrix_combos(job):
             found.append(f"{where}: matrix expands to no runs")
         if not shell_ok(((job.get("defaults") or {}).get("run") or {}).get("shell")):
