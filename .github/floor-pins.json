@@ -26,7 +26,7 @@
     },
     {
       "path": ".github/workflows/floor.yml",
-      "sha256": "682c75c4d300b086e7d5344b1ccbe9f1c146bb459cc2fa8363adcf58c1b5076c"
+      "sha256": "55db83786aea55e3b5b28cb3b5b4687e6d2283418aeaaae0e3ce6a9985235193"
     },
     {
       "path": ".github/workflows/plugin-bundle.yml",

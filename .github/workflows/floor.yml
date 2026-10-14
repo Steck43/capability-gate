@@ -167,9 +167,9 @@ jobs:
         run: python -m pip install --require-hashes --no-deps -r requirements-ci.lock
       - name: pytest
         # Do NOT add a step that installs the host agent to make skipped tests
-        # run. On capability-gate that turns a green 37-passed/2-skipped suite
-        # red in two different ways depending on which of two same-named modules
-        # lands on the path. The skips are correct behaviour.
+        # run. On capability-gate that turns a green suite red in two different
+        # ways depending on which of two same-named modules lands on the path.
+        # The skips are correct behaviour.
         working-directory: capability-gate
         env:
           AEGIS_ATOMS_ROOT: ${{ github.workspace }}/aegis-atoms
