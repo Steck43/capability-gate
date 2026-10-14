@@ -16,7 +16,9 @@
 # on a schedule or manual run this commit. Never the root commit. Every step
 # runs under bash -eo pipefail and holds only plain commands and pipes, so a
 # failing command always fails the step (no conditions, &&, ||, background
-# jobs or command substitution; scripts/floor_guard.py enforces this).
+# jobs, command substitution, functions, loops or groups). Every command has
+# one exact shape per job, and python always runs with -I so no file in the
+# checkout is importable. scripts/floor_guard.py enforces all of this.
 
 name: floor
 
@@ -87,7 +89,7 @@ jobs:
           SCAN_BASE: ${{ github.event_name == 'push' && github.event.before || 'origin/main' }}
         run: |
           git rev-parse --verify "$SCAN_BASE^{commit}"
-          python "$RUNNER_TEMP/leak_scan.py" --ci --base "$SCAN_BASE" --head HEAD
+          python -I "$RUNNER_TEMP/leak_scan.py" --ci --base "$SCAN_BASE" --head HEAD
       - name: scan pull request title and body
         if: github.event_name == 'pull_request'
         env:
@@ -96,7 +98,7 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" \
-            | python "$RUNNER_TEMP/leak_scan.py" --text "pull request title and body"
+            | python -I "$RUNNER_TEMP/leak_scan.py" --text "pull request title and body"
 
   kat-lint:
     name: tests (known-answer tests call the gate)
@@ -109,7 +111,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: python scripts/kat_lint.py
+      - run: python -I scripts/kat_lint.py
 
   authorship:
     name: authorship (no AI trailers)
@@ -127,7 +129,7 @@ jobs:
       - name: check commit messages in history
         run: |
           git log --all --format=%B > "$RUNNER_TEMP/history.txt"
-          python scripts/no_ai_trailers.py "$RUNNER_TEMP/history.txt"
+          python -I scripts/no_ai_trailers.py "$RUNNER_TEMP/history.txt"
 
   tests:
     name: tests
@@ -164,7 +166,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: install
         working-directory: capability-gate
-        run: python -m pip install --require-hashes --no-deps -r requirements-ci.lock
+        run: python -I -m pip install --require-hashes --no-deps -r requirements-ci.lock
       - name: pytest
         # Do NOT add a step that installs the host agent to make skipped tests
         # run. On capability-gate that turns a green suite red in two different
@@ -188,7 +190,7 @@ jobs:
         with:
           python-version: "3.12"
       # Pin matches atoms. Unpinned install pulled 0.16 on 2026-09-12 and reddened I001/RUF100.
-      - run: python -m pip install --require-hashes --no-deps -r requirements-ci.lock
+      - run: python -I -m pip install --require-hashes --no-deps -r requirements-ci.lock
       - run: ruff check .
       - run: ruff format --check .
 
@@ -214,8 +216,8 @@ jobs:
           CRAFT_HEAD: ${{ github.sha }}
         run: |
           git rev-parse --verify "$CRAFT_BASE^{commit}"
-          python .floor/craft/empty_range.py --base "$CRAFT_BASE" --head "$CRAFT_HEAD" --event "$EVENT_NAME"
-          python .floor/craft/voice_lint.py --commits --base "$CRAFT_BASE" --head HEAD --prose --fail-on-warn
+          python -I .floor/craft/empty_range.py --base "$CRAFT_BASE" --head "$CRAFT_HEAD" --event "$EVENT_NAME"
+          python -I .floor/craft/voice_lint.py --commits --base "$CRAFT_BASE" --head HEAD --prose --fail-on-warn
 
   craft-changelog:
     name: craft (changelog)
@@ -236,8 +238,8 @@ jobs:
           CRAFT_HEAD: ${{ github.sha }}
         run: |
           git rev-parse --verify "$CRAFT_BASE^{commit}"
-          python .floor/craft/empty_range.py --base "$CRAFT_BASE" --head "$CRAFT_HEAD" --event "$EVENT_NAME"
-          python .floor/craft/changelog_gate.py --base "$CRAFT_BASE" --head HEAD
+          python -I .floor/craft/empty_range.py --base "$CRAFT_BASE" --head "$CRAFT_HEAD" --event "$EVENT_NAME"
+          python -I .floor/craft/changelog_gate.py --base "$CRAFT_BASE" --head HEAD
 
   craft-comments:
     name: craft (comments)
@@ -258,8 +260,8 @@ jobs:
           CRAFT_HEAD: ${{ github.sha }}
         run: |
           git rev-parse --verify "$CRAFT_BASE^{commit}"
-          python .floor/craft/empty_range.py --base "$CRAFT_BASE" --head "$CRAFT_HEAD" --event "$EVENT_NAME"
-          python .floor/craft/comment_craft.py --base "$CRAFT_BASE" --head HEAD
+          python -I .floor/craft/empty_range.py --base "$CRAFT_BASE" --head "$CRAFT_HEAD" --event "$EVENT_NAME"
+          python -I .floor/craft/comment_craft.py --base "$CRAFT_BASE" --head HEAD
 
   craft-empty-diff:
     name: craft (empty-diff)
@@ -279,7 +281,7 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           git rev-parse --verify "$PR_BASE^{commit}"
-          python .floor/craft/empty_diff_gate.py --base "$PR_BASE" --head HEAD
+          python -I .floor/craft/empty_diff_gate.py --base "$PR_BASE" --head HEAD
 
   floor-guard:
     name: floor (guard from base)
@@ -311,9 +313,9 @@ jobs:
           git show "$GUARD_BASE:requirements-ci.lock" > "$RUNNER_TEMP/floor/requirements-ci.lock"
           echo "guard from base $GUARD_BASE"
       - name: install the base lock
-        run: python -m pip install --require-hashes --no-deps -r "$RUNNER_TEMP/floor/requirements-ci.lock"
+        run: python -I -m pip install --require-hashes --no-deps -r "$RUNNER_TEMP/floor/requirements-ci.lock"
       - name: run the base guard on this tree
-        run: python "$RUNNER_TEMP/floor/floor_guard.py" --root . --pins "$RUNNER_TEMP/floor/floor-pins.json"
+        run: python -I "$RUNNER_TEMP/floor/floor_guard.py" --root . --pins "$RUNNER_TEMP/floor/floor-pins.json"
 
   workflow-lint:
     name: workflow (zizmor + actionlint)

@@ -83,7 +83,7 @@ def test_pytest_ini_keeps_strict_xfail_and_syntax_warning_errors() -> None:
         ("leak-denylist", "--ci --base"),
         ("leak-denylist", '--text "pull request title and body"'),
         ("leak-denylist", "git show origin/main:scripts/leak_denylist_scan.py"),
-        ("kat-lint", "python scripts/kat_lint.py"),
+        ("kat-lint", "python -I scripts/kat_lint.py"),
         ("tests", "pytest -q"),
         ("floor-guard", 'git show "$GUARD_BASE:scripts/floor_guard.py"'),
     ],
@@ -102,7 +102,7 @@ def test_leak_job_reads_the_denylist_secret() -> None:
     envs = [
         s.get("env", {})
         for s in job["steps"]
-        if 'python "$RUNNER_TEMP/leak_scan.py"' in str(s.get("run", ""))
+        if 'python -I "$RUNNER_TEMP/leak_scan.py"' in str(s.get("run", ""))
     ]
     assert envs, "no step runs the scanner"
     for env in envs:
@@ -175,7 +175,7 @@ def test_installs_use_only_the_hash_locked_file() -> None:
 
 # --- every tamper class, planted in the real workflow (T8) ---------------------
 
-KAT = "      - run: python scripts/kat_lint.py\n"
+KAT = "      - run: python -I scripts/kat_lint.py\n"
 RUFF = "      - run: ruff check .\n"
 PYTEST = "        run: pytest -q\n"
 
@@ -224,8 +224,8 @@ TAMPERS = [
     (
         "T1 working directory",
         (
-            PYTEST,
-            PYTEST.replace("run:", "working-directory: aegis-atoms\n        run:"),
+            "        working-directory: capability-gate\n        env:\n",
+            "        working-directory: aegis-atoms\n        env:\n",
         ),
         "working directory",
         False,
@@ -494,8 +494,8 @@ TAMPERS = [
     (
         "T6 checkout ref",
         (
-            '      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n        with:\n          persist-credentials: false\n      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n        with:\n          python-version: "3.12"\n      - run: python scripts/kat_lint.py\n',
-            '      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n        with:\n          persist-credentials: false\n          ref: main\n      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n        with:\n          python-version: "3.12"\n      - run: python scripts/kat_lint.py\n',
+            '      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n        with:\n          persist-credentials: false\n      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n        with:\n          python-version: "3.12"\n      - run: python -I scripts/kat_lint.py\n',
+            '      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n        with:\n          persist-credentials: false\n          ref: main\n      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n        with:\n          python-version: "3.12"\n      - run: python -I scripts/kat_lint.py\n',
         ),
         "checkout inputs change",
         False,
@@ -1158,7 +1158,7 @@ def test_an_edited_startup_file_is_caught(tmp_path: Path) -> None:
     root = _copy_tree(tmp_path)
     (root / "sitecustomize.py").write_text("x = 1\n", encoding="utf-8")
     _write_pins_text(root, _canonical(root))
-    assert guard.violations(root) == []
+    assert guard.violations(root) == ["sitecustomize.py: interpreter startup file"]
     (root / "sitecustomize.py").write_text("x = 2\n", encoding="utf-8")
     assert "pin: file sitecustomize.py changed" in guard.violations(root)
 

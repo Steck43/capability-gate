@@ -21,14 +21,23 @@ Two layers.
    indirect or unlisted commands, run python other than the listed scripts,
    write into the temp directory except from git, add pytest options, install
    anything but the hash-locked lock file, or make a lint step non-failing.
-   A protected-jobs table fixes each job's key, check names and required step
-   text; job and step conditions, environment, runner, timeout, matrix and
-   every workflow's triggers and write permissions are allowlisted. The pin
-   file loads strictly, the lock and pytest configuration are judged by rule,
-   and any symlink fails the guard, which never follows links.
+   A protected-jobs table fixes each job's key, check names and required
+   commands, which must run as parsed commands; a per-job table fixes the
+   exact shape of every simple command a job may run, and python must run
+   isolated (-I) so no checkout file is importable. Functions, loops,
+   subshells and groups are refused, and no no-op may name a guarded tool.
+   Job and step conditions, environment, runner, timeout, matrix, workflow
+   defaults and every workflow's triggers and write permissions are
+   allowlisted. Workflows and the pin file load strictly (no repeated key, no
+   odd tag), the lock and pytest configuration are judged by rule, no test
+   module names pytest_plugins, no interpreter startup file may exist, and
+   any symlink fails the guard, which never follows links.
 
-The guard runs from the pull request's base branch in CI (see floor.yml). For
-a stacked pull request that base is another feature branch.
+Where it loads from: in CI the guard script, its pins and its lock come from
+the pull request's base (see floor.yml); for a stacked pull request that base
+is another feature branch, not main. The floor-guard job definition itself
+comes from the pull request, so a repository ruleset or required workflow is
+the structural fix; that is a settings action for the maintainer.
 
 Usage: python scripts/floor_guard.py [--root DIR] [--update-pins] [--pins FILE]
 """
@@ -49,8 +58,8 @@ PINS = Path(".github/floor-pins.json")
 LOCK = "requirements-ci.lock"
 LOCKED_INSTALLS = frozenset(
     {
-        f"python -m pip install --require-hashes --no-deps -r {LOCK}",
-        f"python -m pip install --require-hashes --no-deps -r $RUNNER_TEMP/floor/{LOCK}",
+        f"python -I -m pip install --require-hashes --no-deps -r {LOCK}",
+        f"python -I -m pip install --require-hashes --no-deps -r $RUNNER_TEMP/floor/{LOCK}",
     }
 )
 REPO = "Steck43/capability-gate"
@@ -86,6 +95,7 @@ GUARD_GLOBS = (
     "**/sitecustomize.py",
     "**/usercustomize.py",
     "**/*.pth",
+    "**/.pytest.ini",
 )
 
 ALLOWED_COMMANDS = frozenset(
@@ -253,40 +263,203 @@ PROTECTED_JOBS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "secrets": (("secrets (gitleaks)",), ("gitleaks/gitleaks-action@",)),
     "leak-denylist": (
         ("secrets (names and personal paths)",),
-        ('python "$RUNNER_TEMP/leak_scan.py" --ci', "--text"),
+        ('"$RUNNER_TEMP/leak_scan.py" --ci', "--text"),
     ),
     "kat-lint": (("tests (known-answer tests call the gate)",), ("kat_lint.py",)),
     "authorship": (
         ("authorship (no AI trailers)",),
-        ("git log --all --format=%B", "python scripts/no_ai_trailers.py"),
+        ("git log --all --format=%B", "scripts/no_ai_trailers.py"),
     ),
     "tests": (("tests (3.11)", "tests (3.12)"), ("pytest -q",)),
     "lint": (("lint (ruff)",), ("ruff check .", "ruff format --check .")),
     "craft-voice": (
         ("craft (voice)",),
-        ("python .floor/craft/voice_lint.py --commits",),
+        (".floor/craft/voice_lint.py --commits",),
     ),
     "craft-changelog": (
         ("craft (changelog)",),
-        ("python .floor/craft/changelog_gate.py --base",),
+        (".floor/craft/changelog_gate.py --base",),
     ),
     "craft-comments": (
         ("craft (comments)",),
-        ("python .floor/craft/comment_craft.py --base",),
+        (".floor/craft/comment_craft.py --base",),
     ),
     "craft-empty-diff": (
         ("craft (empty-diff)",),
-        ("python .floor/craft/empty_diff_gate.py --base",),
+        (".floor/craft/empty_diff_gate.py --base",),
     ),
     "floor-guard": (
         ("floor (guard from base)",),
-        ('python "$RUNNER_TEMP/floor/floor_guard.py" --root . --pins',),
+        ('"$RUNNER_TEMP/floor/floor_guard.py" --root . --pins',),
     ),
     "workflow-lint": (
         ("workflow (zizmor + actionlint)",),
         ("zizmorcore/zizmor-action@", "/tmp/actionlint"),
     ),
 }
+
+# Every simple command each job may run, exactly as the shell parser reads it
+# (words with quotes removed, then each redirect). A command outside its job's
+# set fails, so each allowed command has one exact argument shape: git gets no
+# upload-pack, output, external diff, textconv, no-index, refspec or URL, tar
+# runs only in workflow-lint with its pinned arguments, and no cp, mkdir or
+# redirect can create a file pytest would load. The only temp writes are the
+# listed git show and git log lines, the actionlint download and its tar.
+_PIP = "python -I -m pip install --require-hashes --no-deps -r"
+_CRAFT_RANGE = (
+    "python -I .floor/craft/empty_range.py --base $CRAFT_BASE --head $CRAFT_HEAD "
+    "--event $EVENT_NAME"
+)
+_REV = "git rev-parse --verify ${}^{{commit}}"
+JOB_COMMANDS: dict[str, frozenset[str]] = {
+    "secrets": frozenset(),
+    "leak-denylist": frozenset(
+        {
+            "git cat-file -e origin/main:scripts/leak_denylist_scan.py",
+            "git show origin/main:scripts/leak_denylist_scan.py > $RUNNER_TEMP/leak_scan.py",
+            _REV.format("SCAN_BASE"),
+            "python -I $RUNNER_TEMP/leak_scan.py --ci --base $SCAN_BASE --head HEAD",
+            "printf %s\\n\\n%s\\n $PR_TITLE $PR_BODY",
+            "python -I $RUNNER_TEMP/leak_scan.py --text pull request title and body",
+        }
+    ),
+    "kat-lint": frozenset({"python -I scripts/kat_lint.py"}),
+    "authorship": frozenset(
+        {
+            "git log --all --format=%B > $RUNNER_TEMP/history.txt",
+            "python -I scripts/no_ai_trailers.py $RUNNER_TEMP/history.txt",
+        }
+    ),
+    "tests": frozenset({f"{_PIP} {LOCK}", "pytest -q"}),
+    "lint": frozenset({f"{_PIP} {LOCK}", "ruff check .", "ruff format --check ."}),
+    "craft-voice": frozenset(
+        {
+            _REV.format("CRAFT_BASE"),
+            _CRAFT_RANGE,
+            "python -I .floor/craft/voice_lint.py --commits --base $CRAFT_BASE "
+            "--head HEAD --prose --fail-on-warn",
+        }
+    ),
+    "craft-changelog": frozenset(
+        {
+            _REV.format("CRAFT_BASE"),
+            _CRAFT_RANGE,
+            "python -I .floor/craft/changelog_gate.py --base $CRAFT_BASE --head HEAD",
+        }
+    ),
+    "craft-comments": frozenset(
+        {
+            _REV.format("CRAFT_BASE"),
+            _CRAFT_RANGE,
+            "python -I .floor/craft/comment_craft.py --base $CRAFT_BASE --head HEAD",
+        }
+    ),
+    "craft-empty-diff": frozenset(
+        {
+            _REV.format("PR_BASE"),
+            "python -I .floor/craft/empty_diff_gate.py --base $PR_BASE --head HEAD",
+        }
+    ),
+    "floor-guard": frozenset(
+        {
+            _REV.format("GUARD_BASE"),
+            "mkdir -p $RUNNER_TEMP/floor",
+            *(
+                f"git cat-file -e $GUARD_BASE:{src}"
+                for src in ("scripts/floor_guard.py", ".github/floor-pins.json", LOCK)
+            ),
+            *(
+                f"git show $GUARD_BASE:{src} > $RUNNER_TEMP/floor/{dest}"
+                for src, dest in (
+                    ("scripts/floor_guard.py", "floor_guard.py"),
+                    (".github/floor-pins.json", "floor-pins.json"),
+                    (LOCK, LOCK),
+                )
+            ),
+            "echo guard from base $GUARD_BASE",
+            f"{_PIP} $RUNNER_TEMP/floor/{LOCK}",
+            "python -I $RUNNER_TEMP/floor/floor_guard.py --root . "
+            "--pins $RUNNER_TEMP/floor/floor-pins.json",
+        }
+    ),
+    "workflow-lint": frozenset(
+        {
+            "curl -sSL https://github.com/rhysd/actionlint/releases/download/"
+            "v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+            " -o /tmp/actionlint.tgz",
+            "echo ${ACTIONLINT_SHA256}  /tmp/actionlint.tgz",
+            "sha256sum -c -",
+            "tar -C /tmp -xzf /tmp/actionlint.tgz actionlint",
+            "/tmp/actionlint -color",
+        }
+    ),
+}
+# Each job's required commands: at least one of its exact shapes per line here
+# must run as a parsed command, so an echo or printf of the text never counts.
+REQUIRED_COMMANDS: dict[str, tuple[str, ...]] = {
+    "leak-denylist": (
+        "python -I $RUNNER_TEMP/leak_scan.py --ci --base $SCAN_BASE --head HEAD",
+        "python -I $RUNNER_TEMP/leak_scan.py --text pull request title and body",
+    ),
+    "kat-lint": ("python -I scripts/kat_lint.py",),
+    "authorship": (
+        "git log --all --format=%B > $RUNNER_TEMP/history.txt",
+        "python -I scripts/no_ai_trailers.py $RUNNER_TEMP/history.txt",
+    ),
+    "tests": ("pytest -q",),
+    "lint": ("ruff check .", "ruff format --check ."),
+    "craft-voice": (
+        "python -I .floor/craft/voice_lint.py --commits --base $CRAFT_BASE "
+        "--head HEAD --prose --fail-on-warn",
+    ),
+    "craft-changelog": (
+        "python -I .floor/craft/changelog_gate.py --base $CRAFT_BASE --head HEAD",
+    ),
+    "craft-comments": (
+        "python -I .floor/craft/comment_craft.py --base $CRAFT_BASE --head HEAD",
+    ),
+    "craft-empty-diff": (
+        "python -I .floor/craft/empty_diff_gate.py --base $PR_BASE --head HEAD",
+    ),
+    "floor-guard": (
+        "python -I $RUNNER_TEMP/floor/floor_guard.py --root . "
+        "--pins $RUNNER_TEMP/floor/floor-pins.json",
+    ),
+    "workflow-lint": (
+        "sha256sum -c -",
+        "tar -C /tmp -xzf /tmp/actionlint.tgz actionlint",
+        "/tmp/actionlint -color",
+    ),
+}
+# Commands that do nothing with their arguments. Naming a guarded tool to one of
+# them is how a step can look as if it runs that tool.
+NO_OPS = frozenset({"echo", "printf", "true", ":", "test", "["})
+TOOL_NAMES = frozenset(
+    {
+        "pytest",
+        "ruff",
+        "python",
+        "python3",
+        "git",
+        "gitleaks",
+        "actionlint",
+        "zizmor",
+        "sha256sum",
+        "curl",
+        "tar",
+        "kat_lint",
+        "no_ai_trailers",
+        "voice_lint",
+        "changelog_gate",
+        "comment_craft",
+        "empty_diff_gate",
+        "empty_range",
+        "floor_guard",
+        "leak_scan",
+        "leak_denylist_scan",
+    }
+)
+FLOOR_SHELL = "bash --noprofile --norc -eo pipefail {0}"
 # The only conditions a job may carry; any other job condition, and any needs,
 # is a violation. Step conditions are allowlisted the same way.
 JOB_CONDITIONS = {
@@ -423,10 +596,61 @@ TEMP_PREFIXES = ("$RUNNER_TEMP", "${RUNNER_TEMP}", "/tmp/")
 # --- pins -------------------------------------------------------------------
 
 
-def _load_yaml(text: str):
+class WorkflowFormatError(ValueError):
+    pass
+
+
+def _strict_loader():
     import yaml
 
-    return yaml.safe_load(text)
+    class Strict(yaml.SafeLoader):
+        """Safe loading that refuses a repeated key, like the pin file does."""
+
+        def construct_mapping(self, node, deep=False):
+            self.flatten_mapping(node)
+            seen = set()
+            for key_node, _value in node.value:
+                key = self.construct_object(key_node, deep=deep)
+                if key in seen:
+                    raise WorkflowFormatError(f"duplicate key {key!r}")
+                seen.add(key)
+            return super().construct_mapping(node, deep=deep)
+
+    Strict.add_constructor(
+        "tag:yaml.org,2002:map",
+        lambda loader, node: loader.construct_mapping(node, deep=True),
+    )
+    return Strict
+
+
+def _check_types(obj, depth: int = 0) -> None:
+    """Only what JSON can hold: a date, bytes, set or any other tag fails closed."""
+    if depth > 100:
+        raise WorkflowFormatError("nested too deeply")
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if not isinstance(key, (str, bool, int)) or isinstance(key, float):
+                raise WorkflowFormatError(f"key of type {type(key).__name__}")
+            _check_types(value, depth + 1)
+    elif isinstance(obj, list):
+        for value in obj:
+            _check_types(value, depth + 1)
+    elif not (obj is None or isinstance(obj, (str, bool, int, float))):
+        raise WorkflowFormatError(f"value of type {type(obj).__name__}")
+
+
+def _load_yaml(text: str):
+    """Load a workflow strictly; every failure is a WorkflowFormatError."""
+    import yaml
+
+    try:
+        doc = yaml.load(text, Loader=_strict_loader())  # noqa: S506 (SafeLoader subclass)
+    except WorkflowFormatError:
+        raise
+    except (yaml.YAMLError, ValueError, TypeError, RecursionError) as exc:
+        raise WorkflowFormatError(type(exc).__name__) from None
+    _check_types(doc)
+    return doc
 
 
 def _normalise(obj):
@@ -466,6 +690,8 @@ def guard_files(root: Path) -> list[str]:
 
 def compute_pins(root: Path) -> dict:
     wf = _load_yaml((root / WORKFLOW).read_text(encoding="utf-8"))
+    if not isinstance(wf, dict) or not isinstance(wf.get("jobs") or {}, dict):
+        raise WorkflowFormatError("not a mapping")
     top = {k: v for k, v in wf.items() if k != "jobs"}
     return {
         "workflow": sha(canonical(top)),
@@ -591,8 +817,26 @@ def _word_is_literal(word: str) -> bool:
     return not re.search(r"[$`\\\"'*?\[\]{}~]", word)
 
 
+def _render(node) -> str:
+    """One simple command as the shell parser reads it: assignments, words, redirects."""
+    out = []
+    for part in node.parts:
+        if part.kind in {"assignment", "word"}:
+            out.append(part.word)
+        elif part.kind == "redirect":
+            target = getattr(part, "output", None)
+            target = target.word if hasattr(target, "word") else str(target)
+            source = "" if getattr(part, "input", None) is None else str(part.input)
+            out.append(f"{source}{part.type} {target}")
+        else:
+            out.append(f"<{part.kind}>")
+    return " ".join(out)
+
+
 class _Collector:
     def __init__(self) -> None:
+        self.rendered: list[tuple[list[str], str]] = []
+        self.shaping: set[str] = set()
         self.commands: list[list] = []
         self.redirects: list[str] = []
         self.assignments: list[str] = []
@@ -623,6 +867,17 @@ class _Collector:
             self.hiding.add("uses ||")
         if kind in {"if", "while", "until"}:
             self.hiding.add("uses a condition")
+        if kind == "function":
+            self.shaping.add("defines a function, which can shadow a command")
+        if kind in {"for", "while", "until"}:
+            self.shaping.add("uses a loop, which can skip a command")
+        if kind == "compound" and any(
+            getattr(p, "kind", None) == "reservedword" and p.word in {"(", "{"}
+            for p in getattr(node, "list", [])
+        ):
+            self.shaping.add(
+                "uses a subshell or command group, which can wrap a command"
+            )
         if kind == "list":
             parts = node.parts
             for i, part in enumerate(parts):
@@ -681,6 +936,7 @@ class _Collector:
                         self.redirects.append(target.word)
                         self.writes.append(([w.word for w in words], target.word))
             self.commands.append([w.word for w in words])
+            self.rendered.append(([w.word for w in words], _render(node)))
         for attr in ("parts", "list"):
             for child in getattr(node, attr, None) or []:
                 if hasattr(child, "kind"):
@@ -691,7 +947,52 @@ class _Collector:
                 self.walk(child)
 
 
-def run_violations(run: str, where: str) -> list[str]:
+def parsed_commands(run: str) -> list[str]:
+    """Every simple command in run text, rendered; empty if it does not parse."""
+    import bashlex
+
+    run = re.sub(r"\$\{\{.*?\}\}", "X", run, flags=re.S)
+    try:
+        trees = bashlex.parse(run)
+    except Exception:  # judged as a violation by run_violations
+        return []
+    col = _Collector()
+    for tree in trees:
+        col.walk(tree)
+    return [text for _words, text in col.rendered]
+
+
+def _shape_violations(col: _Collector, where: str, job: str) -> list[str]:
+    found: list[str] = []
+    allowed = JOB_COMMANDS.get(job, frozenset())
+    for words, text in col.rendered:
+        if not words or text in allowed:
+            continue
+        found.append(
+            f"{where}: `{text}` is not an allowlisted command shape for job {job}"
+        )
+        if words[0] == "git":
+            found.append(
+                f"{where}: git arguments are not an allowlisted shape for job {job}"
+            )
+        if words[0] == "tar":
+            if job != "workflow-lint":
+                found.append(f"{where}: tar is allowed only in the workflow-lint job")
+            else:
+                found.append(f"{where}: tar arguments are not the pinned ones")
+    return found
+
+
+def _names_a_tool(words: list[str]) -> bool:
+    for word in words[1:]:
+        for token in word.split():
+            base = token.rsplit("/", 1)[-1]
+            if base.removesuffix(".py") in TOOL_NAMES:
+                return True
+    return False
+
+
+def run_violations(run: str, where: str, job: str | None = None) -> list[str]:
     import bashlex
 
     found: list[str] = []
@@ -716,6 +1017,10 @@ def run_violations(run: str, where: str) -> list[str]:
             found.append(f"{where}: {words[0]} runs only after &&")
     for construct in sorted(col.hiding):
         found.append(f"{where}: {construct}, which can hide a failing command")
+    for construct in sorted(col.shaping):
+        found.append(f"{where}: {construct}")
+    if job is not None:
+        found += _shape_violations(col, where, job)
     for words, target in col.writes:
         clean = target.strip("\"'")
         if clean.startswith(TEMP_PREFIXES) and not (
@@ -744,6 +1049,8 @@ def run_violations(run: str, where: str) -> list[str]:
         if not words:
             continue
         head = words[0]
+        if head in NO_OPS and _names_a_tool(words):
+            found.append(f"{where}: {head} names a guarded tool as an argument")
         if not _word_is_literal(head) and head not in ALLOWED_COMMANDS:
             found.append(f"{where}: constructed command name")
             continue
@@ -757,8 +1064,9 @@ def run_violations(run: str, where: str) -> list[str]:
             continue
         if head in {"python", "python3"}:
             found += _python_violations(words, where)
-            if words[1:3] == ["-m", "pytest"]:
-                found += _pytest_violations(words[3:], where)
+            plain = _without_isolation(words)
+            if plain[1:3] == ["-m", "pytest"]:
+                found += _pytest_violations(plain[3:], where)
         if head == "pytest":
             found += _pytest_violations(words[1:], where)
         if head == "ruff" and any(LINT_SOFTENERS.match(w) for w in words[1:]):
@@ -826,8 +1134,19 @@ def _set_ok(args: list[str]) -> bool:
     return True
 
 
+def _without_isolation(words: list[str]) -> list[str]:
+    return [words[0], *words[2:]] if words[1:2] == ["-I"] else list(words)
+
+
 def _python_violations(words: list[str], where: str) -> list[str]:
+    """Python runs isolated (-I, so neither the script's folder nor the working
+    directory is importable, and no PYTHON* variable or user site applies), and
+    only the listed scripts, -m pytest, or -m pip with the lock."""
     found = []
+    if words[1:2] != ["-I"]:
+        found.append(f"{where}: python does not run isolated (-I)")
+    installs = " ".join(words)
+    words = _without_isolation(words)
     if any(
         w in {"-c", "-"}
         or (
@@ -840,7 +1159,7 @@ def _python_violations(words: list[str], where: str) -> list[str]:
     ):
         found.append(f"{where}: python runs code from the command line")
     if len(words) >= 3 and words[1] == "-m" and words[2] == "pip":
-        if " ".join(words) not in LOCKED_INSTALLS:
+        if installs not in LOCKED_INSTALLS:
             found.append(f"{where}: install outside the hash-locked lock file")
     for w in words:
         if re.match(
@@ -939,7 +1258,19 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
         found.append("workflow: concurrency is not the floor's pinned value")
     if wf.get("permissions") != READ_ONLY:
         found.append("workflow: permissions beyond contents: read")
-    if not shell_ok(((wf.get("defaults") or {}).get("run") or {}).get("shell")):
+    defaults = wf.get("defaults")
+    run_defaults = defaults.get("run") if isinstance(defaults, dict) else None
+    if defaults is not None and not (
+        isinstance(defaults, dict)
+        and set(defaults) == {"run"}
+        and isinstance(run_defaults, dict)
+        and set(run_defaults) == {"shell"}
+    ):
+        # The same judgment as a step: only an allowlisted shell, never a
+        # working directory or any other default.
+        found.append("workflow: defaults are not exactly the floor's shell")
+        defaults = {}
+    if not shell_ok(((defaults or {}).get("run") or {}).get("shell")):
         found.append("workflow: default shell is not an allowlisted value")
     seen: dict[str, str] = {}
     for doc in [wf, *extra_workflows]:
@@ -988,7 +1319,7 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
             effective = (
                 step.get("shell")
                 or ((job.get("defaults") or {}).get("run") or {}).get("shell")
-                or ((wf.get("defaults") or {}).get("run") or {}).get("shell")
+                or ((defaults or {}).get("run") or {}).get("shell")
             )
             if "run" in step and effective not in SHELL_ALLOWLIST:
                 found.append(f"{sw}: no explicit pipefail shell")
@@ -1011,7 +1342,7 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
                 found.append(f"{sw}: working directory {step.get('working-directory')}")
             run = step.get("run")
             if run:
-                found += run_violations(str(run), sw)
+                found += run_violations(str(run), sw, str(key))
     return found
 
 
@@ -1082,6 +1413,60 @@ def protected_job_violations(wf: dict) -> list[str]:
         for needle in needles:
             if needle not in text:
                 found.append(f"job {key}: required step text {needle!r} is missing")
+        ran = {
+            command
+            for s in job.get("steps") or []
+            if isinstance(s, dict) and s.get("run")
+            for command in parsed_commands(str(s["run"]))
+        }
+        for command in REQUIRED_COMMANDS.get(key, ()):
+            if command not in ran:
+                found.append(f"job {key}: required command {command!r} is missing")
+    return found
+
+
+def _test_modules(root: Path) -> list[Path]:
+    """Files pytest collects as test modules by default (no python_files key)."""
+    import os
+
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        here = Path(dirpath)
+        rel_dir = here.relative_to(root).as_posix()
+        prefix = "" if rel_dir == "." else rel_dir + "/"
+        dirnames[:] = [
+            d for d in dirnames if not (prefix + d + "/").startswith(GUARD_SKIP_DIRS)
+        ]
+        out += [
+            here / n
+            for n in filenames
+            if n.endswith(".py") and (n.startswith("test_") or n.endswith("_test.py"))
+        ]
+    return sorted(out)
+
+
+def plugin_violations(root: Path) -> list[str]:
+    """No test module names pytest_plugins: the list loads plugin modules, and a
+    plugin's hooks can rewrite every result. Any use of the name counts: an
+    assignment, an annotation, an attribute, or the name as a string."""
+    import ast
+
+    found = []
+    for path in _test_modules(root):
+        rel = path.relative_to(root).as_posix()
+        try:
+            tree = ast.parse(path.read_bytes())
+        except (SyntaxError, ValueError):
+            found.append(f"{rel}: does not parse as Python")
+            continue
+        for node in ast.walk(tree):
+            if (
+                (isinstance(node, ast.Name) and node.id == "pytest_plugins")
+                or (isinstance(node, ast.Attribute) and node.attr == "pytest_plugins")
+                or (isinstance(node, ast.Constant) and node.value == "pytest_plugins")
+            ):
+                found.append(f"{rel}: declares pytest_plugins")
+                break
     return found
 
 
@@ -1193,10 +1578,39 @@ def pytest_config_violations(root: Path) -> list[str]:
             encoding="utf-8", errors="replace"
         ):
             found.append(f"pytest config: {rel} configures pytest")
+    # Every spelling of the same headers: TOML allows spaces and quotes inside a
+    # table header, and ini section names can carry spaces.
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        import tomllib
+
+        try:
+            tool = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("tool")
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError):
+            found.append("pytest config: pyproject.toml does not parse")
+        else:
+            if isinstance(tool, dict) and "pytest" in tool:
+                found.append("pytest config: pyproject.toml configures pytest")
+    for rel, header in (
+        ("tox.ini", r"(?m)^\s*\[\s*pytest\s*\]"),
+        ("setup.cfg", r"(?m)^\s*\[\s*tool\s*:\s*pytest\s*\]"),
+    ):
+        path = root / rel
+        if path.is_file() and re.search(
+            header, path.read_text(encoding="utf-8", errors="replace")
+        ):
+            found.append(f"pytest config: {rel} configures pytest")
     for rel in guard_files(root):
-        if rel.rsplit("/", 1)[-1] == "conftest.py":
+        name = rel.rsplit("/", 1)[-1]
+        if name == "conftest.py":
             found.append(f"pytest config: {rel} is not allowed")
-    return found
+        if name == ".pytest.ini":
+            found.append(f"pytest config: {rel} configures pytest")
+        # Inert today (no guardrail python reads the checkout's folders: every
+        # one runs with -I), and refused so that stays true.
+        if name in {"sitecustomize.py", "usercustomize.py"} or name.endswith(".pth"):
+            found.append(f"{rel}: interpreter startup file")
+    return sorted(set(found), key=found.index)
 
 
 def _checkout_violations(inputs: dict, where: str) -> list[str]:
@@ -1226,11 +1640,27 @@ def _checkout_violations(inputs: dict, where: str) -> list[str]:
 
 
 def violations(root: Path, pins_path: Path | None = None) -> list[str]:
-    wf = _load_yaml((root / WORKFLOW).read_text(encoding="utf-8"))
-    others = []
-    for path in sorted((root / ".github" / "workflows").glob("*.y*ml")):
-        if path.name != WORKFLOW.name:
-            others.append(_load_yaml(path.read_text(encoding="utf-8")) or {})
+    docs = {}
+    for path in [
+        root / WORKFLOW,
+        *sorted((root / ".github" / "workflows").glob("*.y*ml")),
+    ]:
+        rel = path.relative_to(root).as_posix()
+        if rel in docs:
+            continue
+        try:
+            doc = _load_yaml(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as exc:
+            return [f"workflow {rel}: does not load ({type(exc).__name__})"]
+        except WorkflowFormatError as exc:
+            return [f"workflow {rel}: does not load ({exc})"]
+        if path != root / WORKFLOW and not isinstance(doc, (dict, type(None))):
+            return [f"workflow {rel}: does not load (not a mapping)"]
+        if path == root / WORKFLOW and not isinstance(doc, dict):
+            return [f"workflow {rel}: does not load (not a mapping)"]
+        docs[rel] = doc or {}
+    wf = docs.pop(WORKFLOW.as_posix())
+    others = list(docs.values())
     found: list[str] = []
     in_tree = root / PINS
     if pins_path is not None and pins_path.resolve() != in_tree.resolve():
@@ -1259,6 +1689,7 @@ def violations(root: Path, pins_path: Path | None = None) -> list[str]:
         + trigger_violations(wf, others)
         + lock_violations(root)
         + pytest_config_violations(root)
+        + plugin_violations(root)
     )
 
 
@@ -1274,12 +1705,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
     root = args.root.resolve()
+    try:
+        pins = compute_pins(root)
+    except (WorkflowFormatError, OSError, UnicodeDecodeError) as exc:
+        print(f"floor guard: the workflow does not load ({exc or type(exc).__name__})")
+        return 1
     if args.update_pins:
-        (root / PINS).write_bytes(pins_text(compute_pins(root)).encode("utf-8"))
+        (root / PINS).write_bytes(pins_text(pins).encode("utf-8"))
         print(f"pins written: {root / PINS}")
         return 0
     found = violations(root, args.pins)
-    pins = compute_pins(root)
     print(
         f"floor guard: {len(pins['jobs'])} jobs and {len(pins['files'])} guard files checked, {len(found)} violation(s)"
     )

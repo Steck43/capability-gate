@@ -26,7 +26,9 @@ Modes:
   FILE ...            the named files
 
 Output names file and line only. The matched text is never printed, so a CI log
-cannot republish what the scan exists to stop.
+cannot republish what the scan exists to stop. File names are scanned too, and a
+path that matches any rule is shown only as "file #" and a hash of the path;
+git's own error text (which can quote a path) is never printed.
 
 Exit 0 = clean. Exit 1 = hit, or no denylist configured in --ci mode (fail
 closed: a scan with no list would pass everything). Exit 2 = usage or git
@@ -34,7 +36,7 @@ error, including a diff header this script cannot parse, so an unreadable file
 name fails instead of being skipped.
 
 Known gaps: text in encodings other than UTF-8 (UTF-16 diffs as binary),
-binary files, file names themselves, "~" and environment-variable home paths,
+binary file contents, "~" and environment-variable home paths,
 forward-slash Windows paths, IP addresses written in other forms, and anything
 committed with --no-verify before CI runs.
 """
@@ -42,6 +44,7 @@ committed with --no-verify before CI runs.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import subprocess
@@ -80,10 +83,9 @@ def _git(*args: str, check: bool = True) -> str:
         check=False,
     )
     if check and r.returncode != 0:
-        print(
-            f"leak scan: git {' '.join(args)} failed: {r.stderr.strip()}",
-            file=sys.stderr,
-        )
+        # git's message can quote a path or a ref; print only what ran and how.
+        verb = next((a for a in args if not a.startswith("-") and "=" not in a), "")
+        print(f"leak scan: git {verb} failed (exit {r.returncode})", file=sys.stderr)
         raise SystemExit(2)
     return r.stdout
 
@@ -119,6 +121,32 @@ def scan_text(text: str, names: list[re.Pattern[str]]) -> list[tuple[int, str]]:
             if pat.search(line):
                 hits.append((n, f"denylist entry {i}"))
     return hits
+
+
+def _digest(text: str) -> str:
+    return "#" + hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _shown(where: str, names: list[re.Pattern[str]]) -> str:
+    """The label to print: a path that matches any rule is shown only as a hash."""
+    path, sep, rest = where.partition(" @ ")
+    if scan_text(path, names):
+        return f"file {_digest(path)}{sep}{rest}"
+    return where
+
+
+def _paths(*diff_args: str) -> list[str]:
+    """Every path a diff touches, text or binary, so each file name is scanned."""
+    out = _git(
+        "-c",
+        "core.quotepath=false",
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        *diff_args,
+    )
+    return [p for p in out.split("\0") if p]
 
 
 def _tree() -> list[tuple[str, str]]:
@@ -164,7 +192,7 @@ def _target(header: str) -> str | None:
     if name == "/dev/null":
         return None
     if not name.startswith("b/"):
-        print(f"leak scan: cannot parse diff header {header!r}", file=sys.stderr)
+        print(f"leak scan: cannot parse diff header {_digest(header)}", file=sys.stderr)
         raise SystemExit(2)
     return name[2:]
 
@@ -222,6 +250,19 @@ def _per_commit(base: str, head: str) -> list[tuple[str, str]]:
     return out
 
 
+def _per_commit_paths(base: str, head: str) -> list[str]:
+    out = []
+    for row in _git("rev-list", "--parents", f"{base}..{head}").splitlines():
+        sha, *parents = row.split()
+        args = (
+            [f"{sha}^!"]
+            if len(parents) == 1
+            else [parents[0] if parents else _EMPTY_TREE, sha]
+        )
+        out += [f"{path} @ {sha[:12]}" for path in _paths(*args)]
+    return out
+
+
 def _messages(base: str, head: str) -> list[tuple[str, str]]:
     out = []
     for sha in _git("rev-list", f"{base}..{head}").split():
@@ -257,29 +298,53 @@ def main(argv: list[str] | None = None) -> int:
         )
         names = []
 
+    paths: list[str] = []
     if a.ci:
         if not a.base:
             ap.error("--ci needs --base")
         targets = _per_commit(a.base, a.head) + _messages(a.base, a.head)
+        paths = _per_commit_paths(a.base, a.head)
     elif a.text:
         targets = [(a.text, sys.stdin.read())]
     elif a.staged:
         targets = _added_lines("--cached")
+        paths = _paths("--cached")
     elif a.tree:
         targets = _tree()
+        paths = [p for p in _git("ls-files", "-z").split("\0") if p]
     else:
-        targets = [
-            (f, Path(f).read_text(encoding="utf-8", errors="replace")) for f in a.files
-        ]
+        targets = []
+        for f in a.files:
+            # Judge and show the name as the repository sees it, not the
+            # absolute path of the working copy on this machine.
+            rel = os.path.relpath(f)
+            where = f if rel.startswith("..") else Path(rel).as_posix()
+            try:
+                targets.append(
+                    (where, Path(f).read_text(encoding="utf-8", errors="replace"))
+                )
+            except OSError as exc:
+                print(
+                    f"leak scan: cannot read file {_digest(f)} ({type(exc).__name__})",
+                    file=sys.stderr,
+                )
+                return 2
+        paths = [where for where, _text in targets]
 
     total = 0
     per_file: Counter[str] = Counter()
+    found: list[tuple[str, int, str]] = []
+    for where in paths:
+        for _n, label in scan_text(where.partition(" @ ")[0], names):
+            found.append((where, 0, f"file name, {label}"))
     for where, text in targets:
-        for n, label in scan_text(text, names):
-            total += 1
-            per_file[where] += 1
-            if not a.tree:
-                print(f"{where}:{n}: {label}")
+        found += [(where, n, label) for n, label in scan_text(text, names)]
+    for where, n, label in found:
+        total += 1
+        shown = _shown(where, names)
+        per_file[shown] += 1
+        if not a.tree:
+            print(f"{shown}:{n}: {label}")
     if a.tree:
         for where, count in sorted(per_file.items()):
             print(f"{count}\t{where}")
