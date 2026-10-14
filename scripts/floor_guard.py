@@ -71,6 +71,11 @@ GUARD_GLOBS = (
     "setup.cfg",
     ".github/workflows/*.yml",
     ".github/workflows/*.yaml",
+    # Interpreter startup files: python imports sitecustomize from sys.path at
+    # startup, and a .pth file runs code when its directory is a site dir.
+    "**/sitecustomize.py",
+    "**/usercustomize.py",
+    "**/*.pth",
 )
 
 ALLOWED_COMMANDS = frozenset(
@@ -226,6 +231,124 @@ ALLOWED_ACTIONS = frozenset(
 )
 
 
+# --- rules the pins cannot replace (brief 3b) --------------------------------
+# A legitimate floor change regenerates the pins in the same pull request, so
+# these tables are the only reviewer of that change. --update-pins never writes
+# them; changing one is a change to this file, which base pins catch.
+
+# Every job in the floor workflow, the check names it must produce, and text
+# each of its steps must still contain. A job renamed away, a decoy that takes
+# a protected check name, or a protected key reused for a trivial step all fail.
+PROTECTED_JOBS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "secrets": (("secrets (gitleaks)",), ("gitleaks/gitleaks-action@",)),
+    "leak-denylist": (
+        ("secrets (names and personal paths)",),
+        ('python "$RUNNER_TEMP/leak_scan.py" --ci', "--text"),
+    ),
+    "kat-lint": (("tests (known-answer tests call the gate)",), ("kat_lint.py",)),
+    "authorship": (("authorship (no AI trailers)",), ("git log --all --format=%B",)),
+    "tests": (("tests (3.11)", "tests (3.12)"), ("pytest -q",)),
+    "lint": (("lint (ruff)",), ("ruff check .", "ruff format --check .")),
+    "craft-voice": (("craft (voice)",), ("voice_lint.py", 'python "$V" --commits')),
+    "craft-changelog": (("craft (changelog)",), ("changelog_gate.py", 'python "$C"')),
+    "craft-comments": (("craft (comments)",), ("comment_craft.py", 'python "$C"')),
+    "craft-empty-diff": (
+        ("craft (empty-diff)",),
+        ("empty_diff_gate.py", 'python "$C"'),
+    ),
+    "floor-guard": (
+        ("floor (guard from base)",),
+        ('python "$RUNNER_TEMP/floor/floor_guard.py" --root . --pins',),
+    ),
+    "workflow-lint": (
+        ("workflow (zizmor + actionlint)",),
+        ("zizmorcore/zizmor-action@", "/tmp/actionlint"),
+    ),
+}
+# The only conditions a job may carry; any other job condition, and any needs,
+# is a violation. Step conditions are allowlisted the same way.
+JOB_CONDITIONS = {
+    "leak-denylist": "github.event_name == 'pull_request' || github.event_name == 'push'",
+    "craft-empty-diff": "github.event_name == 'pull_request'",
+}
+STEP_CONDITIONS = frozenset({"github.event_name == 'pull_request'"})
+RUNNER = "ubuntu-latest"
+MAX_TIMEOUT = 30
+# The floor workflow's triggers, exactly. A pull request trigger that ignores
+# paths, or a missing synchronize, would let a change skip the floor.
+FLOOR_TRIGGERS = {
+    "push": {"branches": ["main"]},
+    "pull_request": {"types": ["opened", "synchronize", "reopened", "edited"]},
+    "workflow_dispatch": None,
+    "schedule": [{"cron": "17 9 * * 1"}],
+}
+# Triggers that run with secrets or write access on code the pull request
+# controls. No workflow file may use them.
+PRIVILEGED_TRIGGERS = frozenset(
+    {
+        "pull_request_target",
+        "workflow_run",
+        "issue_comment",
+        "pull_request_review",
+        "pull_request_review_comment",
+        "discussion_comment",
+    }
+)
+# A workflow that holds any write permission may run only on these triggers.
+WRITE_SAFE_TRIGGERS = frozenset(
+    {"push", "workflow_dispatch", "schedule", "branch_protection_rule"}
+)
+# Environment a guardrail step may set, with its exact value.
+STEP_ENV = {
+    "GITHUB_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
+    "LEAK_DENYLIST": "${{ secrets.LEAK_DENYLIST }}",
+    "EVENT_NAME": "${{ github.event_name }}",
+    "PUSH_BEFORE": "${{ github.event.before }}",
+    "PR_BASE": "${{ github.event.pull_request.base.sha }}",
+    "PR_TITLE": "${{ github.event.pull_request.title }}",
+    "PR_BODY": "${{ github.event.pull_request.body }}",
+    "AEGIS_ATOMS_ROOT": "${{ github.workspace }}/aegis-atoms",
+    "ISOLATION_LAYER_ROOT": "${{ github.workspace }}/isolation-layer",
+    "ACTIONLINT_VERSION": "1.7.12",
+    "ACTIONLINT_SHA256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+}
+# What python may run in a guardrail step: these scripts, or -m pytest and -m
+# pip with the lock. A variable that names a script may only hold these paths.
+PY_SCRIPTS = frozenset(
+    {
+        "scripts/kat_lint.py",
+        ".floor/craft/empty_range.py",
+        "$V",
+        "$C",
+        "$RUNNER_TEMP/leak_scan.py",
+        "$RUNNER_TEMP/floor/floor_guard.py",
+    }
+)
+SCRIPT_VARS = {
+    "V": frozenset({".floor/craft/voice_lint.py", "craft/voice_lint.py"}),
+    "C": frozenset(
+        {
+            ".floor/craft/changelog_gate.py",
+            "craft/changelog_gate.py",
+            ".floor/craft/comment_craft.py",
+            "craft/comment_craft.py",
+            ".floor/craft/empty_diff_gate.py",
+            "craft/empty_diff_gate.py",
+        }
+    ),
+}
+# pytest options a guardrail run may not add: they select, deselect, skip,
+# collect only, change config or root, disable plugins or relax xfail.
+PYTEST_OPTIONS = frozenset({"-q"})
+# pytest.ini keys and their required values; no other pytest config may exist.
+PYTEST_INI_KEYS = frozenset({"norecursedirs", "xfail_strict", "filterwarnings"})
+# Commands whose failure a pipe, && or || could hide.
+GUARDED = frozenset(
+    {"python", "python3", "pytest", "ruff", "git", "sha256sum", "curl", "tar"}
+)
+TEMP_PREFIXES = ("$RUNNER_TEMP", "${RUNNER_TEMP}", "/tmp/")
+
+
 # --- pins -------------------------------------------------------------------
 
 
@@ -340,6 +463,35 @@ def pins_from_file(data) -> dict:
     return pins
 
 
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    seen: dict[str, object] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise PinFormatError(f"duplicate key {key!r}")
+        seen[key] = value
+    return seen
+
+
+def pins_text(pins: dict) -> str:
+    """The one byte form of the pin file: what --update-pins writes."""
+    return json.dumps(pins_to_file(pins), indent=2, sort_keys=True) + "\n"
+
+
+def load_pins(path: Path) -> dict:
+    """Parse a pin file strictly; every failure is a PinFormatError."""
+    try:
+        raw = path.read_bytes()
+        text = raw.decode("utf-8").replace("\r\n", "\n")
+        pins = pins_from_file(json.loads(text, object_pairs_hook=_no_duplicate_keys))
+    except PinFormatError:
+        raise
+    except (ValueError, RecursionError, UnicodeDecodeError) as exc:
+        raise PinFormatError(f"does not parse ({type(exc).__name__})") from None
+    if text != pins_text(pins):
+        raise PinFormatError("not in the canonical form --update-pins writes")
+    return pins
+
+
 def pin_violations(root: Path, pins: dict) -> list[str]:
     now = compute_pins(root)
     found: list[str] = []
@@ -375,6 +527,9 @@ class _Collector:
         self.assignments: list[str] = []
         self.masked: list[str] = []
         self.negated = False
+        self.chains: list[tuple[str, list[str]]] = []
+        self.pipelines: list[list[list[str]]] = []
+        self.writes: list[tuple[list[str], str]] = []
         self._condition = 0
 
     def _head(self, node) -> list[str]:
@@ -393,14 +548,28 @@ class _Collector:
                     getattr(part, "kind", None) == "operator"
                     and part.op == "||"
                     and i + 1 < len(parts)
+                    and not self._condition
                 ):
                     words = self._head(parts[i + 1])
-                    if words and (
-                        words[0] in MASKS
-                        or (words[0] == "exit" and words[1:2] in ([], ["0"]))
+                    if words and not (
+                        words[0] == "exit" and words[1:2] in (["1"], ["2"], ["3"])
                     ):
                         self.masked.append(" ".join(words[:2]))
+                if (
+                    getattr(part, "kind", None) == "operator"
+                    and part.op in {"&&", "||"}
+                    and i + 1 < len(parts)
+                    and not self._condition
+                ):
+                    self.chains.append((part.op, self._head(parts[i + 1])))
         if kind == "pipeline" and not self._condition:
+            self.pipelines.append(
+                [
+                    [w.word for w in p.parts if w.kind == "word"]
+                    for p in node.parts
+                    if getattr(p, "kind", None) == "command"
+                ]
+            )
             if any(
                 getattr(p, "kind", None) == "reservedword" and p.word == "!"
                 for p in node.parts
@@ -428,6 +597,7 @@ class _Collector:
                     target = getattr(p, "output", None)
                     if target is not None and getattr(target, "kind", None) == "word":
                         self.redirects.append(target.word)
+                        self.writes.append(([w.word for w in words], target.word))
             self.commands.append([w.word for w in words])
         for attr in ("parts", "list"):
             for child in getattr(node, attr, None) or []:
@@ -459,10 +629,24 @@ def run_violations(run: str, where: str) -> list[str]:
         found.append(f"{where}: no command found")
     for masked in col.masked:
         found.append(f"{where}: failure masked by || {masked}")
+    for op, words in col.chains:
+        if op == "&&" and words and words[0] in GUARDED:
+            found.append(f"{where}: {words[0]} runs only after &&")
+    pipefail = any(w and w[0] == "set" and "pipefail" in w[1:] for w in col.commands)
+    for pipeline in col.pipelines:
+        for words in pipeline[:-1]:
+            if words and words[0] in GUARDED and not pipefail:
+                found.append(f"{where}: failure of {words[0]} hidden by a pipe")
+    for words, target in col.writes:
+        clean = target.strip("\"'")
+        if clean.startswith(TEMP_PREFIXES) and words[:2] != ["git", "show"]:
+            found.append(f"{where}: only git show may write into the temp dir")
     if col.negated:
         found.append(f"{where}: exit status negated with !")
     for name in col.assignments:
-        var = name.split("=", 1)[0]
+        var, _, value = name.partition("=")
+        if var in SCRIPT_VARS and value.strip("\"'") not in SCRIPT_VARS[var]:
+            found.append(f"{where}: {var} must name an allowlisted script")
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", var) or SENSITIVE_VARS.match(
             var
         ):
@@ -492,6 +676,10 @@ def run_violations(run: str, where: str) -> list[str]:
             continue
         if head in {"python", "python3"}:
             found += _python_violations(words, where)
+            if words[1:3] == ["-m", "pytest"]:
+                found += _pytest_violations(words[3:], where)
+        if head == "pytest":
+            found += _pytest_violations(words[1:], where)
         if head == "ruff" and any(LINT_SOFTENERS.match(w) for w in words[1:]):
             found.append(f"{where}: lint made non-failing")
         if head == "exit" and (len(words) < 2 or words[1] not in {"1", "2", "3"}):
@@ -576,7 +764,22 @@ def _python_violations(words: list[str], where: str) -> list[str]:
             r"^--?(?:i|index-url|extra-index-url|find-links|trusted-host)\b", w
         ):
             found.append(f"{where}: package index override")
+    if len(words) < 2:
+        found.append(f"{where}: python runs no script")
+    elif words[1] == "-m":
+        if words[2:3] not in (["pytest"], ["pip"]):
+            found.append(f"{where}: python -m runs a module other than pytest or pip")
+    elif words[1] not in PY_SCRIPTS:
+        found.append(f"{where}: python runs a script that is not allowlisted")
     return found
+
+
+def _pytest_violations(args: list[str], where: str) -> list[str]:
+    return [
+        f"{where}: pytest argument {a!r} is not allowed"
+        for a in args
+        if a not in PYTEST_OPTIONS
+    ]
 
 
 # The only shell values a guardrail may set, compared as exact strings. Flags
@@ -659,6 +862,21 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
             found.append(f"{where}: keys {sorted(set(job) - ALLOWED_JOB_KEYS)}")
         if job.get("continue-on-error"):
             found.append(f"{where}: continue-on-error")
+        if job.get("if") != JOB_CONDITIONS.get(key):
+            found.append(f"{where}: job condition is not allowlisted")
+        if "needs" in job:
+            found.append(f"{where}: needs")
+        if job.get("runs-on") != RUNNER:
+            found.append(f"{where}: runner is not {RUNNER}")
+        timeout = job.get("timeout-minutes")
+        if not (
+            isinstance(timeout, int)
+            and not isinstance(timeout, bool)
+            and 1 <= timeout <= MAX_TIMEOUT
+        ):
+            found.append(f"{where}: timeout is not 1 to {MAX_TIMEOUT} minutes")
+        if not _matrix_combos(job):
+            found.append(f"{where}: matrix expands to no runs")
         if not shell_ok(((job.get("defaults") or {}).get("run") or {}).get("shell")):
             found.append(f"{where}: default shell is not an allowlisted value")
         if job.get("env"):
@@ -674,9 +892,14 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
             if not shell_ok(step.get("shell")):
                 found.append(f"{sw}: shell is not an allowlisted value")
             uses = step.get("uses")
+            if "if" in step and step["if"] not in STEP_CONDITIONS:
+                found.append(f"{sw}: step condition is not allowlisted")
             for var, value in (step.get("env") or {}).items():
                 token_ok = uses is not None and TOKEN_ENV.get(str(var)) == value
-                if SENSITIVE_VARS.match(str(var)) and not token_ok:
+                if str(var) == "GITHUB_TOKEN":
+                    if not token_ok:
+                        found.append(f"{sw}: env sets {var}")
+                elif STEP_ENV.get(str(var)) != value:
                     found.append(f"{sw}: env sets {var}")
             if uses is not None:
                 if uses not in ALLOWED_ACTIONS:
@@ -688,6 +911,143 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
             run = step.get("run")
             if run:
                 found += run_violations(str(run), sw)
+    return found
+
+
+def protected_job_violations(wf: dict) -> list[str]:
+    found: list[str] = []
+    jobs = wf.get("jobs") or {}
+    for key in sorted(set(jobs) - set(PROTECTED_JOBS)):
+        found.append(f"job {key}: not in the protected jobs table")
+    for key, (names, needles) in PROTECTED_JOBS.items():
+        job = jobs.get(key)
+        if not isinstance(job, dict):
+            found.append(f"job {key}: protected job is missing")
+            continue
+        if sorted(check_names(key, job)) != sorted(n.casefold() for n in names):
+            found.append(f"job {key}: check names are not {list(names)}")
+        text = "\n".join(
+            f"{s.get('run', '')}\n{s.get('uses', '')}"
+            for s in job.get("steps") or []
+            if isinstance(s, dict)
+        )
+        for needle in needles:
+            if needle not in text:
+                found.append(f"job {key}: required step text {needle!r} is missing")
+    return found
+
+
+def _triggers(doc: dict) -> object:
+    return doc.get("on", doc.get(True))
+
+
+def _trigger_names(on: object) -> set[str]:
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, list):
+        return {str(x) for x in on}
+    if isinstance(on, dict):
+        return {str(k) for k in on}
+    return set()
+
+
+def _writes(permissions: object) -> bool:
+    if isinstance(permissions, str):
+        return permissions != "read-all"
+    if isinstance(permissions, dict):
+        return any(str(v) != "read" and str(v) != "none" for v in permissions.values())
+    return False
+
+
+def trigger_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
+    found: list[str] = []
+    if _normalise(_triggers(wf)) != FLOOR_TRIGGERS:
+        found.append("workflow: triggers are not exactly the floor's triggers")
+    for doc in [wf, *extra_workflows]:
+        name = str(doc.get("name") or "?")
+        names = _trigger_names(_triggers(doc))
+        for trig in sorted(names & PRIVILEGED_TRIGGERS):
+            found.append(f"workflow {name}: privileged trigger {trig}")
+        writes = _writes(doc.get("permissions")) or any(
+            _writes((job or {}).get("permissions"))
+            for job in (doc.get("jobs") or {}).values()
+            if isinstance(job, dict)
+        )
+        if writes and names - WRITE_SAFE_TRIGGERS:
+            found.append(
+                f"workflow {name}: write permission with trigger(s) {sorted(names - WRITE_SAFE_TRIGGERS)}"
+            )
+    return found
+
+
+_LOCK_REQ = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9_.-]*==[A-Za-z0-9_.+!-]+(?: ; [^\\#]+?)?"
+    r"(?: --hash=sha256:[0-9a-f]{64})+"
+)
+
+
+def lock_violations(root: Path) -> list[str]:
+    path = root / LOCK
+    if not path.is_file():
+        return [f"lock: {LOCK} is missing"]
+    text = path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    logical = re.sub(r"\\\n\s*", " ", text)
+    found, reqs = [], 0
+    for n, line in enumerate(logical.splitlines(), 1):
+        line = " ".join(line.split())
+        if not line or line.startswith("#"):
+            continue
+        if not _LOCK_REQ.fullmatch(line):
+            found.append(
+                f"lock: entry {n} is not a version-pinned, hash-locked requirement"
+            )
+        reqs += 1
+    if not reqs:
+        found.append("lock: no requirements")
+    return found
+
+
+def pytest_config_violations(root: Path) -> list[str]:
+    import configparser
+    import fnmatch
+
+    found: list[str] = []
+    ini = configparser.ConfigParser()
+    try:
+        ini.read_string((root / "pytest.ini").read_text(encoding="utf-8"))
+    except (OSError, configparser.Error):
+        return ["pytest config: pytest.ini is missing or does not parse"]
+    if ini.sections() != ["pytest"]:
+        found.append("pytest config: pytest.ini holds a section other than [pytest]")
+        return found
+    cfg = ini["pytest"]
+    for key in sorted(set(cfg) - PYTEST_INI_KEYS):
+        found.append(f"pytest config: key {key} is not allowed")
+    if cfg.get("xfail_strict", "").strip().lower() != "true":
+        found.append("pytest config: xfail_strict is not true")
+    warn = [w.strip() for w in cfg.get("filterwarnings", "").splitlines() if w.strip()]
+    if "error::SyntaxWarning" not in warn or any(w.startswith("ignore") for w in warn):
+        found.append(
+            "pytest config: filterwarnings does not keep SyntaxWarning an error"
+        )
+    for pattern in cfg.get("norecursedirs", "").split():
+        if fnmatch.fnmatch("tests", pattern) or fnmatch.fnmatch("scripts", pattern):
+            found.append(
+                f"pytest config: norecursedirs pattern {pattern!r} hides tests"
+            )
+    for rel, marker in (
+        ("pyproject.toml", "[tool.pytest"),
+        ("tox.ini", "[pytest]"),
+        ("setup.cfg", "[tool:pytest]"),
+    ):
+        path = root / rel
+        if path.is_file() and marker in path.read_text(
+            encoding="utf-8", errors="replace"
+        ):
+            found.append(f"pytest config: {rel} configures pytest")
+    for rel in guard_files(root):
+        if rel.rsplit("/", 1)[-1] == "conftest.py":
+            found.append(f"pytest config: {rel} is not allowed")
     return found
 
 
@@ -723,14 +1083,34 @@ def violations(root: Path, pins_path: Path | None = None) -> list[str]:
     for path in sorted((root / ".github" / "workflows").glob("*.y*ml")):
         if path.name != WORKFLOW.name:
             others.append(_load_yaml(path.read_text(encoding="utf-8")) or {})
-    pins_path = pins_path or root / PINS
+    found: list[str] = []
+    in_tree = root / PINS
+    if pins_path is not None and pins_path.resolve() != in_tree.resolve():
+        if not in_tree.is_file():
+            found.append("pin: in-tree .github/floor-pins.json is missing")
+        else:
+            try:
+                load_pins(in_tree)
+            except PinFormatError as exc:
+                found.append(
+                    f"pin: in-tree .github/floor-pins.json is malformed ({exc})"
+                )
+    pins_path = pins_path or in_tree
     if not pins_path.is_file():
-        return ["pin: .github/floor-pins.json is missing"]
+        return found + ["pin: .github/floor-pins.json is missing"]
     try:
-        pins = pins_from_file(json.loads(pins_path.read_text(encoding="utf-8")))
-    except ValueError as exc:  # JSONDecodeError and PinFormatError
-        return [f"pin: .github/floor-pins.json is malformed ({exc})"]
-    return pin_violations(root, pins) + job_violations(wf, others)
+        pins = load_pins(pins_path)
+    except PinFormatError as exc:
+        return found + [f"pin: .github/floor-pins.json is malformed ({exc})"]
+    return (
+        found
+        + pin_violations(root, pins)
+        + job_violations(wf, others)
+        + protected_job_violations(wf)
+        + trigger_violations(wf, others)
+        + lock_violations(root)
+        + pytest_config_violations(root)
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -746,12 +1126,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     root = args.root.resolve()
     if args.update_pins:
-        (root / PINS).write_bytes(
-            (
-                json.dumps(pins_to_file(compute_pins(root)), indent=2, sort_keys=True)
-                + "\n"
-            ).encode("utf-8")
-        )
+        (root / PINS).write_bytes(pins_text(compute_pins(root)).encode("utf-8"))
         print(f"pins written: {root / PINS}")
         return 0
     found = violations(root, args.pins)
