@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `.github/floor-pins.json` stores every digest under a `sha256` field, in lists of `{"path"|"job", "sha256"}` entries. A job named `secrets` beside a 64-hex value had read as a credential to the secret scanner. The floor guard parses the file strictly: an unknown or missing key, a non-list group, an empty or duplicate name, or a digest that is not 64 lowercase hex fails the floor as malformed instead of defaulting.
 - Claude Code Glob canaries now deny five additional segment spellings that can match `..`: `.?`, `?.`, `[.x][.x]`, `[!a][!a]`, and `[.-.][.-.]`.
 - T-FAIL-05 path coercion now runs inside `Gate.evaluate`'s recorded fail-closed boundary. A path whose string conversion raises returns DENY and appends a deny row instead of escaping before the boundary.
 - Claude Code adapter Glob climb residuals (K2b): deny escaped character-class parents (`[\.][\.]/*`), mixed `.`/`[.]` segments, `..*`, nested brace alternatives, and absolute brace alts before separator normalize. Collapse `[.]` / `[\.]` / `[..]` to literal dots first so a global `\`→`/` rewrite cannot turn `[\.]` into `[/.]`. Still a denylist over climb shapes, not a full Glob semantic model.

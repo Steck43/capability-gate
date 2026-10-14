@@ -281,13 +281,67 @@ def compute_pins(root: Path) -> dict:
     }
 
 
+# On disk every digest sits under a field named "sha256", never under a job or
+# file name: a job named "secrets" next to a 64-hex value reads as a credential
+# to secret scanners. In memory the groups stay name -> digest maps.
+PIN_GROUPS = (("files", "path"), ("jobs", "job"))
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+class PinFormatError(ValueError):
+    pass
+
+
+def pins_to_file(pins: dict) -> dict:
+    out: dict = {"workflow": {"sha256": pins["workflow"]}}
+    for group, field in PIN_GROUPS:
+        out[group] = [
+            {field: name, "sha256": digest}
+            for name, digest in sorted(pins[group].items())
+        ]
+    return out
+
+
+def _digest(value, where: str) -> str:
+    if not isinstance(value, str) or not _HEX64.fullmatch(value):
+        raise PinFormatError(f"{where}: sha256 must be 64 lowercase hex")
+    return value
+
+
+def pins_from_file(data) -> dict:
+    """Parse the on-disk form exactly; any other shape is an error, never a default."""
+    if not isinstance(data, dict) or set(data) != {"workflow", "files", "jobs"}:
+        raise PinFormatError("top level must hold exactly workflow, files and jobs")
+    workflow = data["workflow"]
+    if not isinstance(workflow, dict) or set(workflow) != {"sha256"}:
+        raise PinFormatError("workflow must hold exactly sha256")
+    pins: dict = {"workflow": _digest(workflow["sha256"], "workflow")}
+    for group, field in PIN_GROUPS:
+        entries = data[group]
+        if not isinstance(entries, list):
+            raise PinFormatError(f"{group} must be a list")
+        seen: dict[str, str] = {}
+        for index, entry in enumerate(entries):
+            where = f"{group}[{index}]"
+            if not isinstance(entry, dict) or set(entry) != {field, "sha256"}:
+                raise PinFormatError(f"{where} must hold exactly {field} and sha256")
+            name = entry[field]
+            if not isinstance(name, str) or not name:
+                raise PinFormatError(f"{where}: {field} must be a non-empty string")
+            if name in seen:
+                raise PinFormatError(f"{where}: duplicate {field}")
+            seen[name] = _digest(entry["sha256"], where)
+        pins[group] = seen
+    return pins
+
+
 def pin_violations(root: Path, pins: dict) -> list[str]:
     now = compute_pins(root)
     found: list[str] = []
-    if now["workflow"] != pins.get("workflow"):
+    if now["workflow"] != pins["workflow"]:
         found.append("pin: workflow settings changed")
     for group in ("jobs", "files"):
-        want, have = pins.get(group) or {}, now[group]
+        want, have = pins[group], now[group]
         for name in sorted(set(want) | set(have)):
             if name not in have:
                 found.append(f"pin: {group[:-1]} {name} removed")
@@ -662,7 +716,10 @@ def violations(root: Path, pins_path: Path | None = None) -> list[str]:
     pins_path = pins_path or root / PINS
     if not pins_path.is_file():
         return ["pin: .github/floor-pins.json is missing"]
-    pins = json.loads(pins_path.read_text(encoding="utf-8"))
+    try:
+        pins = pins_from_file(json.loads(pins_path.read_text(encoding="utf-8")))
+    except ValueError as exc:  # JSONDecodeError and PinFormatError
+        return [f"pin: .github/floor-pins.json is malformed ({exc})"]
     return pin_violations(root, pins) + job_violations(wf, others)
 
 
@@ -680,9 +737,10 @@ def main(argv: list[str] | None = None) -> int:
     root = args.root.resolve()
     if args.update_pins:
         (root / PINS).write_bytes(
-            (json.dumps(compute_pins(root), indent=2, sort_keys=True) + "\n").encode(
-                "utf-8"
-            )
+            (
+                json.dumps(pins_to_file(compute_pins(root)), indent=2, sort_keys=True)
+                + "\n"
+            ).encode("utf-8")
         )
         print(f"pins written: {root / PINS}")
         return 0
