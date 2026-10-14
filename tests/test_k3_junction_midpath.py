@@ -13,7 +13,9 @@ import pytest
 
 
 def test_k3_receipt_exists() -> None:
-    receipt = Path(__file__).resolve().parents[1] / "receipts" / "K3-JUNCTION-MIDPATH.md"
+    receipt = (
+        Path(__file__).resolve().parents[1] / "receipts" / "K3-JUNCTION-MIDPATH.md"
+    )
     assert receipt.is_file(), "K3 receipt missing — failing-first until written"
 
 
