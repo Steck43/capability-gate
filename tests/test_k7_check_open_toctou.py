@@ -8,7 +8,9 @@ import pytest
 
 
 def test_k7_receipt_exists() -> None:
-    receipt = Path(__file__).resolve().parents[1] / "receipts" / "K7-CHECK-OPEN-TOCTOU.md"
+    receipt = (
+        Path(__file__).resolve().parents[1] / "receipts" / "K7-CHECK-OPEN-TOCTOU.md"
+    )
     assert receipt.is_file(), "K7 receipt missing — failing-first"
 
 
