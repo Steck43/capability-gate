@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import configparser
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -315,7 +316,10 @@ TAMPERS = [
     ),
     (
         "T2 workflow default shell",
-        ("permissions:\n", "defaults:\n  run:\n    shell: bash {0}\npermissions:\n"),
+        (
+            "    shell: bash --noprofile --norc -eo pipefail {0}\n",
+            "    shell: bash {0}\n",
+        ),
         "default shell is not an allowlisted value",
         False,
     ),
@@ -807,6 +811,9 @@ _BAD_SHELLS = [
     pytest.param("/bin/bash -e {0}", id="absolute-bash"),
     pytest.param("bash", id="bare-bash-keyword"),
     pytest.param("sh {0}", id="sh-without-e"),
+    # stop-on-error without pipefail: a failing command early in a pipe is hidden
+    pytest.param("bash -e {0}", id="errexit-without-pipefail"),
+    pytest.param("sh -e {0}", id="sh-errexit-without-pipefail"),
     # the end-of-options marker
     pytest.param("bash -e -- {0}", id="end-of-options"),
     pytest.param("bash -- -e {0}", id="end-of-options-first"),
@@ -814,9 +821,7 @@ _BAD_SHELLS = [
 _LEVELS = ("step", "job-defaults", "workflow-defaults")
 _ALLOWED_SHELLS = [
     "bash --noprofile --norc -eo pipefail {0}",
-    "bash -e {0}",
     "bash -eo pipefail {0}",
-    "sh -e {0}",
 ]
 
 
@@ -828,6 +833,10 @@ def _plant_shell(text: str, level: str, value: str) -> str:
         anchor = "    name: tests (known-answer tests call the gate)\n"
         return text.replace(
             anchor, anchor + f"    defaults:\n      run:\n        shell: {quoted}\n", 1
+        )
+    if FLOOR_DEFAULTS in text:
+        return text.replace(
+            FLOOR_DEFAULTS, f"defaults:\n  run:\n    shell: {quoted}\n", 1
         )
     return text.replace(
         "permissions:\n", f"defaults:\n  run:\n    shell: {quoted}\npermissions:\n", 1
@@ -1541,3 +1550,313 @@ def test_pytest_config_edits_are_judged_by_rules(
     (root / rel).write_text(content, encoding="utf-8")
     found = _repin(root)
     assert any(expect in f for f in found), found
+
+
+# --- nothing pytest loads is hidden behind a link (brief 82-84 item 1) -----------
+
+
+def _git(root: Path, *args: str) -> str:
+    run = subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True, check=True
+    )
+    return run.stdout.strip()
+
+
+def _git_tree(tmp_path: Path) -> Path:
+    root = _copy_tree(tmp_path)
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "zqxwvk@example.invalid")
+    _git(root, "config", "user.name", "zqxwvk")
+    _git(root, "config", "core.symlinks", "false")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "tree")
+    return root
+
+
+def test_a_committed_directory_symlink_into_a_skipped_dir_fails_the_guard(
+    tmp_path: Path,
+) -> None:
+    """Index mode 120000 is a symlink whatever the checkout platform does with it."""
+    root = _git_tree(tmp_path)
+    hidden = root / ".tmp" / "zqxwvk"
+    hidden.mkdir(parents=True)
+    (hidden / "conftest.py").write_text(
+        "collect_ignore_glob = ['*']\n", encoding="utf-8"
+    )
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=root,
+        input="../.tmp/zqxwvk",
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    _git(root, "update-index", "--add", "--cacheinfo", f"120000,{blob},tests/zqxwvk")
+    _git(root, "commit", "-q", "-m", "link")
+    found = guard.violations(root)
+    assert "tracked symlink tests/zqxwvk: the guard does not follow links" in found, (
+        found
+    )
+
+
+def test_a_symlink_on_disk_into_a_skipped_dir_fails_the_guard(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    hidden = root / ".tmp" / "zqxwvk"
+    hidden.mkdir(parents=True)
+    (hidden / "conftest.py").write_text(
+        "collect_ignore_glob = ['*']\n", encoding="utf-8"
+    )
+    os.symlink(hidden, root / "tests" / "zqxwvk", target_is_directory=True)
+    found = guard.violations(root)
+    assert "symlink tests/zqxwvk: the guard does not follow links" in found, found
+
+
+def test_a_file_symlink_to_a_guard_file_fails_the_guard(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    os.symlink(root / "pytest.ini", root / "zqxwvk.ini")
+    found = guard.violations(root)
+    assert "symlink zqxwvk.ini: the guard does not follow links" in found, found
+
+
+def test_a_tree_without_symlinks_passes(tmp_path: Path) -> None:
+    assert guard.violations(_git_tree(tmp_path)) == []
+
+
+# --- a guardrail step fails whenever its command fails (item 2) -------------------
+# The floor sets one pipefail shell for every step and the rules refuse every
+# construct that can keep a failing command from failing the step.
+
+FLOOR_DEFAULTS = (
+    "defaults:\n  run:\n    shell: bash --noprofile --norc -eo pipefail {0}\n"
+)
+
+STEP_EXIT_TAMPERS = [
+    pytest.param(
+        "python scripts/kat_lint.py &\nwait",
+        "runs a command in the background",
+        id="background",
+    ),
+    pytest.param(
+        "[ -n zqxwvk ] && python scripts/kat_lint.py", "uses &&", id="and-list"
+    ),
+    pytest.param(
+        "python scripts/kat_lint.py && echo done", "uses &&", id="non-final-and"
+    ),
+    pytest.param("python scripts/kat_lint.py || exit 1", "uses ||", id="or-list"),
+    pytest.param(
+        "if python scripts/kat_lint.py; then echo ok; fi",
+        "uses a condition",
+        id="if-condition",
+    ),
+    pytest.param(
+        "if [ -n zqxwvk ]; then python scripts/kat_lint.py; fi",
+        "uses a condition",
+        id="if-around-the-check",
+    ),
+    pytest.param(
+        "while python scripts/kat_lint.py; do break; done",
+        "uses a condition",
+        id="while-condition",
+    ),
+    pytest.param(
+        "until python scripts/kat_lint.py; do break; done",
+        "uses a condition",
+        id="until-condition",
+    ),
+    pytest.param(
+        'echo "$(python scripts/kat_lint.py)"',
+        "uses command substitution",
+        id="dollar-paren",
+    ),
+    pytest.param(
+        "echo `python scripts/kat_lint.py`", "uses command substitution", id="backticks"
+    ),
+    pytest.param(
+        "grep -c zqxwvk <(python scripts/kat_lint.py)",
+        "uses command substitution",
+        id="process-substitution",
+    ),
+    pytest.param("! python scripts/kat_lint.py", "exit status negated", id="negation"),
+]
+
+
+@pytest.mark.parametrize(("run", "expect"), STEP_EXIT_TAMPERS)
+def test_a_construct_that_can_hide_a_failure_is_a_rules_violation(
+    tmp_path: Path, run: str, expect: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    text = wf.read_text(encoding="utf-8")
+    assert KAT in text
+    wf.write_text(text.replace(KAT, _step(run), 1), encoding="utf-8")
+    (root / guard.PINS).write_text(_pins_text(root), encoding="utf-8")
+    found = guard.violations(root)
+    assert any(expect in f for f in found), found
+
+
+def test_a_pipe_is_allowed_only_under_the_pipefail_shell(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    text = wf.read_text(encoding="utf-8")
+    assert FLOOR_DEFAULTS in text
+    piped = text.replace(KAT, _step("python scripts/kat_lint.py | grep -v zqxwvk"), 1)
+    wf.write_text(piped, encoding="utf-8")
+    (root / guard.PINS).write_text(_pins_text(root), encoding="utf-8")
+    assert not any("pipe" in f for f in guard.violations(root))
+    wf.write_text(piped.replace(FLOOR_DEFAULTS, "", 1), encoding="utf-8")
+    (root / guard.PINS).write_text(_pins_text(root), encoding="utf-8")
+    assert any("no explicit pipefail shell" in f for f in guard.violations(root))
+
+
+def test_a_step_with_no_explicit_shell_is_unsafe(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    text = wf.read_text(encoding="utf-8")
+    assert FLOOR_DEFAULTS in text
+    wf.write_text(text.replace(FLOOR_DEFAULTS, "", 1), encoding="utf-8")
+    (root / guard.PINS).write_text(_pins_text(root), encoding="utf-8")
+    found = guard.violations(root)
+    assert any(f.endswith("step 3: no explicit pipefail shell") for f in found), found
+
+
+@pytest.mark.parametrize(
+    "shell",
+    [pytest.param("bash -e {0}", id="no-pipefail"), pytest.param("sh -e {0}", id="sh")],
+)
+def test_a_step_shell_without_pipefail_is_unsafe(tmp_path: Path, shell: str) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    text = wf.read_text(encoding="utf-8")
+    wf.write_text(
+        text.replace(KAT, KAT + f"        shell: {shell}\n", 1), encoding="utf-8"
+    )
+    (root / guard.PINS).write_text(_pins_text(root), encoding="utf-8")
+    found = guard.violations(root)
+    assert any("shell is not an allowlisted value" in f for f in found), found
+
+
+def test_the_live_floor_steps_hold_no_hiding_construct() -> None:
+    wf = _workflow()
+    assert guard.job_violations(wf) == []
+    runs = "\n".join(
+        str(step.get("run", ""))
+        for job in wf["jobs"].values()
+        for step in job.get("steps", [])
+    )
+    for token in (" && ", " || ", "$(", "`", "if ", "while "):
+        assert token not in runs, token
+
+
+def test_pipefail_stops_a_failing_pipe_in_each_allowed_shell(tmp_path: Path) -> None:
+    script = tmp_path / "pipe.sh"
+    script.write_bytes(b"false | true\necho zqxwvk-reached\n")
+    for value in sorted(guard.SHELL_ALLOWLIST):
+        words = value.split()
+        exe = shutil.which(words[0])
+        assert exe, words[0]
+        argv = [exe] + [
+            str(script).replace("\\", "/") if w == "{0}" else w for w in words[1:]
+        ]
+        run = subprocess.run(argv, capture_output=True, text=True)
+        assert run.returncode != 0, value
+        assert "zqxwvk-reached" not in run.stdout, value
+
+
+# --- python never runs from a world-writable place (item 11) ---------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/tmp/zqxwvk.py",
+        "/var/tmp/zqxwvk.py",
+        "/dev/shm/zqxwvk.py",
+        "$TMPDIR/zqxwvk.py",
+        "${TMPDIR}/zqxwvk.py",
+    ],
+)
+def test_python_never_runs_a_script_from_a_world_writable_place(
+    tmp_path: Path, path: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    text = wf.read_text(encoding="utf-8")
+    wf.write_text(text.replace(KAT, _step(f'python "{path}"'), 1), encoding="utf-8")
+    (root / guard.PINS).write_text(_pins_text(root), encoding="utf-8")
+    found = guard.violations(root)
+    assert any("python runs a script that is not allowlisted" in f for f in found), (
+        found
+    )
+
+
+def test_every_allowlisted_python_script_is_in_the_repo_or_the_runner_temp() -> None:
+    for script in guard.PY_SCRIPTS:
+        assert not script.startswith(
+            ("/tmp", "/var/tmp", "/dev/shm", "$TMPDIR", "${TMPDIR}")
+        )
+        assert script.startswith(("$RUNNER_TEMP/", "scripts/", ".floor/")), script
+
+
+# --- the authorship check runs as a plain command ---------------------------------
+
+
+def _trailer_check(tmp_path: Path, text: str) -> subprocess.CompletedProcess:
+    history = tmp_path / "history.txt"
+    history.write_text(text, encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "no_ai_trailers.py"), str(history)],
+        capture_output=True,
+        text=True,
+    )
+
+
+# Each trailer is assembled from a key and a tool name kept on separate lines,
+# so no line of this file reads as a trailer to the repository's leak scans.
+_TRAILER_CASES = [
+    pytest.param(
+        "Co-authored-by:",
+        "Claude <noreply@example.invalid>",
+        id="co-author-claude",
+    ),
+    pytest.param(
+        "co-authored-by:",
+        "zqxwvk via Cursor",
+        id="co-author-cursor-lower",
+    ),
+    pytest.param(
+        "Co-Authored-By:",
+        "GitHub Copilot",
+        id="co-author-copilot-title",
+    ),
+    pytest.param(
+        "Generated with",
+        "Claude Code",
+        id="generated-claude",
+    ),
+    pytest.param(
+        "generated with",
+        "cursor",
+        id="generated-cursor-lower",
+    ),
+]
+
+
+@pytest.mark.parametrize(("key", "tool"), _TRAILER_CASES)
+def test_the_trailer_check_fails_on_an_ai_trailer(
+    tmp_path: Path, key: str, tool: str
+) -> None:
+    line = f"{key} {tool}"
+    run = _trailer_check(tmp_path, f"Fix zqxwvk\n\n{line}\n")
+    assert run.returncode == 1, run.stdout
+    assert "AI authorship trailer" in run.stdout
+
+
+def test_the_trailer_check_passes_clean_history_and_fails_on_none(
+    tmp_path: Path,
+) -> None:
+    run = _trailer_check(
+        tmp_path, "Fix zqxwvk\n\nCo-authored-by: A Person <a@example.invalid>\n"
+    )
+    assert run.returncode == 0, run.stdout
+    assert "lines checked" in run.stdout
+    assert _trailer_check(tmp_path, "").returncode == 1
