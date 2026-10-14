@@ -8,11 +8,7 @@ import pytest
 
 
 def test_windows_grant_acl_receipt_exists() -> None:
-    receipt = (
-        Path(__file__).resolve().parents[1]
-        / "receipts"
-        / "WINDOWS-GRANT-ACL.md"
-    )
+    receipt = Path(__file__).resolve().parents[1] / "receipts" / "WINDOWS-GRANT-ACL.md"
     assert receipt.is_file(), "Windows grant ACL receipt missing — failing-first"
 
 
