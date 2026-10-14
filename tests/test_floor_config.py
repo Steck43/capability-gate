@@ -37,6 +37,10 @@ def _runs(job: dict) -> str:
     return "\n".join(str(s.get("run", "")) for s in job.get("steps", []))
 
 
+def _strip_comments(run: str) -> str:
+    return "\n".join(ln for ln in run.splitlines() if not ln.strip().startswith("#"))
+
+
 # --- the live floor -----------------------------------------------------------
 
 
@@ -81,7 +85,9 @@ def test_pytest_ini_keeps_strict_xfail_and_syntax_warning_errors() -> None:
         ("leak-denylist", "--ci --base"),
         ("leak-denylist", '--text "pull request title and body"'),
         ("leak-denylist", "git show origin/main:scripts/leak_denylist_scan.py"),
-        ("kat-lint", "python scripts/kat_lint.py"),
+        ("leak-denylist", '--text "pull request branch"'),
+        ("kat-lint", "git show origin/main:scripts/kat_lint.py"),
+        ("kat-lint", 'python "$RUNNER_TEMP/kat_lint.py" --root . --require-kats'),
         ("tests", "pytest -q"),
         ("floor-guard", 'git show "$BASE:scripts/floor_guard.py"'),
     ],
@@ -111,6 +117,36 @@ def test_leak_job_fails_closed_without_a_base_scanner() -> None:
     run = _runs(_workflow()["jobs"]["leak-denylist"])
     assert "refusing to run this change's copy" in run
     assert "cp scripts/leak_denylist_scan.py" not in run
+
+
+# A guard loaded from the default branch must stop the job when the default
+# branch lacks it, never fall back to the copy the pull request carries.
+_LOAD_FROM_MAIN = {
+    "leak-denylist": ("scripts/leak_denylist_scan.py", "leak_scan.py"),
+    "kat-lint": ("scripts/kat_lint.py", "kat_lint.py"),
+}
+
+
+@pytest.mark.parametrize("job", sorted(_LOAD_FROM_MAIN))
+def test_guard_loaded_from_main_fails_closed_when_main_lacks_it(job: str) -> None:
+    script, temp = _LOAD_FROM_MAIN[job]
+    steps = _workflow()["jobs"][job]["steps"]
+    loads = [s for s in steps if f"origin/main:{script}" in str(s.get("run", ""))]
+    assert len(loads) == 1, job
+    lines = [
+        ln.strip() for ln in _strip_comments(loads[0]["run"]).splitlines() if ln.strip()
+    ]
+    assert lines == [
+        f"if ! git cat-file -e origin/main:{script}; then",
+        lines[1],
+        "exit 1",
+        "fi",
+        f'git show origin/main:{script} > "$RUNNER_TEMP/{temp}"',
+    ], (job, lines)
+    assert lines[1].startswith('echo "::error::') and "refusing" in lines[1], lines[1]
+    for s in steps:
+        run = str(s.get("run", ""))
+        assert f"cp {script}" not in run and "::warning::" not in run, job
 
 
 def test_pre_commit_keeps_local_guardrail_hooks() -> None:
@@ -166,7 +202,7 @@ def test_installs_use_only_the_hash_locked_file() -> None:
 
 # --- every tamper class, planted in the real workflow (T8) ---------------------
 
-KAT = "      - run: python scripts/kat_lint.py\n"
+KAT = '        run: python "$RUNNER_TEMP/kat_lint.py" --root . --require-kats\n'
 RUFF = "      - run: ruff check .\n"
 PYTEST = "        run: pytest -q\n"
 
@@ -208,7 +244,7 @@ TAMPERS = [
     ),
     (
         "T1 run text",
-        (KAT, "      - run: python scripts/kat_lint.py --root .\n"),
+        (KAT, KAT.replace("--root .", "--root tests")),
         "pin: job kat-lint changed",
         True,
     ),
@@ -482,8 +518,8 @@ TAMPERS = [
     (
         "T6 checkout ref",
         (
-            '      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n        with:\n          persist-credentials: false\n      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n        with:\n          python-version: "3.12"\n      - run: python scripts/kat_lint.py\n',
-            '      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n        with:\n          persist-credentials: false\n          ref: main\n      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n        with:\n          python-version: "3.12"\n      - run: python scripts/kat_lint.py\n',
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 10\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n",
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 10\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n          ref: main\n",
         ),
         "checkout inputs change",
         False,

@@ -135,16 +135,18 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
+      # The linter runs from the default branch, not from the change it judges,
+      # and fails closed while the default branch has none. It judges this
+      # checkout, named explicitly, and fails when it finds no KAT file.
       - name: load linter from main
         run: |
-          if git cat-file -e origin/main:scripts/kat_lint.py 2>/dev/null; then
-            git show origin/main:scripts/kat_lint.py > "$RUNNER_TEMP/kat_lint.py"
-          else
-            echo "::warning::main has no kat linter yet; using this change's copy"
-            cp scripts/kat_lint.py "$RUNNER_TEMP/kat_lint.py"
+          if ! git cat-file -e origin/main:scripts/kat_lint.py; then
+            echo "::error::main has no kat linter; refusing to run this change's copy"
+            exit 1
           fi
+          git show origin/main:scripts/kat_lint.py > "$RUNNER_TEMP/kat_lint.py"
       - name: kat lint
-        run: python "$RUNNER_TEMP/kat_lint.py"
+        run: python "$RUNNER_TEMP/kat_lint.py" --root . --require-kats
 
   authorship:
     name: authorship (no AI trailers)

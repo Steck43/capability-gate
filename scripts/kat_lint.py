@@ -2093,10 +2093,21 @@ def _shadowed(path: Path, root: Path) -> bool:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("files", nargs="*", type=Path)
-    ap.add_argument("--root", type=Path, default=ROOT)
+    # CI runs a copy of this file from a temp folder, so the tree comes from
+    # --root or the working directory, never from where this file sits.
+    ap.add_argument("--root", type=Path, default=None)
+    ap.add_argument(
+        "--require-kats",
+        action="store_true",
+        help="fail when no KAT file is found (CI: an empty scan must not pass)",
+    )
     a = ap.parse_args(argv)
+    a.root = a.root or Path.cwd()
     files = a.files or discover(a.root)
     every = a.files or test_files(a.root)
+    if a.require_kats and not files:
+        print("kat lint: no KAT files found under the root; refusing to pass")
+        return 1
 
     problems = []
     try:

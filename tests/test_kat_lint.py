@@ -2354,3 +2354,61 @@ def test_a_string_compare_outside_a_platform_check_is_not_judged(
     _write(tmp_path, "test_ordinary.py", "import pytest\n" + src)
     r = _lint("--root", tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# The CI step runs a copy of the lint from a temp folder, so the tree it judges
+# comes from --root (or the working directory), never from the script's own
+# location, and an empty discovery fails instead of passing.
+def test_a_tree_with_no_kat_files_fails(tmp_path: Path) -> None:
+    _write(tmp_path, "test_ordinary.py", "def test_x():\n    assert 1 + 1 == 2\n")
+    r = _lint("--root", tmp_path, "--require-kats")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no KAT files found" in r.stdout
+
+
+def test_a_tree_with_no_test_files_fails(tmp_path: Path) -> None:
+    r = _lint("--root", tmp_path, "--require-kats")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no KAT files found" in r.stdout
+
+
+def test_a_copied_lint_judges_the_root_it_is_given(tmp_path: Path) -> None:
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    copy = runner / "kat_lint.py"
+    copy.write_bytes(SCRIPT.read_bytes())
+    expected = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(ROOT), "--require-kats"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=ROOT,
+    )
+    assert expected.returncode == 0, expected.stdout + expected.stderr
+    for cwd, args in ((runner, ["--root", str(ROOT)]), (ROOT, [])):
+        args = [*args, "--require-kats"]
+        r = subprocess.run(
+            [sys.executable, str(copy), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=cwd,
+        )
+        assert r.returncode == 0, (cwd, r.stdout + r.stderr)
+        assert r.stdout.splitlines()[-1] == expected.stdout.splitlines()[-1]
+    r = subprocess.run(
+        [sys.executable, str(copy), "--require-kats"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=runner,
+    )
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no KAT files found" in r.stdout
+
+
+def test_without_the_flag_an_empty_tree_still_reports_its_count(tmp_path: Path) -> None:
+    _write(tmp_path, "test_ordinary.py", "def test_x():\n    assert 1 + 1 == 2\n")
+    r = _lint("--root", tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "in 0 KAT file(s)" in r.stdout
