@@ -68,12 +68,11 @@ jobs:
       # the change's own copy only applies while main has no scanner yet.
       - name: load scanner from main
         run: |
-          if git cat-file -e origin/main:scripts/leak_denylist_scan.py 2>/dev/null; then
-            git show origin/main:scripts/leak_denylist_scan.py > "$RUNNER_TEMP/leak_scan.py"
-          else
-            echo "::warning::main has no leak scanner yet; using this change's copy"
-            cp scripts/leak_denylist_scan.py "$RUNNER_TEMP/leak_scan.py"
+          if ! git cat-file -e origin/main:scripts/leak_denylist_scan.py; then
+            echo "::error::main has no leak scanner; refusing to run this change's copy"
+            exit 1
           fi
+          git show origin/main:scripts/leak_denylist_scan.py > "$RUNNER_TEMP/leak_scan.py"
       # The list of names is a repo secret, never a tracked file: a public list
       # of private names is the leak. An unset secret fails closed, which also
       # means fork PRs (no secret access) fail here until a maintainer reruns.
@@ -200,23 +199,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: install
         working-directory: capability-gate
-        run: |
-          python -m pip install --upgrade pip
-          INSTALLED=
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-            INSTALLED="${INSTALLED}+requirements"
-          fi
-          if [ -f requirements-dev.txt ]; then
-            pip install -r requirements-dev.txt
-            INSTALLED="${INSTALLED}+requirements-dev"
-          fi
-          if [ -f pyproject.toml ]; then
-            pip install -e .
-            INSTALLED="${INSTALLED}+pyproject"
-          fi
-          pip install pytest
-          echo "install-branch: ${INSTALLED:-none-only-pytest}"
+        run: python -m pip install --require-hashes --no-deps -r requirements-ci.lock
       - name: pytest
         # Do NOT add a step that installs the host agent to make skipped tests
         # run. On capability-gate that turns a green 37-passed/2-skipped suite
@@ -240,7 +223,7 @@ jobs:
         with:
           python-version: "3.12"
       # Pin matches atoms. Unpinned install pulled 0.16 on 2026-09-12 and reddened I001/RUF100.
-      - run: python -m pip install "ruff>=0.15.15,<0.16"
+      - run: python -m pip install --require-hashes --no-deps -r requirements-ci.lock
       - run: ruff check .
       - run: ruff format --check .
 
@@ -297,13 +280,9 @@ jobs:
             echo "::error::BASE does not resolve: $BASE"
             exit 3
           fi
-          set +e
-          python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"
-          ERC=$?
-          set -e
-          if [ "$ERC" != "0" ]; then
-            echo "::error::empty range BASE==HEAD; craft would inspect nothing (empty_range.py=$ERC)"
-            exit "$ERC"
+          if ! python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"; then
+            echo "::error::empty range BASE==HEAD; craft would inspect nothing"
+            exit 3
           fi
           echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
           python "$V" --commits --base "$BASE" --head HEAD --prose --fail-on-warn
@@ -361,13 +340,9 @@ jobs:
             echo "::error::BASE does not resolve: $BASE"
             exit 3
           fi
-          set +e
-          python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"
-          ERC=$?
-          set -e
-          if [ "$ERC" != "0" ]; then
-            echo "::error::empty range BASE==HEAD; craft would inspect nothing (empty_range.py=$ERC)"
-            exit "$ERC"
+          if ! python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"; then
+            echo "::error::empty range BASE==HEAD; craft would inspect nothing"
+            exit 3
           fi
           echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
           python "$C" --base "$BASE" --head HEAD
@@ -425,13 +400,9 @@ jobs:
             echo "::error::BASE does not resolve: $BASE"
             exit 3
           fi
-          set +e
-          python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"
-          ERC=$?
-          set -e
-          if [ "$ERC" != "0" ]; then
-            echo "::error::empty range BASE==HEAD; craft would inspect nothing (empty_range.py=$ERC)"
-            exit "$ERC"
+          if ! python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"; then
+            echo "::error::empty range BASE==HEAD; craft would inspect nothing"
+            exit 3
           fi
           echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
           python "$C" --base "$BASE" --head HEAD
@@ -455,6 +426,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: empty-diff gate
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ -f .floor/craft/empty_diff_gate.py ]; then C=.floor/craft/empty_diff_gate.py
           elif [ -f craft/empty_diff_gate.py ]; then C=craft/empty_diff_gate.py
@@ -462,9 +435,54 @@ jobs:
             echo "::error::empty_diff_gate.py missing from roof"
             exit 1
           fi
-          BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
-          git rev-parse --verify "$BASE" >/dev/null 2>&1 || BASE="$(git rev-list --max-parents=0 HEAD | tail -1)"
+          BASE="$PR_BASE"
+          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+            echo "::error::pull request base does not resolve: $BASE"
+            exit 3
+          fi
           python "$C" --base "$BASE" --head HEAD
+
+  floor-guard:
+    # The guard, its pins and the dependency lock are read from the base
+    # branch, never from the pull request under review, so a pull request
+    # cannot loosen the checks that judge it. With no guard on the base this
+    # job fails closed.
+    name: floor (guard from base)
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: load the guard from the base branch
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$PR_BASE" ]; then
+            BASE="$PR_BASE"
+          else
+            git fetch --no-tags origin main
+            BASE="$(git rev-parse origin/main)"
+          fi
+          mkdir -p "$RUNNER_TEMP/floor"
+          for f in scripts/floor_guard.py .github/floor-pins.json requirements-ci.lock; do
+            if ! git cat-file -e "$BASE:$f"; then
+              echo "::error::base $BASE has no $f; refusing to judge with the pull request copy"
+              exit 1
+            fi
+          done
+          git show "$BASE:scripts/floor_guard.py" > "$RUNNER_TEMP/floor/floor_guard.py"
+          git show "$BASE:.github/floor-pins.json" > "$RUNNER_TEMP/floor/floor-pins.json"
+          git show "$BASE:requirements-ci.lock" > "$RUNNER_TEMP/floor/requirements-ci.lock"
+          echo "guard from base $BASE"
+      - name: install the base lock
+        run: python -m pip install --require-hashes --no-deps -r "$RUNNER_TEMP/floor/requirements-ci.lock"
+      - name: run the base guard on this tree
+        run: python "$RUNNER_TEMP/floor/floor_guard.py" --root . --pins "$RUNNER_TEMP/floor/floor-pins.json"
 
   workflow-lint:
     name: workflow (zizmor + actionlint)
