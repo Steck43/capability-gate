@@ -269,3 +269,60 @@ def test_text_mode_fails_closed_without_list(repo: Path) -> None:
     )
     assert r.returncode == 1
     assert "denylist not configured" in r.stdout
+
+
+# --- the scanner never prints a raw matched path or name (brief 82-41b P4) --------
+# The fake term stands in for a private name. It sits in a file name, alone or
+# beside a content hit, in every mode; no output stream may carry it.
+
+FAKE = "zqx" + "wvk"
+
+
+def _commit_all(repo: Path, message: str) -> None:
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", message)
+
+
+@pytest.mark.parametrize(
+    ("content", "mode"),
+    [
+        pytest.param("clean text\n", "ci", id="name-only-ci"),
+        pytest.param(f"{SYNTHETIC_PRIVATE_IP}\n", "ci", id="name-and-content-ci"),
+        pytest.param("clean text\n", "staged", id="name-only-staged"),
+        pytest.param(
+            f"{SYNTHETIC_POSIX_PATH}\n", "staged", id="name-and-content-staged"
+        ),
+        pytest.param("clean text\n", "tree", id="name-only-tree"),
+        pytest.param(f"{SYNTHETIC_PRIVATE_IP}\n", "tree", id="name-and-content-tree"),
+        pytest.param(f"{SYNTHETIC_PRIVATE_IP}\n", "files", id="name-and-content-files"),
+        pytest.param("clean text\n", "files", id="name-only-files"),
+    ],
+)
+def test_a_matched_file_name_never_reaches_the_output(
+    repo: Path, content: str, mode: str
+) -> None:
+    (repo / "base.md").write_text("base\n", encoding="utf-8")
+    _commit_all(repo, "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    name = f"notes-{FAKE}.md"
+    (repo / name).write_text(content, encoding="utf-8")
+    if mode == "staged":
+        _git(repo, "add", "-A")
+        args = ["--staged"]
+    elif mode == "ci":
+        _commit_all(repo, "add notes")
+        args = ["--ci", "--base", base]
+    elif mode == "tree":
+        _commit_all(repo, "add notes")
+        args = ["--tree"]
+    else:
+        args = [name]
+    r = _run(args, repo, denylist=FAKE)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert FAKE not in (r.stdout + r.stderr).lower(), r.stdout + r.stderr
+
+
+def test_a_git_failure_never_echoes_a_path(repo: Path) -> None:
+    r = _run(["--ci", "--base", f"{FAKE}-missing-ref"], repo, denylist=FAKE)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert FAKE not in (r.stdout + r.stderr).lower(), r.stdout + r.stderr

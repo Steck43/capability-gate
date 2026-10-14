@@ -1937,3 +1937,435 @@ def test_a_value_only_pins_caught_is_now_a_rules_violation(
 
 def test_no_tamper_is_left_to_pins_alone() -> None:
     assert [label for label, *_rest, pin_only in TAMPERS if pin_only] == []
+
+
+# --- brief 82-41b: properties judged by rules, each red first ---------------------
+# Every case edits the parsed workflow, writes it back and regenerates the pins,
+# as a pull request that changes the floor would, so only the rules can catch it.
+
+
+def _plant_wf(tmp_path: Path, edit) -> list[str]:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    doc = yaml.safe_load(wf.read_text(encoding="utf-8"))
+    edit(doc)
+    wf.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    return _repin(root)
+
+
+def _last_run(job: str) -> str:
+    return str(_workflow()["jobs"][job]["steps"][-1]["run"]).strip()
+
+
+def _set_last_run(job: str, run: str):
+    def edit(doc: dict) -> None:
+        doc["jobs"][job]["steps"][-1]["run"] = run
+
+    return edit
+
+
+def _parsed(run: str) -> list[list[str]]:
+    import bashlex
+
+    out: list[list[str]] = []
+
+    def walk(node) -> None:
+        if getattr(node, "kind", None) == "command":
+            out.append([p.word for p in node.parts if p.kind == "word"])
+        for attr in ("parts", "list"):
+            for child in getattr(node, attr, None) or []:
+                if hasattr(child, "kind"):
+                    walk(child)
+
+    for tree in bashlex.parse(run):
+        walk(tree)
+    return out
+
+
+def _live_commands() -> list[tuple[str, list[str]]]:
+    return [
+        (key, words)
+        for key, job in _workflow()["jobs"].items()
+        for step in job.get("steps") or []
+        if step.get("run")
+        for words in _parsed(str(step["run"]))
+    ]
+
+
+def test_the_plant_helper_keeps_the_live_floor_clean(tmp_path: Path) -> None:
+    assert _plant_wf(tmp_path, lambda doc: None) == []
+
+
+# P1: guardrail python runs isolated, so no file in the checkout is importable.
+
+
+def test_every_python_in_the_live_floor_runs_isolated() -> None:
+    pythons = [w for _key, w in _live_commands() if w[0] in {"python", "python3"}]
+    assert len(pythons) >= 12
+    for words in pythons:
+        assert words[1] == "-I", words
+
+
+@pytest.mark.parametrize(
+    ("job", "run"),
+    [
+        pytest.param("kat-lint", "python scripts/kat_lint.py", id="script"),
+        pytest.param("kat-lint", "python3 scripts/kat_lint.py", id="python3"),
+        pytest.param("kat-lint", "python -P scripts/kat_lint.py", id="safe-path-only"),
+        pytest.param("kat-lint", "python -E -I scripts/kat_lint.py", id="flag-first"),
+        pytest.param(
+            "lint",
+            "python -m pip install --require-hashes --no-deps -r requirements-ci.lock",
+            id="pip",
+        ),
+        pytest.param("tests", "python -m pytest -q", id="pytest-module"),
+    ],
+)
+def test_python_that_is_not_isolated_is_a_rules_violation(
+    tmp_path: Path, job: str, run: str
+) -> None:
+    found = _plant_wf(tmp_path, _set_last_run(job, run))
+    assert any("python does not run isolated (-I)" in f for f in found), found
+
+
+def _shadow(marker: Path) -> str:
+    return (
+        "import pathlib\n"
+        f"pathlib.Path({str(marker)!r}).write_text('loaded', encoding='utf-8')\n"
+        "raise SystemExit(0)\n"
+    )
+
+
+def test_a_stdlib_named_module_beside_a_guard_script_never_loads(
+    tmp_path: Path,
+) -> None:
+    """The kat-lint step, run as the live floor runs it, ignores scripts/argparse.py."""
+    words = next(w for key, w in _live_commands() if key == "kat-lint")
+    tree = tmp_path / "tree"
+    (tree / "scripts").mkdir(parents=True)
+    shutil.copyfile(ROOT / "scripts" / "kat_lint.py", tree / "scripts" / "kat_lint.py")
+    marker = tmp_path / "loaded.txt"
+    (tree / "scripts" / "argparse.py").write_text(_shadow(marker), encoding="utf-8")
+    # The fixture bites: without isolation the shadow runs instead of the guard.
+    subprocess.run(
+        [sys.executable, "scripts/kat_lint.py"], cwd=tree, capture_output=True
+    )
+    assert marker.exists()
+    marker.unlink()
+    subprocess.run([sys.executable, *words[1:]], cwd=tree, capture_output=True)
+    assert not marker.exists(), words
+
+
+def test_a_package_main_in_the_checkout_never_replaces_pip(tmp_path: Path) -> None:
+    """Each live install, run as the floor runs it, ignores a pip/__main__.py."""
+    tree = tmp_path / "tree"
+    (tree / "pip").mkdir(parents=True)
+    marker = tmp_path / "loaded.txt"
+    (tree / "pip" / "__init__.py").write_text("", encoding="utf-8")
+    (tree / "pip" / "__main__.py").write_text(_shadow(marker), encoding="utf-8")
+    subprocess.run(
+        [sys.executable, "-m", "pip", "--version"], cwd=tree, capture_output=True
+    )
+    assert marker.exists()
+    installs = [w for _k, w in _live_commands() if "pip" in w]
+    assert len(installs) >= 3
+    for words in installs:
+        marker.unlink(missing_ok=True)
+        upto = words.index("pip") + 1
+        subprocess.run(
+            [sys.executable, *words[1:upto], "--version"], cwd=tree, capture_output=True
+        )
+        assert not marker.exists(), words
+
+
+# P2: every guardrail command runs, judged as parsed commands.
+
+
+@pytest.mark.parametrize(
+    ("template", "expect"),
+    [
+        pytest.param("kat_lint() { true; }\nLIVE", "defines a function", id="function"),
+        pytest.param(
+            "function python { :; }\nLIVE", "defines a function", id="function-keyword"
+        ),
+        pytest.param("for x in zqxwvk; do LIVE; done", "uses a loop", id="for-loop"),
+        pytest.param("for x in; do LIVE; done", "uses a loop", id="empty-loop"),
+        pytest.param("( LIVE )", "uses a subshell or command group", id="subshell"),
+        pytest.param("{ LIVE; }", "uses a subshell or command group", id="group"),
+        pytest.param(
+            "timeout 1 LIVE", "command timeout is not allowlisted", id="timeout"
+        ),
+        pytest.param("nice LIVE", "command nice is not allowlisted", id="nice"),
+    ],
+)
+def test_a_construct_that_defines_shadows_or_skips_a_command_is_rejected(
+    tmp_path: Path, template: str, expect: str
+) -> None:
+    run = template.replace("LIVE", _last_run("kat-lint"))
+    found = _plant_wf(tmp_path, _set_last_run("kat-lint", run))
+    assert any(expect in f for f in found), found
+
+
+@pytest.mark.parametrize(
+    ("job", "run", "missing"),
+    [
+        pytest.param("kat-lint", "echo LIVE", "kat_lint.py", id="kat-lint-echoed"),
+        pytest.param("tests", "echo pytest -q", "pytest -q", id="pytest-echoed"),
+        pytest.param(
+            "lint", "true ruff format --check .", "ruff format", id="ruff-behind-true"
+        ),
+        pytest.param("kat-lint", "printf '%s' LIVE", "kat_lint.py", id="printed"),
+    ],
+)
+def test_a_required_command_is_a_parsed_command_not_a_substring(
+    tmp_path: Path, job: str, run: str, missing: str
+) -> None:
+    run = run.replace("LIVE", _last_run(job))
+    found = _plant_wf(tmp_path, _set_last_run(job, run))
+    assert any(
+        f"job {job}: required command" in f and missing in f and "is missing" in f
+        for f in found
+    ), found
+
+
+@pytest.mark.parametrize(
+    "masker",
+    [
+        "echo pytest -q",
+        "printf '%s' ruff",
+        "true python",
+        ": git log",
+        "test -n pytest",
+        "[ -n kat_lint.py ]",
+        "echo scripts/floor_guard.py",
+    ],
+)
+def test_a_no_op_naming_a_guarded_tool_is_rejected(tmp_path: Path, masker: str) -> None:
+    run = f"{masker}\n{_last_run('kat-lint')}"
+    found = _plant_wf(tmp_path, _set_last_run("kat-lint", run))
+    assert any("names a guarded tool as an argument" in f for f in found), found
+
+
+# P3: allowed commands take exact argument shapes, judged per job.
+
+_GIT_BAD = [
+    "git fetch --upload-pack=zqxwvk origin",
+    "git fetch -u zqxwvk origin",
+    "git fetch --upload-pack zqxwvk origin",
+    "git log --output=zqxwvk.txt",
+    "git diff --ext-diff",
+    "git log -p --textconv",
+    "git diff --no-index zqxwvk.a zqxwvk.b",
+    "git fetch origin main:zqxwvk",
+    "git fetch https://example.invalid/zqxwvk.git",
+    "git fetch file:///tmp/zqxwvk",
+    "git -c core.pager=zqxwvk log",
+    "git rev-parse --verify zqxwvk",
+    "git cat-file -e origin/main:zqxwvk.py",
+    'git show origin/main:scripts/kat_lint.py > "$RUNNER_TEMP/zqxwvk.py"',
+    'git show origin/main:scripts/kat_lint.py > "$RUNNER_TEMP/leak_scan.py"',
+    'git log --all --format=%B > "$RUNNER_TEMP/zqxwvk.py"',
+]
+
+
+@pytest.mark.parametrize("bad", _GIT_BAD)
+def test_git_takes_only_its_exact_shapes(tmp_path: Path, bad: str) -> None:
+    run = f"{bad}\n{_last_run('kat-lint')}"
+    found = _plant_wf(tmp_path, _set_last_run("kat-lint", run))
+    assert any("git arguments are not an allowlisted shape" in f for f in found), found
+
+
+_TAR = "tar -C /tmp -xzf /tmp/actionlint.tgz actionlint"
+_TAR_BAD = [
+    "tar -C /tmp -xzf /tmp/actionlint.tgz --checkpoint=1 "
+    "--checkpoint-action=exec=zqxwvk actionlint",
+    "tar -C /tmp -xzf /tmp/actionlint.tgz --to-command=zqxwvk actionlint",
+    "tar -C /tmp -I zqxwvk -xf /tmp/actionlint.tgz actionlint",
+    "tar -C /tmp --use-compress-program=zqxwvk -xf /tmp/actionlint.tgz actionlint",
+    "tar -C /tmp -xzf /tmp/actionlint.tgz -T zqxwvk",
+    "tar -C . -xzf /tmp/actionlint.tgz actionlint",
+    "tar -C /tmp -xzf /tmp/actionlint.tgz",
+    "tar -C /tmp -xzf /tmp/actionlint.tgz conftest.py",
+]
+
+
+@pytest.mark.parametrize("bad", _TAR_BAD)
+def test_tar_takes_only_its_pinned_arguments(tmp_path: Path, bad: str) -> None:
+    def edit(doc: dict) -> None:
+        step = doc["jobs"]["workflow-lint"]["steps"][-1]
+        assert _TAR in step["run"]
+        step["run"] = step["run"].replace(_TAR, bad)
+
+    found = _plant_wf(tmp_path, edit)
+    assert any("tar arguments are not the pinned ones" in f for f in found), found
+
+
+def test_tar_runs_only_in_the_workflow_lint_job(tmp_path: Path) -> None:
+    run = f"{_TAR}\n{_last_run('kat-lint')}"
+    found = _plant_wf(tmp_path, _set_last_run("kat-lint", run))
+    assert any("tar is allowed only in the workflow-lint job" in f for f in found), (
+        found
+    )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        'cp "$RUNNER_TEMP/zqxwvk" test_zqxwvk.py',
+        'cp "$RUNNER_TEMP/zqxwvk" zqxwvk/test_zqxwvk.py',
+        'cp -t . "$RUNNER_TEMP/conftest.py"',
+        'cp "$RUNNER_TEMP/zqxwvk" zqxwvk_plugin.py',
+        "echo zqxwvk > test_zqxwvk.py",
+        "printf zqxwvk > zqxwvk_test.py",
+        "mkdir -p zqxwvk",
+        'mkdir -p "$RUNNER_TEMP/floor"',
+    ],
+)
+def test_no_write_outside_its_exact_shape_can_plant_a_test_file(
+    tmp_path: Path, bad: str
+) -> None:
+    run = f"{bad}\n{_last_run('kat-lint')}"
+    found = _plant_wf(tmp_path, _set_last_run("kat-lint", run))
+    assert any(
+        "is not an allowlisted command shape for job kat-lint" in f for f in found
+    ), found
+
+
+# P5: workflow-level defaults are judged.
+
+_SHELL = "bash --noprofile --norc -eo pipefail {0}"
+
+
+@pytest.mark.parametrize(
+    "run_defaults",
+    [
+        {"shell": _SHELL, "working-directory": "zqxwvk"},
+        {"shell": _SHELL, "working-directory": "tests"},
+        {"shell": "bash -eo pipefail {0}", "working-directory": "capability-gate"},
+    ],
+)
+def test_workflow_level_defaults_are_judged(tmp_path: Path, run_defaults: dict) -> None:
+    def edit(doc: dict) -> None:
+        doc["defaults"] = {"run": run_defaults}
+
+    found = _plant_wf(tmp_path, edit)
+    assert any(
+        "workflow: defaults are not exactly the floor's shell" in f for f in found
+    ), found
+
+
+# P7 D4: the workflow loads without duplicate keys; D3: odd tags fail closed.
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        pytest.param(
+            "    name: tests (known-answer tests call the gate)\n",
+            "    name: tests (known-answer tests call the gate)\n"
+            "    runs-on: self-hosted\n",
+            id="job-key",
+        ),
+        pytest.param(
+            "permissions:\n  contents: read\n",
+            "permissions:\n  contents: read\npermissions:\n  contents: write\n",
+            id="top-level-key",
+        ),
+    ],
+)
+def test_a_duplicate_workflow_key_is_a_violation(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    text = wf.read_text(encoding="utf-8")
+    assert old in text
+    wf.write_text(text.replace(old, new, 1), encoding="utf-8")
+    found = guard.violations(root)
+    assert any("duplicate key" in f for f in found), found
+
+
+@pytest.mark.parametrize(
+    "new",
+    [
+        "name: !!binary emFxeHdyaw==\n",
+        "name: 2026-10-14\n",
+        "name: !!set {zqxwvk: null}\n",
+        "name: !!python/name:os.system\n",
+    ],
+)
+def test_an_odd_yaml_tag_fails_closed_without_a_traceback(
+    tmp_path: Path, new: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    text = wf.read_text(encoding="utf-8")
+    wf.write_text(text.replace("name: floor\n", new, 1), encoding="utf-8")
+    guard_py = str(ROOT / "scripts" / "floor_guard.py")
+    r = subprocess.run(
+        [sys.executable, guard_py, "--root", str(root)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "Traceback" not in r.stdout + r.stderr, r.stderr
+    assert "does not load" in r.stdout, r.stdout
+
+
+# P7 N4: no test module declares pytest_plugins.
+
+
+@pytest.mark.parametrize(
+    ("rel", "text"),
+    [
+        ("tests/test_zqxwvk.py", 'pytest_plugins = ["zqxwvk_plugin"]\n'),
+        ("tests/test_zqxwvk.py", 'pytest_plugins: list = ["zqxwvk_plugin"]\n'),
+        ("zqxwvk_test.py", 'pytest_plugins = "zqxwvk_plugin"\n'),
+        ("tests/test_zqxwvk.py", 'globals()["pytest_plugins"] = ["zqxwvk"]\n'),
+    ],
+)
+def test_a_pytest_plugins_declaration_is_a_violation(
+    tmp_path: Path, rel: str, text: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(text, encoding="utf-8")
+    found = _repin(root)
+    assert any(f"{rel}: declares pytest_plugins" in f for f in found), found
+
+
+# P7 PR82-5: startup files and every pytest config spelling are rules violations.
+
+
+@pytest.mark.parametrize(
+    ("rel", "text", "expect"),
+    [
+        ("sitecustomize.py", "x = 1\n", "interpreter startup file"),
+        ("usercustomize.py", "x = 1\n", "interpreter startup file"),
+        ("zqxwvk.pth", "import os\n", "interpreter startup file"),
+        ("tests/sitecustomize.py", "x = 1\n", "interpreter startup file"),
+        (".pytest.ini", "[pytest]\naddopts = -q\n", ".pytest.ini configures pytest"),
+        (
+            "pyproject.toml",
+            "[ tool . pytest . ini_options ]\naddopts = '-q'\n",
+            "pyproject.toml configures pytest",
+        ),
+        (
+            "pyproject.toml",
+            '[tool."pytest".ini_options]\naddopts = "-q"\n',
+            "pyproject.toml configures pytest",
+        ),
+        ("setup.cfg", "[ tool:pytest ]\naddopts = -q\n", "setup.cfg configures pytest"),
+        ("tox.ini", "[ pytest ]\naddopts = -q\n", "tox.ini configures pytest"),
+        ("pyproject.toml", "[tool\n", "pyproject.toml does not parse"),
+    ],
+)
+def test_startup_files_and_pytest_config_spellings_are_rules_violations(
+    tmp_path: Path, rel: str, text: str, expect: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(text, encoding="utf-8")
+    found = _repin(root)
+    assert any(expect in f for f in found), found
