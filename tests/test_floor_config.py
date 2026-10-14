@@ -189,8 +189,8 @@ TAMPERS = [
             "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 10\n    runs-on: ubuntu-latest\n",
             "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 10\n    runs-on: self-hosted\n",
         ),
-        "pin: job kat-lint changed",
-        True,
+        "runner is not ubuntu-latest",
+        False,
     ),
     (
         "T1 timeout",
@@ -204,8 +204,8 @@ TAMPERS = [
     (
         "T1 matrix",
         ('python: ["3.11", "3.12"]', 'python: ["3.12"]'),
-        "pin: job tests changed",
-        True,
+        "check names are not",
+        False,
     ),
     (
         "T1 run text",
@@ -563,6 +563,16 @@ TAMPERS = [
 ]
 
 
+def _pins_text(root: Path) -> str:
+    """The pin file bytes --update-pins writes for this tree."""
+    return (
+        json.dumps(
+            guard.pins_to_file(guard.compute_pins(root)), indent=2, sort_keys=True
+        )
+        + "\n"
+    )
+
+
 def _copy_tree(tmp: Path) -> Path:
     root = tmp / "repo"
     for rel in guard.guard_files(ROOT) + [str(guard.PINS.as_posix())]:
@@ -591,9 +601,7 @@ def test_each_tamper_planted_in_the_real_workflow_turns_the_floor_red(
         assert expect in found, (label, found)
     # With the pins regenerated, as an attacker would: the rules still catch it,
     # except for values only an exact pin can judge.
-    (root / guard.PINS).write_text(
-        json.dumps(guard.pins_to_file(guard.compute_pins(root))), encoding="utf-8"
-    )
+    (root / guard.PINS).write_text(_pins_text(root), encoding="utf-8")
     found = guard.violations(root)
     if pin_only:
         assert found == [], (label, found)
@@ -844,9 +852,7 @@ def test_a_shell_outside_the_allowlist_is_a_rules_violation(
     assert value in planted or json.dumps(value) in planted
     wf.write_text(planted, encoding="utf-8")
     # Pins regenerated with the change: only the rules layer can catch it.
-    (root / guard.PINS).write_text(
-        json.dumps(guard.pins_to_file(guard.compute_pins(root))), encoding="utf-8"
-    )
+    (root / guard.PINS).write_text(_pins_text(root), encoding="utf-8")
     found = guard.violations(root)
     assert any(f.endswith(_SHELL_MESSAGE[level]) for f in found), found
 
@@ -868,9 +874,7 @@ def test_each_allowlisted_shell_passes_the_rules_at_every_level(
         wf.write_text(
             _plant_shell(wf.read_text(encoding="utf-8"), level, value), encoding="utf-8"
         )
-        (root / guard.PINS).write_text(
-            json.dumps(guard.pins_to_file(guard.compute_pins(root))), encoding="utf-8"
-        )
+        (root / guard.PINS).write_text(_pins_text(root), encoding="utf-8")
         assert guard.violations(root) == [], (level, value)
     assert guard.shell_ok(value)
 
@@ -980,3 +984,560 @@ def test_gitleaksignore_is_a_pinned_guard_file(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert "pin: file .gitleaksignore changed" in guard.violations(root)
+
+
+# --- the pin file loads strictly (brief 3b: D1 to D4) ---------------------------
+
+
+def _write_pins_text(root: Path, text: str) -> None:
+    (root / guard.PINS).write_bytes(text.encode("utf-8"))
+
+
+def _canonical(root: Path) -> str:
+    return _pins_text(root)
+
+
+def test_deep_nesting_is_one_malformed_violation(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    _write_pins_text(root, "[" * 200000 + "]" * 200000)
+    found = guard.violations(root)
+    assert len(found) == 1 and "is malformed" in found[0], found
+
+
+def test_a_malformed_pin_file_exits_nonzero_without_a_traceback(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    _write_pins_text(root, "[" * 200000)
+    run = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "floor_guard.py"), "--root", str(root)],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 1
+    assert "Traceback" not in run.stdout + run.stderr
+    assert "is malformed" in run.stdout
+
+
+def test_a_duplicate_top_level_key_is_malformed(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    text = _canonical(root)
+    dup = '  "workflow": {"sha256": "' + "b" * 64 + '"},\n'
+    planted = text.replace('  "workflow": {', dup + '  "workflow": {', 1)
+    assert planted != text
+    _write_pins_text(root, planted)
+    found = guard.violations(root)
+    assert len(found) == 1 and "duplicate key 'workflow'" in found[0], found
+
+
+def test_a_duplicate_sha256_inside_one_entry_is_malformed(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    text = _canonical(root)
+    entry = '"path": ".floor/craft/changelog_gate.py",\n'
+    assert entry in text
+    planted = text.replace(entry, entry + '      "sha256": "' + "c" * 64 + '",\n', 1)
+    _write_pins_text(root, planted)
+    found = guard.violations(root)
+    assert len(found) == 1 and "duplicate key 'sha256'" in found[0], found
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        pytest.param('"sha256"', '"\\u0073ha256"', id="escaped-key"),
+        pytest.param('"job": "secrets"', '"job": "\\u0073ecrets"', id="escaped-name"),
+    ],
+)
+def test_an_escaped_key_or_name_is_malformed(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    text = _canonical(root)
+    assert old in text
+    _write_pins_text(root, text.replace(old, new, 1))
+    found = guard.violations(root)
+    assert len(found) == 1 and "canonical form" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        pytest.param(lambda s: s.replace("\n", "\n  ", 1), id="extra-indent"),
+        pytest.param(lambda s: s.rstrip("\n"), id="no-final-newline"),
+        pytest.param(lambda s: json.dumps(json.loads(s)), id="compact"),
+    ],
+)
+def test_a_non_canonical_pin_file_is_malformed(tmp_path: Path, edit) -> None:
+    root = _copy_tree(tmp_path)
+    _write_pins_text(root, edit(_canonical(root)))
+    found = guard.violations(root)
+    assert len(found) == 1 and "canonical form" in found[0], found
+
+
+def test_crlf_line_endings_load(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    _write_pins_text(root, _canonical(root).replace("\n", "\r\n"))
+    assert guard.violations(root) == []
+
+
+def _base_pins(root: Path, tmp_path: Path) -> Path:
+    base = tmp_path / "base-pins.json"
+    base.write_bytes((root / guard.PINS).read_bytes())
+    return base
+
+
+def test_deleting_the_in_tree_pin_file_is_a_violation_with_base_pins(
+    tmp_path: Path,
+) -> None:
+    root = _copy_tree(tmp_path)
+    base = _base_pins(root, tmp_path)
+    (root / guard.PINS).unlink()
+    found = guard.violations(root, base)
+    assert "pin: in-tree .github/floor-pins.json is missing" in found, found
+
+
+def test_renaming_the_in_tree_pin_file_is_a_violation_with_base_pins(
+    tmp_path: Path,
+) -> None:
+    root = _copy_tree(tmp_path)
+    base = _base_pins(root, tmp_path)
+    (root / guard.PINS).rename(root / ".github" / "floor-pins.old.json")
+    found = guard.violations(root, base)
+    assert "pin: in-tree .github/floor-pins.json is missing" in found, found
+
+
+def test_a_broken_in_tree_pin_file_is_a_violation_with_base_pins(
+    tmp_path: Path,
+) -> None:
+    root = _copy_tree(tmp_path)
+    base = _base_pins(root, tmp_path)
+    _write_pins_text(root, "{not json")
+    found = guard.violations(root, base)
+    assert any(
+        f.startswith("pin: in-tree .github/floor-pins.json is malformed") for f in found
+    ), found
+
+
+def test_a_good_in_tree_pin_file_with_base_pins_passes(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    assert guard.violations(root, _base_pins(root, tmp_path)) == []
+
+
+# --- interpreter startup files are guard files (brief 3b: N3) -------------------
+
+
+@pytest.mark.parametrize(
+    "rel",
+    ["sitecustomize.py", "usercustomize.py", "zqxwvk.pth", "scripts/sitecustomize.py"],
+)
+def test_an_added_startup_file_is_caught(tmp_path: Path, rel: str) -> None:
+    root = _copy_tree(tmp_path)
+    (root / rel).write_text("import os\n", encoding="utf-8")
+    assert f"pin: file {rel} added" in guard.violations(root)
+
+
+def test_an_edited_startup_file_is_caught(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    (root / "sitecustomize.py").write_text("x = 1\n", encoding="utf-8")
+    _write_pins_text(root, _canonical(root))
+    assert guard.violations(root) == []
+    (root / "sitecustomize.py").write_text("x = 2\n", encoding="utf-8")
+    assert "pin: file sitecustomize.py changed" in guard.violations(root)
+
+
+# --- every class the rules layer must catch with the pins regenerated (brief 3b) -
+# A legitimate floor change regenerates the pins, so these run rules-only: the
+# workflow is edited, the pins rewritten, and the named rule must still fire.
+
+_DECOY = (
+    "  zqxwvk-decoy:\n"
+    "    name: tests (known-answer tests call the gate)\n"
+    "    timeout-minutes: 10\n"
+    "    runs-on: ubuntu-latest\n"
+    "    steps:\n"
+    "      - run: echo ok\n\n"
+)
+RULE_TAMPERS = [
+    # N1: renamed job, decoy, protected key reused for a trivial step
+    (
+        "N1 protected job renamed away",
+        ("  kat-lint:\n", "  kat-lint-old:\n"),
+        "job kat-lint: protected job is missing",
+    ),
+    (
+        "N1 decoy takes the check name",
+        (
+            "    name: tests (known-answer tests call the gate)\n",
+            "    name: tests (kat old)\n",
+        ),
+        "job kat-lint: check names are not",
+    ),
+    (
+        "N1 decoy job added",
+        ("  authorship:\n", _DECOY + "  authorship:\n"),
+        "job zqxwvk-decoy: not in the protected jobs table",
+    ),
+    (
+        "N1 protected key reused for a trivial step",
+        (KAT, "      - run: echo ok\n"),
+        "required step text 'kat_lint.py' is missing",
+    ),
+    # pytest invocation is exact
+    (
+        "pytest -k",
+        (PYTEST, "        run: pytest -q -k zqxwvk\n"),
+        "pytest argument '-k'",
+    ),
+    (
+        "pytest --co",
+        (PYTEST, "        run: pytest -q --co\n"),
+        "pytest argument '--co'",
+    ),
+    (
+        "pytest -p no:plugin",
+        (PYTEST, "        run: pytest -q -p no:zqxwvk\n"),
+        "pytest argument '-p'",
+    ),
+    (
+        "pytest --rootdir",
+        (PYTEST, "        run: pytest -q --rootdir=zqxwvk\n"),
+        "pytest argument '--rootdir=zqxwvk'",
+    ),
+    (
+        "pytest --deselect",
+        (PYTEST, "        run: pytest -q --deselect tests\n"),
+        "pytest argument '--deselect'",
+    ),
+    (
+        "python -m pytest -x",
+        (PYTEST, "        run: python -m pytest -q --runxfail\n"),
+        "pytest argument '--runxfail'",
+    ),
+    # guardrail jobs and steps always run
+    (
+        "job if false",
+        (
+            "    name: tests (known-answer tests call the gate)\n",
+            "    name: tests (known-answer tests call the gate)\n    if: false\n",
+        ),
+        "job kat-lint: job condition is not allowlisted",
+    ),
+    (
+        "allowlisted job condition widened",
+        (
+            "    if: github.event_name == 'pull_request' || github.event_name == 'push'\n",
+            "    if: github.event_name == 'push'\n",
+        ),
+        "job leak-denylist: job condition is not allowlisted",
+    ),
+    (
+        "job needs",
+        (
+            "    name: tests (known-answer tests call the gate)\n",
+            "    name: tests (known-answer tests call the gate)\n    needs: [lint]\n",
+        ),
+        "job kat-lint: needs",
+    ),
+    (
+        "step condition",
+        (
+            KAT,
+            "      - if: github.event_name == 'push'\n        run: python scripts/kat_lint.py\n",
+        ),
+        "step condition is not allowlisted",
+    ),
+    # runner, timeout and matrix
+    (
+        "timeout zero",
+        (
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 10\n",
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 0\n",
+        ),
+        "job kat-lint: timeout is not 1 to 30 minutes",
+    ),
+    (
+        "timeout too long",
+        (
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 10\n",
+            "    name: tests (known-answer tests call the gate)\n    timeout-minutes: 600\n",
+        ),
+        "job kat-lint: timeout is not 1 to 30 minutes",
+    ),
+    (
+        "matrix excludes every run",
+        (
+            'python: ["3.11", "3.12"]',
+            'python: ["3.11"]\n        exclude:\n          - python: "3.11"',
+        ),
+        "job tests: matrix expands to no runs",
+    ),
+    # triggers of the floor workflow
+    (
+        "pull_request loses synchronize",
+        (
+            "types: [opened, synchronize, reopened, edited]",
+            "types: [opened, reopened, edited]",
+        ),
+        "triggers are not exactly the floor's triggers",
+    ),
+    (
+        "pull_request ignores every path",
+        (
+            "    types: [opened, synchronize, reopened, edited]\n",
+            "    types: [opened, synchronize, reopened, edited]\n    paths-ignore: ['**']\n",
+        ),
+        "triggers are not exactly the floor's triggers",
+    ),
+    (
+        "privileged trigger in the floor",
+        ("  workflow_dispatch:\n", "  workflow_dispatch:\n  pull_request_target:\n"),
+        "privileged trigger pull_request_target",
+    ),
+    # failure is never masked
+    (
+        "|| grep",
+        (RUFF, "      - run: ruff check . || grep -q zqxwvk .\n"),
+        "failure masked by || grep",
+    ),
+    (
+        "&& before the guarded command",
+        (KAT, _step("[ -n zqxwvk ] && python scripts/kat_lint.py")),
+        "python runs only after &&",
+    ),
+    (
+        "pipe hides the guarded command",
+        (KAT, _step("python scripts/kat_lint.py | grep -v zqxwvk")),
+        "failure of python hidden by a pipe",
+    ),
+    # python runs only allowlisted scripts; nothing written to temp and run
+    (
+        "python other script",
+        (KAT, _step("python zqxwvk.py")),
+        "python runs a script that is not allowlisted",
+    ),
+    (
+        "python -m other",
+        (KAT, _step("python -m zqxwvk")),
+        "python -m runs a module other than pytest or pip",
+    ),
+    ("python alone", (KAT, _step("python")), "python runs no script"),
+    (
+        "temp file written then run",
+        (
+            KAT,
+            _step(
+                'printf "%s" zqxwvk > "$RUNNER_TEMP/zqxwvk.py"\npython "$RUNNER_TEMP/zqxwvk.py"'
+            ),
+        ),
+        "only git show may write into the temp dir",
+    ),
+    (
+        "script variable repointed",
+        ("then V=.floor/craft/voice_lint.py", 'then V="$RUNNER_TEMP/zqxwvk.py"'),
+        "V must name an allowlisted script",
+    ),
+    # environment is allowlisted with exact values
+    (
+        "new env var",
+        (
+            "          ISOLATION_LAYER_ROOT: ${{ github.workspace }}/isolation-layer\n",
+            "          ISOLATION_LAYER_ROOT: ${{ github.workspace }}/isolation-layer\n          ZQXWVK: x\n",
+        ),
+        "env sets ZQXWVK",
+    ),
+    (
+        "env value changed",
+        (
+            "          AEGIS_ATOMS_ROOT: ${{ github.workspace }}/aegis-atoms\n",
+            "          AEGIS_ATOMS_ROOT: ${{ github.workspace }}/zqxwvk\n",
+        ),
+        "env sets AEGIS_ATOMS_ROOT",
+    ),
+]
+
+
+def _repin(root: Path) -> list[str]:
+    (root / guard.PINS).write_bytes(_pins_text(root).encode("utf-8"))
+    return guard.violations(root)
+
+
+@pytest.mark.parametrize(
+    ("label", "edit", "expect"), RULE_TAMPERS, ids=[t[0] for t in RULE_TAMPERS]
+)
+def test_each_class_is_caught_by_rules_with_pins_regenerated(
+    tmp_path: Path, label: str, edit: tuple[str, str], expect: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    text = wf.read_text(encoding="utf-8")
+    old, new = edit
+    assert text.count(old) >= 1, label
+    wf.write_text(text.replace(old, new, 1), encoding="utf-8")
+    found = _repin(root)
+    assert any(expect in f for f in found), (label, found)
+
+
+def test_the_live_floor_passes_every_rule_with_pins_regenerated(tmp_path: Path) -> None:
+    assert _repin(_copy_tree(tmp_path)) == []
+
+
+def test_pipefail_lets_a_guarded_command_feed_a_pipe(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    text = wf.read_text(encoding="utf-8")
+    wf.write_text(
+        text.replace(
+            KAT,
+            _step("set -o pipefail\npython scripts/kat_lint.py | grep -v zqxwvk"),
+            1,
+        ),
+        encoding="utf-8",
+    )
+    assert not any("hidden by a pipe" in f for f in _repin(root))
+
+
+@pytest.mark.parametrize(
+    ("label", "workflow", "expect"),
+    [
+        pytest.param(
+            "privileged",
+            "name: zqxwvk\non: pull_request_target\npermissions:\n  contents: read\njobs: {}\n",
+            "workflow zqxwvk: privileged trigger pull_request_target",
+            id="privileged-trigger",
+        ),
+        pytest.param(
+            "write-on-pr",
+            "name: zqxwvk\non: pull_request\npermissions:\n  contents: write\njobs: {}\n",
+            "workflow zqxwvk: write permission with trigger(s) ['pull_request']",
+            id="write-permission-on-pull-request",
+        ),
+        pytest.param(
+            "write-all",
+            "name: zqxwvk\non: [push, pull_request]\npermissions: write-all\njobs: {}\n",
+            "workflow zqxwvk: write permission with trigger(s) ['pull_request']",
+            id="write-all-on-pull-request",
+        ),
+        pytest.param(
+            "job-write",
+            "name: zqxwvk\non:\n  pull_request:\npermissions: {}\njobs:\n  x:\n    permissions:\n      id-token: write\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n",
+            "workflow zqxwvk: write permission with trigger(s) ['pull_request']",
+            id="job-write-permission-on-pull-request",
+        ),
+    ],
+)
+def test_every_workflow_file_has_its_triggers_and_permissions_judged(
+    tmp_path: Path, label: str, workflow: str, expect: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    (root / ".github" / "workflows" / "zqxwvk.yml").write_text(
+        workflow, encoding="utf-8"
+    )
+    found = _repin(root)
+    assert expect in found, (label, found)
+
+
+@pytest.mark.parametrize(
+    ("extra", "expect"),
+    [
+        pytest.param("zqxwvk==1.0\n", "lock: entry", id="no-hash"),
+        pytest.param(
+            "zqxwvk>=1.0 \\\n    --hash=sha256:" + "a" * 64 + "\n",
+            "lock: entry",
+            id="range-not-pin",
+        ),
+        pytest.param(
+            "-e git+https://example.invalid/zqxwvk\n", "lock: entry", id="editable-url"
+        ),
+        pytest.param(
+            "--index-url https://example.invalid/simple\n",
+            "lock: entry",
+            id="index-url",
+        ),
+        pytest.param(
+            "--extra-index-url https://example.invalid\n",
+            "lock: entry",
+            id="extra-index",
+        ),
+        pytest.param("-r zqxwvk.txt\n", "lock: entry", id="include"),
+    ],
+)
+def test_lock_edits_are_judged_by_rules(
+    tmp_path: Path, extra: str, expect: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    lock = root / guard.LOCK
+    lock.write_text(lock.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    assert any(expect in f for f in _repin(root))
+
+
+def test_an_empty_lock_is_a_rules_violation(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    (root / guard.LOCK).write_text("# nothing\n", encoding="utf-8")
+    assert "lock: no requirements" in _repin(root)
+
+
+@pytest.mark.parametrize(
+    ("rel", "content", "expect"),
+    [
+        pytest.param(
+            "pytest.ini",
+            "[pytest]\nnorecursedirs = .* build dist design .tmp\nxfail_strict = true\nfilterwarnings =\n    error::SyntaxWarning\naddopts = -p no:zqxwvk\n",
+            "key addopts is not allowed",
+            id="addopts",
+        ),
+        pytest.param(
+            "pytest.ini",
+            "[pytest]\nnorecursedirs = .* build dist design .tmp\nxfail_strict = false\nfilterwarnings =\n    error::SyntaxWarning\n",
+            "xfail_strict is not true",
+            id="xfail-not-strict",
+        ),
+        pytest.param(
+            "pytest.ini",
+            "[pytest]\nnorecursedirs = .* build dist design .tmp\nxfail_strict = true\nfilterwarnings =\n    ignore::SyntaxWarning\n",
+            "filterwarnings",
+            id="warning-ignored",
+        ),
+        pytest.param(
+            "pytest.ini",
+            "[pytest]\nnorecursedirs = .* tests\nxfail_strict = true\nfilterwarnings =\n    error::SyntaxWarning\n",
+            "hides tests",
+            id="tests-not-recursed",
+        ),
+        pytest.param(
+            "pytest.ini",
+            "[pytest]\nnorecursedirs = .* build dist design .tmp\nxfail_strict = true\nfilterwarnings =\n    error::SyntaxWarning\n[zqxwvk]\nx = 1\n",
+            "section other than",
+            id="extra-section",
+        ),
+        pytest.param(
+            "pyproject.toml",
+            "[tool.pytest.ini_options]\naddopts = '--co'\n",
+            "pyproject.toml configures pytest",
+            id="pyproject-section",
+        ),
+        pytest.param(
+            "tox.ini",
+            "[pytest]\naddopts = --co\n",
+            "tox.ini configures pytest",
+            id="tox-section",
+        ),
+        pytest.param(
+            "setup.cfg",
+            "[tool:pytest]\naddopts = --co\n",
+            "setup.cfg configures pytest",
+            id="setup-cfg-section",
+        ),
+        pytest.param(
+            "tests/conftest.py",
+            "collect_ignore_glob = ['*']\n",
+            "tests/conftest.py is not allowed",
+            id="conftest",
+        ),
+    ],
+)
+def test_pytest_config_edits_are_judged_by_rules(
+    tmp_path: Path, rel: str, content: str, expect: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(content, encoding="utf-8")
+    found = _repin(root)
+    assert any(expect in f for f in found), found
