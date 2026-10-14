@@ -11,17 +11,26 @@ Two layers.
    removed, is a violation. Changing the floor means changing the pins in the
    same pull request, in plain sight.
 
-2. Rules, so the pinned values themselves cannot be weak. Every run block is
-   parsed as shell (bashlex) and every command in it is checked, including
-   after separators, pipes, substitutions, conditionals and env prefixes:
-   nothing may switch off stop-on-error, write a runner environment, path,
-   output or state file by any spelling, run constructed or indirect commands,
-   install anything but the hash-locked lock file, or make a lint step
-   non-failing. Check names are compared after matrix expansion and case
-   folding, and no two jobs may produce the same one. Checkout inputs may not
-   change ref, repository, or file set.
+2. Rules, so the pinned values themselves cannot be weak. A legitimate floor
+   change regenerates the pins, so every rule here is tested with the pins
+   regenerated. Every run step runs under an allowlisted pipefail shell, and
+   its run text is parsed as shell (bashlex): no condition, ``&&``, ``||``,
+   background job, command or process substitution or ``!`` may hide a
+   failing command; nothing may switch off stop-on-error, write a runner
+   environment, path, output or state file by any spelling, run constructed,
+   indirect or unlisted commands, run python other than the listed scripts,
+   write into the temp directory except from git, add pytest options, install
+   anything but the hash-locked lock file, or make a lint step non-failing.
+   A protected-jobs table fixes each job's key, check names and required step
+   text; job and step conditions, environment, runner, timeout, matrix and
+   every workflow's triggers and write permissions are allowlisted. The pin
+   file loads strictly, the lock and pytest configuration are judged by rule,
+   and any symlink fails the guard, which never follows links.
 
-Usage: python scripts/floor_guard.py [--root DIR] [--update-pins]
+The guard runs from the pull request's base branch in CI (see floor.yml). For
+a stacked pull request that base is another feature branch.
+
+Usage: python scripts/floor_guard.py [--root DIR] [--update-pins] [--pins FILE]
 """
 
 from __future__ import annotations
@@ -55,6 +64,7 @@ GUARD_FILES = (
     "scripts/kat_lint.py",
     "scripts/leak_denylist_scan.py",
     "scripts/gh_pr.py",
+    "scripts/no_ai_trailers.py",
     "tests/test_floor_config.py",
     LOCK,
     ".pre-commit-config.yaml",
@@ -246,15 +256,27 @@ PROTECTED_JOBS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         ('python "$RUNNER_TEMP/leak_scan.py" --ci', "--text"),
     ),
     "kat-lint": (("tests (known-answer tests call the gate)",), ("kat_lint.py",)),
-    "authorship": (("authorship (no AI trailers)",), ("git log --all --format=%B",)),
+    "authorship": (
+        ("authorship (no AI trailers)",),
+        ("git log --all --format=%B", "python scripts/no_ai_trailers.py"),
+    ),
     "tests": (("tests (3.11)", "tests (3.12)"), ("pytest -q",)),
     "lint": (("lint (ruff)",), ("ruff check .", "ruff format --check .")),
-    "craft-voice": (("craft (voice)",), ("voice_lint.py", 'python "$V" --commits')),
-    "craft-changelog": (("craft (changelog)",), ("changelog_gate.py", 'python "$C"')),
-    "craft-comments": (("craft (comments)",), ("comment_craft.py", 'python "$C"')),
+    "craft-voice": (
+        ("craft (voice)",),
+        ("python .floor/craft/voice_lint.py --commits",),
+    ),
+    "craft-changelog": (
+        ("craft (changelog)",),
+        ("python .floor/craft/changelog_gate.py --base",),
+    ),
+    "craft-comments": (
+        ("craft (comments)",),
+        ("python .floor/craft/comment_craft.py --base",),
+    ),
     "craft-empty-diff": (
         ("craft (empty-diff)",),
-        ("empty_diff_gate.py", 'python "$C"'),
+        ("python .floor/craft/empty_diff_gate.py --base",),
     ),
     "floor-guard": (
         ("floor (guard from base)",),
@@ -303,7 +325,16 @@ STEP_ENV = {
     "GITHUB_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
     "LEAK_DENYLIST": "${{ secrets.LEAK_DENYLIST }}",
     "EVENT_NAME": "${{ github.event_name }}",
-    "PUSH_BEFORE": "${{ github.event.before }}",
+    "SCAN_BASE": (
+        "${{ github.event_name == 'push' && github.event.before || 'origin/main' }}"
+    ),
+    "CRAFT_BASE": (
+        "${{ github.event.pull_request.base.sha || github.event.before || github.sha }}"
+    ),
+    "CRAFT_HEAD": "${{ github.sha }}",
+    "GUARD_BASE": (
+        "${{ github.event.pull_request.base.sha || github.event.before || github.sha }}"
+    ),
     "PR_BASE": "${{ github.event.pull_request.base.sha }}",
     "PR_TITLE": "${{ github.event.pull_request.title }}",
     "PR_BODY": "${{ github.event.pull_request.body }}",
@@ -317,26 +348,16 @@ STEP_ENV = {
 PY_SCRIPTS = frozenset(
     {
         "scripts/kat_lint.py",
+        "scripts/no_ai_trailers.py",
         ".floor/craft/empty_range.py",
-        "$V",
-        "$C",
+        ".floor/craft/voice_lint.py",
+        ".floor/craft/changelog_gate.py",
+        ".floor/craft/comment_craft.py",
+        ".floor/craft/empty_diff_gate.py",
         "$RUNNER_TEMP/leak_scan.py",
         "$RUNNER_TEMP/floor/floor_guard.py",
     }
 )
-SCRIPT_VARS = {
-    "V": frozenset({".floor/craft/voice_lint.py", "craft/voice_lint.py"}),
-    "C": frozenset(
-        {
-            ".floor/craft/changelog_gate.py",
-            "craft/changelog_gate.py",
-            ".floor/craft/comment_craft.py",
-            "craft/comment_craft.py",
-            ".floor/craft/empty_diff_gate.py",
-            "craft/empty_diff_gate.py",
-        }
-    ),
-}
 # pytest options a guardrail run may not add: they select, deselect, skip,
 # collect only, change config or root, disable plugins or relax xfail.
 PYTEST_OPTIONS = frozenset({"-q"})
@@ -530,6 +551,7 @@ class _Collector:
         self.chains: list[tuple[str, list[str]]] = []
         self.pipelines: list[list[list[str]]] = []
         self.writes: list[tuple[list[str], str]] = []
+        self.hiding: set[str] = set()
         self._condition = 0
 
     def _head(self, node) -> list[str]:
@@ -541,6 +563,16 @@ class _Collector:
 
     def walk(self, node) -> None:
         kind = getattr(node, "kind", None)
+        if kind in {"commandsubstitution", "processsubstitution"}:
+            self.hiding.add("uses command substitution")
+        if kind == "operator" and getattr(node, "op", None) == "&":
+            self.hiding.add("runs a command in the background")
+        if kind == "operator" and getattr(node, "op", None) == "&&":
+            self.hiding.add("uses &&")
+        if kind == "operator" and getattr(node, "op", None) == "||":
+            self.hiding.add("uses ||")
+        if kind in {"if", "while", "until"}:
+            self.hiding.add("uses a condition")
         if kind == "list":
             parts = node.parts
             for i, part in enumerate(parts):
@@ -632,21 +664,20 @@ def run_violations(run: str, where: str) -> list[str]:
     for op, words in col.chains:
         if op == "&&" and words and words[0] in GUARDED:
             found.append(f"{where}: {words[0]} runs only after &&")
-    pipefail = any(w and w[0] == "set" and "pipefail" in w[1:] for w in col.commands)
-    for pipeline in col.pipelines:
-        for words in pipeline[:-1]:
-            if words and words[0] in GUARDED and not pipefail:
-                found.append(f"{where}: failure of {words[0]} hidden by a pipe")
+    for construct in sorted(col.hiding):
+        found.append(f"{where}: {construct}, which can hide a failing command")
     for words, target in col.writes:
         clean = target.strip("\"'")
-        if clean.startswith(TEMP_PREFIXES) and words[:2] != ["git", "show"]:
-            found.append(f"{where}: only git show may write into the temp dir")
+        if clean.startswith(TEMP_PREFIXES) and not (
+            words[:1] == ["git"] and words[1:2] and words[1] in GIT_READ_ONLY
+        ):
+            found.append(
+                f"{where}: only a read-only git command may write into the temp dir"
+            )
     if col.negated:
         found.append(f"{where}: exit status negated with !")
     for name in col.assignments:
-        var, _, value = name.partition("=")
-        if var in SCRIPT_VARS and value.strip("\"'") not in SCRIPT_VARS[var]:
-            found.append(f"{where}: {var} must name an allowlisted script")
+        var = name.split("=", 1)[0]
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", var) or SENSITIVE_VARS.match(
             var
         ):
@@ -785,13 +816,12 @@ def _pytest_violations(args: list[str], where: str) -> list[str]:
 # The only shell values a guardrail may set, compared as exact strings. Flags
 # are never parsed: an option after the placeholder, a parse-only or
 # command-string option, an end-of-options marker or an extra file all fail by
-# not being one of these.
+# not being one of these. Both values stop on error and on a failing pipe.
+# Every run step in the floor must run under one of them (see job_violations).
 SHELL_ALLOWLIST = frozenset(
     {
-        "bash -e {0}",
         "bash -eo pipefail {0}",
         "bash --noprofile --norc -eo pipefail {0}",
-        "sh -e {0}",
     }
 )
 
@@ -891,6 +921,13 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
                 found.append(f"{sw}: keys {sorted(set(step) - ALLOWED_STEP_KEYS)}")
             if not shell_ok(step.get("shell")):
                 found.append(f"{sw}: shell is not an allowlisted value")
+            effective = (
+                step.get("shell")
+                or ((job.get("defaults") or {}).get("run") or {}).get("shell")
+                or ((wf.get("defaults") or {}).get("run") or {}).get("shell")
+            )
+            if "run" in step and effective not in SHELL_ALLOWLIST:
+                found.append(f"{sw}: no explicit pipefail shell")
             uses = step.get("uses")
             if "if" in step and step["if"] not in STEP_CONDITIONS:
                 found.append(f"{sw}: step condition is not allowlisted")
@@ -912,6 +949,53 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
             if run:
                 found += run_violations(str(run), sw)
     return found
+
+
+def symlink_violations(root: Path) -> list[str]:
+    """Any link the guard could be asked to judge.
+
+    In a git checkout: every tracked link (index mode 120000, whatever the
+    platform did with it on checkout) and every untracked, unignored path that
+    is a link. A pull request can supply only tracked content, and an ignored
+    path cannot come from it. Outside a checkout: every link on disk outside
+    the skipped directories.
+    """
+    import os
+    import subprocess
+
+    found: list[str] = []
+    if (root / ".git").exists():
+        for args, label in (
+            (["ls-files", "-s", "-z"], "tracked"),
+            (["ls-files", "-o", "--exclude-standard", "-z"], "untracked"),
+        ):
+            listed = subprocess.run(
+                ["git", *args], cwd=root, capture_output=True, check=False
+            )
+            if listed.returncode != 0:
+                found.append("symlinks: git ls-files failed; links cannot be ruled out")
+                continue
+            for entry in listed.stdout.decode("utf-8", "replace").split("\0"):
+                if label == "tracked":
+                    meta, _, path = entry.partition("\t")
+                    if meta.startswith("120000 "):
+                        found.append(
+                            f"tracked symlink {path}: the guard does not follow links"
+                        )
+                elif entry and (root / entry).is_symlink():
+                    found.append(f"symlink {entry}: the guard does not follow links")
+        return sorted(set(found))
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        here = Path(dirpath)
+        rel_dir = here.relative_to(root).as_posix()
+        prefix = "" if rel_dir == "." else rel_dir + "/"
+        dirnames[:] = [
+            d for d in dirnames if not (prefix + d + "/").startswith(GUARD_SKIP_DIRS)
+        ]
+        for name in [*dirnames, *filenames]:
+            if (here / name).is_symlink():
+                found.append(f"symlink {prefix}{name}: the guard does not follow links")
+    return sorted(set(found))
 
 
 def protected_job_violations(wf: dict) -> list[str]:
@@ -1107,6 +1191,7 @@ def violations(root: Path, pins_path: Path | None = None) -> list[str]:
         + pin_violations(root, pins)
         + job_violations(wf, others)
         + protected_job_violations(wf)
+        + symlink_violations(root)
         + trigger_violations(wf, others)
         + lock_violations(root)
         + pytest_config_violations(root)

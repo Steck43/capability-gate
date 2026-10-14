@@ -26,7 +26,7 @@
     },
     {
       "path": ".github/workflows/floor.yml",
-      "sha256": "cb71cc2da15552eae6f4d0d503a89ec2d4f08031fe16365113e007f802082577"
+      "sha256": "682c75c4d300b086e7d5344b1ccbe9f1c146bb459cc2fa8363adcf58c1b5076c"
     },
     {
       "path": ".github/workflows/plugin-bundle.yml",
@@ -58,7 +58,7 @@
     },
     {
       "path": "scripts/floor_guard.py",
-      "sha256": "767973e51e4c4b67283c7ee275388d47d3ee7dbfc3b0a2495c5d46b845cd46bf"
+      "sha256": "5832b3dc608d94fde4fcfad64c261dc8e9f05fa1a00c591fef513ef7e6a87d1f"
     },
     {
       "path": "scripts/kat_lint.py",
@@ -69,34 +69,38 @@
       "sha256": "e44934d6ac19235c024d2cc3b86667ef04f955dc6a555c0878aee99eb737a136"
     },
     {
+      "path": "scripts/no_ai_trailers.py",
+      "sha256": "552f24eeb3a69f8234bc7a4481fc0f91cecb1b5e0b5b7aa3e5e2172aad0feeaf"
+    },
+    {
       "path": "tests/test_floor_config.py",
-      "sha256": "17ee600270479891e6c49e835fb0eb6000b462957df3af509e4ac8e24c29d9c6"
+      "sha256": "a96709247ce930e388a2bbec10297966136c31a7da85fb9065184c6d0409afa3"
     }
   ],
   "jobs": [
     {
       "job": "authorship",
-      "sha256": "83275b07c86396684fe4df378e33499dcfd4d7f1789455f179f4be369bb6a583"
+      "sha256": "d0f0eb98eddc9075c423941f6c9d5116d75bcc6c6b8f7ff55f578e426f5f9513"
     },
     {
       "job": "craft-changelog",
-      "sha256": "13b7ba0794707ee54b9be356196f79c8619fecd2ceba5f1d88daf62c1b6ee313"
+      "sha256": "57fba8a2d9d78c4ef809e21d6b043367a7383de93627defec7c2b8cbe1351276"
     },
     {
       "job": "craft-comments",
-      "sha256": "828c725f31591e4fd05b4514fa201ebce3f2d56a3752ee4504797f5fe1b0cbec"
+      "sha256": "ca324d47621c8b9867178da92875b84274b84707c0cd5e7127216652b9766cf5"
     },
     {
       "job": "craft-empty-diff",
-      "sha256": "5c4960942e8679ae2427e1527e0c9ebbd0fdc7f9d9fe792cb1b92205e4eb4435"
+      "sha256": "e2ea0cfddb04c377a42cf4a61da632b5947f6aed23d2f0f5726b62abade23f82"
     },
     {
       "job": "craft-voice",
-      "sha256": "65d86c60881a3d4e15a14a687828c36a2a5806dafa1b5b522a8ba0b7b2195921"
+      "sha256": "92c37a428505f5ef02745d1bc81b27b8710fd105606cd38f9895d21f4921d3be"
     },
     {
       "job": "floor-guard",
-      "sha256": "8d17d6c644167b1397a436976adaf3a8fdd55287edfc8b66303dee9dcb8ebd89"
+      "sha256": "a3def911868cd25b024d3de61b465bff7eb17652a6494c833eeedd7d980dc93a"
     },
     {
       "job": "kat-lint",
@@ -104,7 +108,7 @@
     },
     {
       "job": "leak-denylist",
-      "sha256": "b716352b513c165f70ccbce30d6db3231d03e98b4ac7879fad9444c104419072"
+      "sha256": "29c0d2a46a2c4c8ce0276292d9b2efd0db6c011426a7a518d2c078ff5707567a"
     },
     {
       "job": "lint",
@@ -124,6 +128,6 @@
     }
   ],
   "workflow": {
-    "sha256": "00d9934e759a93c13e9902ec0412f12474574973fe134172b091d7fabf3222ee"
+    "sha256": "b399f8a1ac560da3b4d81bc971928862c87ea0e6cd6a55909d302475a67a876b"
   }
 }

@@ -85,7 +85,7 @@ def test_pytest_ini_keeps_strict_xfail_and_syntax_warning_errors() -> None:
         ("leak-denylist", "git show origin/main:scripts/leak_denylist_scan.py"),
         ("kat-lint", "python scripts/kat_lint.py"),
         ("tests", "pytest -q"),
-        ("floor-guard", 'git show "$BASE:scripts/floor_guard.py"'),
+        ("floor-guard", 'git show "$GUARD_BASE:scripts/floor_guard.py"'),
     ],
 )
 def test_floor_workflow_keeps_guardrail_jobs(job: str, needle: str) -> None:
@@ -111,8 +111,15 @@ def test_leak_job_reads_the_denylist_secret() -> None:
 
 def test_leak_job_fails_closed_without_a_base_scanner() -> None:
     run = _runs(_workflow()["jobs"]["leak-denylist"])
-    assert "refusing to run this change's copy" in run
+    # main without a scanner fails at git cat-file; nothing falls back to the
+    # copy under review.
+    assert "git cat-file -e origin/main:scripts/leak_denylist_scan.py" in run
+    assert (
+        'git show origin/main:scripts/leak_denylist_scan.py > "$RUNNER_TEMP/leak_scan.py"'
+        in run
+    )
     assert "cp scripts/leak_denylist_scan.py" not in run
+    assert "python scripts/leak_denylist_scan.py" not in run
 
 
 def test_pre_commit_keeps_local_guardrail_hooks() -> None:
@@ -771,8 +778,12 @@ def test_floor_guard_job_reads_guard_pins_and_lock_from_base() -> None:
         ".github/floor-pins.json",
         "requirements-ci.lock",
     ):
-        assert f'git show "$BASE:{rel}"' in run, rel
-    assert "refusing to judge with the pull request copy" in run
+        assert f'git cat-file -e "$GUARD_BASE:{rel}"' in run, rel
+        assert f'git show "$GUARD_BASE:{rel}"' in run, rel
+    assert 'git rev-parse --verify "$GUARD_BASE^{commit}"' in run
+    assert "scripts/floor_guard.py --root" not in run.replace(
+        "/floor/floor_guard.py", ""
+    )
     assert '--pins "$RUNNER_TEMP/floor/floor-pins.json"' in run
 
 
@@ -1312,9 +1323,9 @@ RULE_TAMPERS = [
         "python runs only after &&",
     ),
     (
-        "pipe hides the guarded command",
-        (KAT, _step("python scripts/kat_lint.py | grep -v zqxwvk")),
-        "failure of python hidden by a pipe",
+        "pipe under a shell without pipefail",
+        (KAT, KAT + "        shell: bash -e {0}\n"),
+        "no explicit pipefail shell",
     ),
     # python runs only allowlisted scripts; nothing written to temp and run
     (
@@ -1336,12 +1347,12 @@ RULE_TAMPERS = [
                 'printf "%s" zqxwvk > "$RUNNER_TEMP/zqxwvk.py"\npython "$RUNNER_TEMP/zqxwvk.py"'
             ),
         ),
-        "only git show may write into the temp dir",
+        "only a read-only git command may write into the temp dir",
     ),
     (
-        "script variable repointed",
-        ("then V=.floor/craft/voice_lint.py", 'then V="$RUNNER_TEMP/zqxwvk.py"'),
-        "V must name an allowlisted script",
+        "python runs a script variable",
+        (KAT, _step('V=scripts/kat_lint.py\npython "$V"')),
+        "python runs a script that is not allowlisted",
     ),
     # environment is allowlisted with exact values
     (
