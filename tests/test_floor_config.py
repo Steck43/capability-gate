@@ -420,7 +420,8 @@ def test_pytest_invocation_is_exact_and_from_the_gate_directory() -> None:
     pytest_steps = [
         s
         for s in steps
-        if "pytest" in str(s.get("run", "")) and "pip install" not in str(s.get("run", ""))
+        if "pytest" in str(s.get("run", ""))
+        and "pip install" not in str(s.get("run", ""))
     ]
     assert len(pytest_steps) == 1
     assert _strip_comments(str(pytest_steps[0]["run"])).strip() == "pytest -q"
