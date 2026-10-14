@@ -14,6 +14,7 @@ import configparser
 import json
 import re
 import shutil
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -255,19 +256,19 @@ TAMPERS = [
     (
         "T2 shell without -e",
         (KAT, KAT + "        shell: bash {0}\n"),
-        "shell without stop-on-error",
+        "shell is not an allowlisted value",
         False,
     ),
     (
         "T2 shell -e then +e",
         (KAT, KAT + "        shell: bash -e +e {0}\n"),
-        "shell without stop-on-error",
+        "shell is not an allowlisted value",
         False,
     ),
     (
         "T2 shell +e first",
         (KAT, KAT + "        shell: bash +e -e {0}\n"),
-        "shell without stop-on-error",
+        "shell is not an allowlisted value",
         False,
     ),
     (
@@ -315,7 +316,7 @@ TAMPERS = [
     (
         "T2 workflow default shell",
         ("permissions:\n", "defaults:\n  run:\n    shell: bash {0}\npermissions:\n"),
-        "default shell without stop-on-error",
+        "default shell is not an allowlisted value",
         False,
     ),
     (
@@ -766,3 +767,216 @@ def test_floor_guard_job_reads_guard_pins_and_lock_from_base() -> None:
 def test_the_tamper_list_covers_every_property() -> None:
     keys = {label.split()[0] for label, *_ in TAMPERS}
     assert keys == {"T1", "T2", "T3", "T4", "T5", "T6", "T7"}
+
+
+# --- shell values are an exact allowlist (brief 3a) ---------------------------
+# A shell value passes only when absent or exactly equal to one listed value,
+# at step, job-defaults and workflow-defaults level. Flags are never parsed.
+
+_BAD_SHELLS = [
+    # trailing arguments after the placeholder
+    pytest.param("bash -e {0} +e", id="trailing-plus-e"),
+    pytest.param("bash -e {0} -x", id="trailing-flag"),
+    pytest.param("bash -e {0} {0}", id="trailing-second-placeholder"),
+    pytest.param("bash -eo pipefail {0} --norc", id="trailing-long-option"),
+    # combined or extra flags
+    pytest.param("bash -ex {0}", id="combined-flags"),
+    pytest.param("bash -e -n {0}", id="parse-only"),
+    pytest.param("bash -e -c true {0}", id="command-string"),
+    pytest.param("bash -e -s {0}", id="script-from-stdin"),
+    pytest.param("bash -e --rcfile zqxwvk.sh {0}", id="rcfile"),
+    pytest.param("bash -e +e {0}", id="e-then-plus-e"),
+    pytest.param("bash +e -e {0}", id="plus-e-then-e"),
+    pytest.param("bash -e zqxwvk.sh {0}", id="extra-file-before-placeholder"),
+    pytest.param("bash -E {0}", id="errtrace-not-errexit"),
+    pytest.param("bash -e", id="no-placeholder"),
+    pytest.param("bash  -e {0}", id="double-space"),
+    pytest.param(" bash -e {0}", id="leading-space"),
+    # alternate shells
+    pytest.param("zsh -e {0}", id="zsh"),
+    pytest.param("pwsh -command . '{0}'", id="pwsh"),
+    pytest.param("python {0}", id="python"),
+    pytest.param("/bin/bash -e {0}", id="absolute-bash"),
+    pytest.param("bash", id="bare-bash-keyword"),
+    pytest.param("sh {0}", id="sh-without-e"),
+    # the end-of-options marker
+    pytest.param("bash -e -- {0}", id="end-of-options"),
+    pytest.param("bash -- -e {0}", id="end-of-options-first"),
+]
+_LEVELS = ("step", "job-defaults", "workflow-defaults")
+_ALLOWED_SHELLS = [
+    "bash --noprofile --norc -eo pipefail {0}",
+    "bash -e {0}",
+    "bash -eo pipefail {0}",
+    "sh -e {0}",
+]
+
+
+def _plant_shell(text: str, level: str, value: str) -> str:
+    quoted = json.dumps(value)
+    if level == "step":
+        return text.replace(KAT, KAT + f"        shell: {quoted}\n", 1)
+    if level == "job-defaults":
+        anchor = "    name: tests (known-answer tests call the gate)\n"
+        return text.replace(
+            anchor, anchor + f"    defaults:\n      run:\n        shell: {quoted}\n", 1
+        )
+    return text.replace(
+        "permissions:\n", f"defaults:\n  run:\n    shell: {quoted}\npermissions:\n", 1
+    )
+
+
+_SHELL_MESSAGE = {
+    "step": "job kat-lint step 3: shell is not an allowlisted value",
+    "job-defaults": "job kat-lint: default shell is not an allowlisted value",
+    "workflow-defaults": "workflow: default shell is not an allowlisted value",
+}
+
+
+@pytest.mark.parametrize("level", _LEVELS)
+@pytest.mark.parametrize("value", _BAD_SHELLS)
+def test_a_shell_outside_the_allowlist_is_a_rules_violation(
+    tmp_path: Path, level: str, value: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    wf = root / ".github" / "workflows" / "floor.yml"
+    planted = _plant_shell(wf.read_text(encoding="utf-8"), level, value)
+    assert value in planted or json.dumps(value) in planted
+    wf.write_text(planted, encoding="utf-8")
+    # Pins regenerated with the change: only the rules layer can catch it.
+    (root / guard.PINS).write_text(
+        json.dumps(guard.pins_to_file(guard.compute_pins(root))), encoding="utf-8"
+    )
+    found = guard.violations(root)
+    assert any(f.endswith(_SHELL_MESSAGE[level]) for f in found), found
+
+
+@pytest.mark.parametrize(
+    "value", [pytest.param(1, id="int"), pytest.param(["bash", "-e", "{0}"], id="list")]
+)
+def test_a_shell_that_is_not_a_string_is_rejected(value: object) -> None:
+    assert not guard.shell_ok(value)
+
+
+@pytest.mark.parametrize("value", _ALLOWED_SHELLS)
+def test_each_allowlisted_shell_passes_the_rules_at_every_level(
+    tmp_path: Path, value: str
+) -> None:
+    for level in ("step", "workflow-defaults"):
+        root = _copy_tree(tmp_path / level)
+        wf = root / ".github" / "workflows" / "floor.yml"
+        wf.write_text(
+            _plant_shell(wf.read_text(encoding="utf-8"), level, value), encoding="utf-8"
+        )
+        (root / guard.PINS).write_text(
+            json.dumps(guard.pins_to_file(guard.compute_pins(root))), encoding="utf-8"
+        )
+        assert guard.violations(root) == [], (level, value)
+    assert guard.shell_ok(value)
+
+
+def test_the_shell_allowlist_is_exactly_the_stop_on_error_values() -> None:
+    assert getattr(guard, "SHELL_ALLOWLIST", None) == frozenset(_ALLOWED_SHELLS)
+
+
+@pytest.mark.parametrize("value", _ALLOWED_SHELLS)
+def test_each_allowlisted_shell_stops_a_failing_script(
+    tmp_path: Path, value: str
+) -> None:
+    """Behavior, not text: real bash or sh runs the step and the step fails."""
+    script = tmp_path / "step.sh"
+    script.write_bytes(b"false\necho zqxwvk-reached\n")
+    words = value.split()
+    exe = shutil.which(words[0])
+    assert exe, f"{words[0]} is required on every runner that runs this suite"
+    argv = [exe] + [
+        str(script).replace("\\", "/") if w == "{0}" else w for w in words[1:]
+    ]
+    run = subprocess.run(argv, capture_output=True, text=True)
+    assert run.returncode != 0, value
+    assert "zqxwvk-reached" not in run.stdout, value
+
+
+# --- guard globs see what pytest loads, and skip only what pytest skips --------
+
+
+def test_sibling_checkouts_under_the_scratch_dir_are_not_guard_files(
+    tmp_path: Path,
+) -> None:
+    """run_full_suite.py clones pinned siblings under .tmp/; pytest never recurses there."""
+    root = _copy_tree(tmp_path)
+    sib = root / ".tmp" / "pinned-siblings" / "zqxwvk" / "tests"
+    sib.mkdir(parents=True)
+    (sib / "conftest.py").write_text("x = 1\n", encoding="utf-8")
+    (root / ".tmp" / "pinned-siblings" / "zqxwvk" / "pytest.ini").write_text(
+        "[pytest]\n", encoding="utf-8"
+    )
+    assert guard.violations(root) == []
+
+
+def test_a_conftest_where_pytest_does_recurse_is_still_caught(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    for rel in ("node_modules/zqxwvk/conftest.py", "harness/conftest.py"):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x = 1\n", encoding="utf-8")
+    found = guard.violations(root)
+    assert "pin: file node_modules/zqxwvk/conftest.py added" in found, found
+    assert "pin: file harness/conftest.py added" in found, found
+
+
+def test_every_directory_the_guard_skips_is_one_pytest_skips() -> None:
+    import fnmatch
+
+    ini = configparser.ConfigParser()
+    ini.read(ROOT / "pytest.ini", encoding="utf-8")
+    patterns = ini["pytest"]["norecursedirs"].split()
+    assert guard.GUARD_SKIP_DIRS
+    for prefix in guard.GUARD_SKIP_DIRS:
+        name = prefix.rstrip("/")
+        assert any(fnmatch.fnmatch(name, p) for p in patterns), name
+
+
+# --- the one gitleaks fingerprint (brief 3d) -----------------------------------
+# Commit 14b3be1 stored a pin digest under the job key "secrets", which the
+# generic-api-key rule reads as a credential. The tree no longer does that, and
+# history is not rewritten, so exactly that finding is ignored and nothing else.
+
+OLD_PIN_FINDING = "14b3be176f09833ea0da0421bf7d5cf15a6095c1:.github/floor-pins.json:generic-api-key:31"
+
+
+def test_gitleaksignore_holds_exactly_the_one_old_pin_finding() -> None:
+    lines = (ROOT / ".gitleaksignore").read_text(encoding="utf-8").splitlines()
+    entries = [
+        ln.strip() for ln in lines if ln.strip() and not ln.lstrip().startswith("#")
+    ]
+    assert entries == [OLD_PIN_FINDING]
+
+
+def _has_allowlist(node: object) -> bool:
+    if isinstance(node, dict):
+        return any(
+            "allowlist" in str(k).lower() or _has_allowlist(v) for k, v in node.items()
+        )
+    if isinstance(node, list):
+        return any(_has_allowlist(v) for v in node)
+    return False
+
+
+def test_gitleaks_config_has_no_allowlist() -> None:
+    config = tomllib.loads((ROOT / ".gitleaks.toml").read_text(encoding="utf-8"))
+    assert config["rules"], "config parsed to no rules"
+    assert not _has_allowlist(config)
+    assert _has_allowlist({"rules": [{"allowlists": [{}]}]})  # the check itself works
+
+
+def test_gitleaksignore_is_a_pinned_guard_file(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    ignore = root / ".gitleaksignore"
+    ignore.write_text(
+        ignore.read_text(encoding="utf-8")
+        + "0" * 40
+        + ":zqxwvk.txt:generic-api-key:1\n",
+        encoding="utf-8",
+    )
+    assert "pin: file .gitleaksignore changed" in guard.violations(root)

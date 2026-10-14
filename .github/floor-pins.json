@@ -41,6 +41,10 @@
       "sha256": "72cd732aa8da3890e81c06a42dd49c1731f23cb3264db7fb10064e8c9eeac343"
     },
     {
+      "path": ".gitleaksignore",
+      "sha256": "89c72cb9080d5f5a86f541b1086a99bc22bff23001cd99af8a7085d2642f3d13"
+    },
+    {
       "path": ".pre-commit-config.yaml",
       "sha256": "6e2a4c6e7857ff3931fdb42d383d21df199c938cc788306355f4e2b99df895b5"
     },
@@ -54,7 +58,7 @@
     },
     {
       "path": "scripts/floor_guard.py",
-      "sha256": "ec90eba1c36f9cd1c16c1465428e75679a8905b11f9b6a85d6880dc5c060ed36"
+      "sha256": "956fa062560825ef0422950a08aa8139fe739c11300b7fad4afe6ddfc718f7e9"
     },
     {
       "path": "scripts/kat_lint.py",
@@ -66,7 +70,7 @@
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "28be953b055f8be2c39e2517e6fea90ddba687fa7b957e8fe97098a6287b8809"
+      "sha256": "6e04050314335f5733b14f57b8379a213c655ebf4e26821ae4d1dfd3cb9a83d4"
     }
   ],
   "jobs": [

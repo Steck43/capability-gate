@@ -59,6 +59,7 @@ GUARD_FILES = (
     LOCK,
     ".pre-commit-config.yaml",
     ".gitleaks.toml",
+    ".gitleaksignore",
 )
 GUARD_GLOBS = (
     ".floor/**/*.py",
@@ -253,14 +254,18 @@ def sha(text: str | bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+# Directories the globs skip. Each one is also in pytest's norecursedirs
+# (tests/test_floor_config.py proves it), so nothing pytest loads is skipped.
+# .tmp/ holds the pinned sibling checkouts that scripts/run_full_suite.py makes.
+GUARD_SKIP_DIRS = (".git/", ".venv/", ".tmp/")
+
+
 def guard_files(root: Path) -> list[str]:
     found = {f for f in GUARD_FILES if (root / f).is_file()}
     for pattern in GUARD_GLOBS:
         for path in root.glob(pattern):
             rel = path.relative_to(root).as_posix()
-            if path.is_file() and not rel.startswith(
-                (".git/", ".venv/", "node_modules/")
-            ):
+            if path.is_file() and not rel.startswith(GUARD_SKIP_DIRS):
                 found.add(rel)
     return sorted(found)
 
@@ -574,17 +579,22 @@ def _python_violations(words: list[str], where: str) -> list[str]:
     return found
 
 
+# The only shell values a guardrail may set, compared as exact strings. Flags
+# are never parsed: an option after the placeholder, a parse-only or
+# command-string option, an end-of-options marker or an extra file all fail by
+# not being one of these.
+SHELL_ALLOWLIST = frozenset(
+    {
+        "bash -e {0}",
+        "bash -eo pipefail {0}",
+        "bash --noprofile --norc -eo pipefail {0}",
+        "sh -e {0}",
+    }
+)
+
+
 def shell_ok(shell: object) -> bool:
-    if shell is None:
-        return True
-    text = str(shell).strip()
-    parts = text.split()
-    if not parts or parts[0] not in {"bash", "sh"}:
-        return False
-    flags = [p for p in parts[1:] if p.startswith(("-", "+"))]
-    on = any(re.fullmatch(r"-[A-Za-z]*e[A-Za-z]*", f) for f in flags)
-    off = any(f.startswith("+") for f in flags) or "{0}" not in parts
-    return on and not off
+    return shell is None or (isinstance(shell, str) and shell in SHELL_ALLOWLIST)
 
 
 # --- jobs, steps, names ------------------------------------------------------
@@ -635,7 +645,7 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
     if wf.get("permissions") != READ_ONLY:
         found.append("workflow: permissions beyond contents: read")
     if not shell_ok(((wf.get("defaults") or {}).get("run") or {}).get("shell")):
-        found.append("workflow: default shell without stop-on-error")
+        found.append("workflow: default shell is not an allowlisted value")
     seen: dict[str, str] = {}
     for doc in [wf, *extra_workflows]:
         for key, job in (doc.get("jobs") or {}).items():
@@ -650,7 +660,7 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
         if job.get("continue-on-error"):
             found.append(f"{where}: continue-on-error")
         if not shell_ok(((job.get("defaults") or {}).get("run") or {}).get("shell")):
-            found.append(f"{where}: default shell without stop-on-error")
+            found.append(f"{where}: default shell is not an allowlisted value")
         if job.get("env"):
             found.append(f"{where}: env at job level")
         if "permissions" in job and job["permissions"] != READ_ONLY:
@@ -662,7 +672,7 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
             if set(step) - ALLOWED_STEP_KEYS:
                 found.append(f"{sw}: keys {sorted(set(step) - ALLOWED_STEP_KEYS)}")
             if not shell_ok(step.get("shell")):
-                found.append(f"{sw}: shell without stop-on-error")
+                found.append(f"{sw}: shell is not an allowlisted value")
             uses = step.get("uses")
             for var, value in (step.get("env") or {}).items():
                 token_ok = uses is not None and TOKEN_ENV.get(str(var)) == value
