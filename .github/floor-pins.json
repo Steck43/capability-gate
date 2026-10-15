@@ -70,7 +70,7 @@
     },
     {
       "path": "scripts/kat_lint.py",
-      "sha256": "b3e11f6c0253788cf313370dee8ab498b909c91df476f2d10ce0a60de94c84df"
+      "sha256": "a3dde04f3c41b565a666a7351e82ae04db00601e7e44e2ca1f94835fe4eb304f"
     },
     {
       "path": "scripts/leak_denylist_scan.py",

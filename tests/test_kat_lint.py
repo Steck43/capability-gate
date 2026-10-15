@@ -2187,7 +2187,9 @@ CLEAN_2 = {
     "subscript_of_partial_knowledge": ("assert [d][0] is not None", ""),
     "slice_with_unknown_bound": ("assert [1, 2][len(d.reason) :]", ""),
     "or_with_unknown_side": ("assert d or 0", ""),
-    "len_of_partial_knowledge": ("assert len([d]) == 1", ""),
+    # A display's length is known whatever its elements are (rejected, see the
+    # review round tests); one with a starred part is not.
+    "len_of_partial_knowledge": ("assert len([*d.reason]) == 1", ""),
     "dunder_import_returns_the_top_package": (
         "x = __import__('_pytest.outcomes').fail",
         "",

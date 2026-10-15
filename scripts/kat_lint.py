@@ -103,8 +103,10 @@ test helper module, conftest, a class defined or subclassed in the file,
 ``adapters`` folder sits beside the test file, when the test, its fixtures,
 autouse fixtures, its helpers or the module patch the gate (``setattr`` or
 ``monkeypatch.setattr`` or ``mock.patch`` on a gate, the Gate class, a gate
-function, or the gate module reached through ``sys.modules``; assignment to one of their attributes or to an attribute of
-``type(gate)``; ``__setattr__`` or ``__delattr__`` called on any of them, or
+function, or the gate module reached through ``sys.modules``; assignment
+to one of their attributes or to an attribute of ``type(gate)`` or
+``gate.__class__``, with ``getattr(x, "name")`` read as ``x.name``;
+``monkeypatch.setitem`` or ``delitem`` on their ``__dict__`` or ``vars()``; ``__setattr__`` or ``__delattr__`` called on any of them, or
 through ``object`` or ``type``; a store into, or ``update``, ``setdefault``,
 ``pop`` or ``clear`` on, their ``__dict__`` or ``vars()``), when the test
 rebinds a gate fixture it takes to anything other than a real gate (plain,
@@ -113,7 +115,10 @@ under a constant-false branch, in a loop over an empty constant, in a
 comprehension over one, in a generator expression nothing consumes, or inside
 ``pytest.raises``, ``contextlib.suppress`` or ``assertRaises``.
 
-Every KAT that reaches the gate must also assert on its result: a live
+Every KAT that reaches the gate must also assert on its result (a name that
+held the result and is rebound on the straight path to something else no
+longer holds it, and ``len()`` of a list or tuple display is a constant): a
+live
 ``assert`` that uses a value derived from a gate call, directly, through a
 name, through a flag or counter set under a branch or handler that depends on
 one, through a list it was appended to, through a same-file fixture that
@@ -1051,6 +1056,16 @@ class Folder:
         routed = self._fold_routed(node, env, d)
         if routed is not None:
             return routed
+        if (
+            isinstance(f, ast.Name)
+            and f.id == "len"
+            and f.id not in self.file_bound
+            and len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], (ast.List, ast.Tuple))
+            and not any(isinstance(e, ast.Starred) for e in node.args[0].elts)
+        ):
+            return _known(len(node.args[0].elts))
         if not (
             isinstance(f, ast.Name) and f.id in _PURE and f.id not in self.file_bound
         ):
@@ -1860,8 +1875,22 @@ class _File:
             kind == "value" and isinstance(v, str) and v.split(".", 1)[0] in REAL_ROOTS
         )
 
+    def attr_view(self, expr: ast.AST) -> ast.AST:
+        """getattr(x, "name") with a name the lint can fold, read as x.name."""
+        if (
+            isinstance(expr, ast.Call)
+            and self.names.resolve(expr.func) == {"builtins.getattr"}
+            and len(expr.args) == 2
+            and not expr.keywords
+        ):
+            kind, name = self.fold.fold(expr.args[1], self.fold.at(expr))
+            if kind == "value" and isinstance(name, str):
+                return ast.Attribute(expr.args[0], name, ast.Load())
+        return expr
+
     def gate_namespace(self, expr: ast.AST, typed: set[str]) -> bool:
         """The attribute dict of a gate, the Gate class or a gate module."""
+        expr = self.attr_view(expr)
         if isinstance(expr, ast.Attribute) and expr.attr == "__dict__":
             inner = expr.value
         elif (
@@ -1875,7 +1904,11 @@ class _File:
         return self.gate_target(inner, typed) or self.real_module(inner)
 
     def gate_type(self, expr: ast.AST, typed: set[str]) -> bool:
-        """type(gate): the class a gate instance was built from."""
+        """type(gate) or gate.__class__ (getattr included): the class a gate
+        instance was built from."""
+        expr = self.attr_view(expr)
+        if isinstance(expr, ast.Attribute) and expr.attr == "__class__":
+            return self.gate_target(self.attr_view(expr.value), typed)
         return (
             isinstance(expr, ast.Call)
             and self.names.resolve(expr.func) == {"builtins.type"}
@@ -1900,6 +1933,13 @@ class _File:
                     "popitem",
                     "clear",
                 ) and self.gate_namespace(f.value, typed):
+                    return True
+                # monkeypatch.setitem / delitem on a gate's namespace.
+                if (
+                    f.attr in ("setitem", "delitem")
+                    and node.args
+                    and self.gate_namespace(node.args[0], typed)
+                ):
                     return True
             spelled = ast.unparse(f)
             resolved = {n or "" for n in self.names.resolve(f)}
@@ -1938,8 +1978,9 @@ class _File:
                     if isinstance(a, ast.Attribute) and isinstance(
                         a.ctx, (ast.Store, ast.Del)
                     ):
-                        if self.gate_target(a.value, typed) or self.gate_type(
-                            a.value, typed
+                        owner = self.attr_view(a.value)
+                        if self.gate_target(owner, typed) or self.gate_type(
+                            owner, typed
                         ):
                             return True
                         if self.real_module(a.value) and a.attr in GATE_ATTRS:
@@ -2107,7 +2148,27 @@ class _File:
     ) -> bool:
         typed = self.typed_names(fn, params)
         results = self.result_names(fn, typed, seed)
+        # A name that held the result on the straight path and is then rebound
+        # there to something else no longer holds it. A name first set to a
+        # placeholder (a flag or counter set later under a branch) is untouched.
+        held: set[str] = set(seed)
         for s in self.live_stmts(fn.body):
+            if (
+                isinstance(s, (ast.Assign, ast.AnnAssign))
+                and self.parents.get(s) is fn
+                and s.value is not None
+            ):
+                holds = self.uses_result(s.value, typed, results)
+                targets = s.targets if isinstance(s, ast.Assign) else [s.target]
+                for tgt in targets:
+                    if not isinstance(tgt, ast.Name):
+                        continue
+                    if holds:
+                        held.add(tgt.id)
+                        results.add(tgt.id)
+                    elif tgt.id in held:
+                        held.discard(tgt.id)
+                        results.discard(tgt.id)
             if isinstance(s, ast.Assert):
                 if self.uses_result(s.test, typed, results) and not self.swallowed(
                     s, fn
