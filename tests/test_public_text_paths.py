@@ -7,8 +7,10 @@ with NUL bytes dropped, and UTF-16 when a byte-order mark or a NUL byte says it
 may be). Each line is decoded until it stops changing: HTML entities, URL
 encoding, NFKC, format characters dropped, slash look-alikes and Cyrillic
 letters that look like the folder name's letters folded, backslashes and JSON
-escaped slashes as slashes, os.path.join calls and two adjacent string
-literals joined. Then every receipts folder (any letter case, with or without a
+escaped slashes as slashes, os.path.join and .joinpath calls and two
+adjacent string literals joined; a name, attribute or call joined in front of
+the folder name (by a join call, a Path "/" or a "+") is a runtime value, so
+the path is not one in this checkout. Then every receipts folder (any letter case, with or without a
 trailing slash) is judged by the whole path before it:
 
 - nothing before it, or a folder path that exists inside this checkout: home;
@@ -91,13 +93,40 @@ _FOLD = str.maketrans(
         "\ua731": "s",
     }
 )
-_JOIN_CALL = re.compile(r"(?:os\.path|posixpath|ntpath)\.join\(([^()]*)\)")
+# A path built from a runtime value is not a path in this checkout. Its unknown
+# part becomes this marker, which no checkout path can hold (it starts with ..).
+_RUNTIME = "../runtime"
+_FOLDER = "rece" + "ipts"
+_JOIN_CALL = re.compile(
+    r"(?:(?:os\.path|posixpath|ntpath)\.join|\.joinpath)\(((?:[^()]|\([^()]*\))*)\)"
+)
+# A Path "/" operator, or a "+", whose left operand is a name, attribute or call
+# and whose right operand is a literal that starts at the folder name.
+_RUNTIME_LEFT = re.compile(
+    r"""(?:[A-Za-z_][\w.]*(?:\([^()]*\))?)\s*[/+]\s*(["'])(?=receipts)""", re.I
+)
 _LITERAL = re.compile(r"""["']([^"']*)["']""")
 _LITERAL_PLUS = re.compile(r"""(["'])\s*\+\s*(["'])""")
 
 
+def _args(text: str) -> list[str]:
+    out, depth, cur = [], 0, ""
+    for ch in text:
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+            continue
+        depth += (ch == "(") - (ch == ")")
+        cur += ch
+    return [a.strip() for a in [*out, cur] if a.strip()]
+
+
 def _joined(match: re.Match[str]) -> str:
-    return '"' + "/".join(_LITERAL.findall(match.group(1))) + '"'
+    parts = [_RUNTIME] if match.group(0).startswith(".joinpath") else []
+    for arg in _args(match.group(1)):
+        literal = _LITERAL.fullmatch(arg)
+        parts.append(literal.group(1) if literal else _RUNTIME)
+    return '"' + "/".join(parts) + '"'
 
 
 # Default-ignorable code points (Unicode DerivedCoreProperties) that are not
@@ -136,6 +165,7 @@ def _decoded(line: str) -> str:
         nxt = unicodedata.normalize("NFKC", nxt)
         nxt = _visible(nxt)
         nxt = nxt.translate(_FOLD).replace("\\", "/")
+        nxt = _RUNTIME_LEFT.sub(lambda m: m.group(1) + _RUNTIME + "/", nxt)
         nxt = _LITERAL_PLUS.sub("", _JOIN_CALL.sub(_joined, nxt))
         if nxt == text:
             break
@@ -176,7 +206,7 @@ def _foreign_prefix(prefix: str) -> bool:
     parts = [p for p in prefix.split("/") if p not in ("", ".")]
     if ".." in parts:
         return True
-    return not ROOT.joinpath(*parts, "receipts").is_dir()
+    return not ROOT.joinpath(*parts, _FOLDER).is_dir()
 
 
 def _foreign(line: str) -> bool:

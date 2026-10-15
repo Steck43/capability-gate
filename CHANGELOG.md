@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The private path test reads a receipts folder joined onto a runtime value (a name, attribute or call before it in `os.path.join`, `.joinpath`, a Path `/` or a `+`) as a path outside the checkout. It used to drop the runtime value and read the rest as this checkout's own folder.
 - The private path test drops default-ignorable code points (the combining grapheme joiner, Hangul fillers, variation and tag selectors) and combining marks along with format characters before matching, so none of them inside the receipts folder name hides it.
 - The private path test folds Greek letters (epsilon, iota, rho, tau and their capitals), the Cyrillic capital te and the Latin small capitals for r, e, c, i, p, t and s to the Latin letters of the receipts folder name before matching.
 - The private path test treats every URL scheme but http and https as a path outside the checkout, so `file://` and `vscode://` paths are refused; other code forges count as other repositories. Before matching it undoes HTML entities, applies NFKC, drops format characters, folds slash look-alikes and Cyrillic look-alike letters, joins `os.path.join` calls and adjacent string literals, and reads the folder name with or without a trailing slash. Every tracked file is read in its UTF-8 view with NUL bytes dropped and in UTF-16 views, so a file that starts with a NUL byte or is UTF-16 is read too.
