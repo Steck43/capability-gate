@@ -553,7 +553,7 @@ class Folder:
         except RecursionError:
             return UNKNOWN
 
-    def _fold(self, node, env, depth):  # noqa: C901, PLR0911, PLR0912
+    def _fold(self, node, env, depth):
         if node is None or depth > 50:
             return UNKNOWN
         d = depth + 1
@@ -864,7 +864,7 @@ class Names:
         out = {_canon(r) if r else r for r in self._resolve(node, dynamic, depth + 1)}
         return out or {None}
 
-    def _resolve(self, node, dynamic, depth):  # noqa: C901, PLR0911, PLR0912
+    def _resolve(self, node, dynamic, depth):
         if isinstance(node, ast.Name):
             if node.id not in self.binds:
                 if node.id == "__builtins__":
@@ -999,7 +999,7 @@ def _mark_kind(name: str | None) -> str | None:
 # ----------------------------------------------------------------- per-file view
 
 
-class _File:  # noqa: PLR0904
+class _File:
     def __init__(self, tree: ast.Module, label: str, shadowed: bool = False) -> None:
         self.tree = tree
         self.label = label
@@ -1457,7 +1457,7 @@ class _File:  # noqa: PLR0904
             n and n.split(".", 1)[0] in REAL_ROOTS for n in self.names.resolve(expr)
         )
 
-    def patch_at(self, node: ast.AST, typed: set[str]) -> bool:  # noqa: PLR0911
+    def patch_at(self, node: ast.AST, typed: set[str]) -> bool:
         if isinstance(node, ast.Call):
             f = node.func
             spelled = ast.unparse(f)
@@ -1569,7 +1569,10 @@ class _File:  # noqa: PLR0904
 
     def _result_binds(self, s: ast.stmt, typed, results) -> set[str]:
         out: set[str] = set()
-        uses = lambda e: self.uses_result(e, typed, results)  # noqa: E731
+
+        def uses(e) -> bool:
+            return self.uses_result(e, typed, results)
+
         for n in ast.walk(s) if not isinstance(s, (*_FUNCS, ast.ClassDef)) else []:
             if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
                 value = n.value
@@ -1961,7 +1964,7 @@ def _fiat_raise(f: _File, node: ast.Raise) -> str | None:
     return None
 
 
-def lint_source(src: str, label: str, shadowed: bool = False) -> list[str]:  # noqa: C901, PLR0912
+def lint_source(src: str, label: str, shadowed: bool = False) -> list[str]:
     tree = ast.parse(src, filename=label)
     f = _File(tree, label, shadowed)
     problems: list[str] = []

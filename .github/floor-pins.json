@@ -66,11 +66,11 @@
     },
     {
       "path": "scripts/floor_guard.py",
-      "sha256": "489e5e8fb2c54cce57492bb3f105ac93bd6cd52c5e9186d151ba10738c4b456c"
+      "sha256": "94caf3fb5bc4dff88da1181a08f3b4c2f2122c45d810a09a3dbce3c1495def37"
     },
     {
       "path": "scripts/kat_lint.py",
-      "sha256": "88beb1d41bf2fe217b15847d1126af133fce6001bba83d7bdfeb43f0f09d625f"
+      "sha256": "b226336224af419ba357f4a216d4ae824c25e5cecb3eb65e5f2f0f8f82e16e95"
     },
     {
       "path": "scripts/leak_denylist_scan.py",
