@@ -442,3 +442,43 @@ def test_negative_control_the_scanner_finds_a_planted_canary_when_asked(
     assert CANARY not in asked.stdout + asked.stderr
     skipped = _run([str(f)], repo, denylist=f"{CANARY}\n{SYNTHETIC_NAME}\n")
     assert skipped.returncode == 0, skipped.stdout + skipped.stderr
+
+
+# --- an added line that reads like a file header is still scanned ------------------
+# git prefixes every added line with "+", so a line whose own text starts with
+# "++ b/" shows as "+++ b/..." in the diff. Only the header block between
+# "diff --git" and the first "@@" names a file; anywhere else it is content.
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(f"++ b/notes.md {SYNTHETIC_NAME}", id="new-file-header"),
+        pytest.param(f"++ /dev/null {SYNTHETIC_NAME}", id="dev-null-header"),
+        pytest.param(f"++ b/x\n{SYNTHETIC_NAME} on the next line", id="next-line"),
+        pytest.param(
+            f"++ /dev/null\n{SYNTHETIC_NAME} on the next line",
+            id="dev-null-then-next-line",
+        ),
+        pytest.param(f"-- a/notes.md {SYNTHETIC_NAME}", id="old-file-header"),
+        pytest.param(f"@@ -1 +1 @@ {SYNTHETIC_NAME}", id="hunk-lookalike"),
+    ],
+)
+@pytest.mark.parametrize("mode", ["ci", "staged"])
+def test_an_added_line_that_looks_like_a_header_is_scanned(
+    repo: Path, content: str, mode: str
+) -> None:
+    (repo / "base.md").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "doc.md").write_text(f"first line\n{content}\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    if mode == "ci":
+        _git(repo, "commit", "-q", "-m", "add doc")
+        args = ["--ci", "--base", base]
+    else:
+        args = ["--staged"]
+    r = _run(args, repo, denylist=SYNTHETIC_NAME)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist entry 1" in r.stdout, r.stdout

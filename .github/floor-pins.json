@@ -74,7 +74,7 @@
     },
     {
       "path": "scripts/leak_denylist_scan.py",
-      "sha256": "f5b3a609a4cd03e611db1f739d727b879d6afae14bb6b301c11b3eaf555ac452"
+      "sha256": "392ba61812a9c209528b834ef6c40bd61ede89d84b7e93e8cd5df6307254e05e"
     },
     {
       "path": "scripts/no_ai_trailers.py",
