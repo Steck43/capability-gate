@@ -3346,3 +3346,44 @@ def test_a_constant_routed_through_a_call_folds(tmp_path: Path, shape: str) -> N
 def test_a_call_on_the_answer_stays_clean(tmp_path: Path, shape: str) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", ROUTED_CONSTANT_CLEAN[shape]))
     assert r.returncode == 0, r.stdout
+
+
+# --- always-pass review round: an assert in a while-True else never runs ----------
+# The else of a while loop runs only when its test turns false. A test that folds
+# true never does, so an assert there is dead, and a KAT whose only assert on the
+# answer sits there never asserts on it.
+
+DEAD_LOOP_ELSE = {
+    "while-true-break-else": (
+        "while True:\n    break\nelse:\n    assert d.verdict is Verdict.DENY"
+    ),
+    "while-one-break-else": (
+        "while 1:\n    break\nelse:\n    assert d.verdict is Verdict.DENY"
+    ),
+    "while-true-conditional-break-else": (
+        "while True:\n    if d:\n        break\nelse:\n    assert d.verdict is Verdict.DENY"
+    ),
+}
+
+LIVE_LOOP_ELSE = {
+    "while-false-else": (
+        "while False:\n    pass\nelse:\n    assert d.verdict is Verdict.DENY"
+    ),
+    "while-on-the-answer-else": (
+        "while not d.reason:\n    break\nelse:\n    assert d.verdict is Verdict.DENY"
+    ),
+    "for-else": "for _ in ():\n    pass\nelse:\n    assert d.verdict is Verdict.DENY",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(DEAD_LOOP_ELSE))
+def test_an_assert_in_a_while_true_else_is_dead(tmp_path: Path, shape: str) -> None:
+    _expect(
+        tmp_path, _plain(DEAD_LOOP_ELSE[shape]), "never asserts on the gate's result"
+    )
+
+
+@pytest.mark.parametrize("shape", sorted(LIVE_LOOP_ELSE))
+def test_an_assert_in_a_live_loop_else_stays_clean(tmp_path: Path, shape: str) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", _plain(LIVE_LOOP_ELSE[shape])))
+    assert r.returncode == 0, r.stdout
