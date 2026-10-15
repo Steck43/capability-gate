@@ -127,8 +127,11 @@ autouse fixtures, its helpers or the module patch the gate (``setattr`` or
 function, or the gate module reached through ``sys.modules``; assignment
 to one of their attributes or to an attribute of ``type(gate)`` or
 ``gate.__class__``, with ``getattr(x, "name")`` read as ``x.name``, and
-the class read through ``__mro__[i]`` or through a name every binding of
-which is that class (``k = type(gate); setattr(k, ...)``);
+the class read through ``__mro__[i]`` or ``__bases__[i]``, through a
+same-file helper whose one return is ``type(x)`` or ``x.__class__`` of the
+gate it is given, or through a name every binding of which is that class
+(an assignment, an unpacking, a walrus, or a loop over a fixed display of
+it: ``k = type(gate); setattr(k, ...)``);
 ``monkeypatch.setitem`` or ``delitem`` on their ``__dict__`` or ``vars()``;
 ``__setattr__`` or ``__delattr__`` called on any of them, or through
 ``object`` or ``type``; a store into, or ``update``, ``setdefault``,
@@ -1281,7 +1284,19 @@ class Names:
                 self._add(n.name, ("local", n.name))
             elif isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
                 p = folder.parents.get(n)
-                if not isinstance(p, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                while isinstance(p, (ast.Tuple, ast.List, ast.Starred)):
+                    p = folder.parents.get(p)
+                if isinstance(p, (ast.For, ast.AsyncFor)) and p.target is n:
+                    elts = (
+                        p.iter.elts
+                        if isinstance(p.iter, (ast.Tuple, ast.List))
+                        else None
+                    )
+                    if elts and not any(isinstance(e, ast.Starred) for e in elts):
+                        self._add(n.id, ("for", elts))
+                    else:
+                        self._add(n.id, ("other", None))
+                elif not isinstance(p, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
                     self._add(n.id, ("other", None))
             elif isinstance(n, ast.arg):
                 self._add(n.arg, ("other", None))
@@ -2052,17 +2067,28 @@ class _File:
             return False
         if isinstance(expr, ast.Subscript):
             owner = self.attr_view(expr.value)
-            if isinstance(owner, ast.Attribute) and owner.attr == "__mro__":
+            if isinstance(owner, ast.Attribute) and owner.attr in (
+                "__mro__",
+                "__bases__",
+            ):
                 return self.gate_type(owner.value, typed, depth + 1)
         if isinstance(expr, ast.Name):
             vals = self.names.binds.get(expr.id, [])
             if vals and all(
-                kind == "value"
-                and v is not expr
-                and self.gate_type(v, typed, depth + 1)
+                (
+                    kind == "value"
+                    and v is not expr
+                    and self.gate_type(v, typed, depth + 1)
+                )
+                or (
+                    kind == "for"
+                    and all(self.gate_type(e, typed, depth + 1) for e in v)
+                )
                 for kind, v in vals
             ):
                 return True
+        if isinstance(expr, ast.Call) and self._returns_type_of(expr, typed):
+            return True
         if isinstance(expr, ast.Attribute) and expr.attr == "__class__":
             return self.gate_target(self.attr_view(expr.value), typed)
         return (
@@ -2070,6 +2096,41 @@ class _File:
             and self.names.resolve(expr.func) == {"builtins.type"}
             and len(expr.args) == 1
             and self.gate_target(expr.args[0], typed)
+        )
+
+    def _returns_type_of(self, call: ast.Call, typed: set[str]) -> bool:
+        """A same-file helper whose one return is type(p) or p.__class__ of a
+        parameter, called with the gate in that place."""
+        if not isinstance(call.func, ast.Name) or call.func.id not in self.funcs:
+            return False
+        if self.names.strictly(call.func) != {f"<local>.{call.func.id}"}:
+            return False
+        fn = self.funcs[call.func.id]
+        returns = [n for n in _scope_nodes(fn) if isinstance(n, ast.Return)]
+        if len(returns) != 1 or returns[0].value is None:
+            return False
+        value = self.attr_view(returns[0].value)
+        if isinstance(value, ast.Attribute) and value.attr == "__class__":
+            param = value.value
+        elif (
+            isinstance(value, ast.Call)
+            and self.names.resolve(value.func) == {"builtins.type"}
+            and len(value.args) == 1
+        ):
+            param = value.args[0]
+        else:
+            return False
+        if not isinstance(param, ast.Name):
+            return False
+        names = [a.arg for a in (*fn.args.posonlyargs, *fn.args.args)]
+        if param.id not in names:
+            return False
+        i = names.index(param.id)
+        if i < len(call.args) and not isinstance(call.args[i], ast.Starred):
+            return self.gate_target(call.args[i], typed)
+        return any(
+            k.arg == param.id and self.gate_target(k.value, typed)
+            for k in call.keywords
         )
 
     def patch_at(self, node: ast.AST, typed: set[str]) -> bool:
