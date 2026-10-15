@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The private path test knows a self-hosted code forge by its URL shape on any host (GitLab `/-/blob/`, `/-/tree/` and `/-/raw/`; Gitea and Forgejo `/src/branch/`, `/src/commit/` and `/src/tag/`; Bitbucket `/src/` or `/raw/` before a commit) and reads such a URL that reaches a receipts folder as another repository.
 - The private path test reads a receipts folder joined onto a runtime value (a name, attribute or call before it in `os.path.join`, `.joinpath`, a Path `/` or a `+`) as a path outside the checkout. It used to drop the runtime value and read the rest as this checkout's own folder.
 - The private path test drops default-ignorable code points (the combining grapheme joiner, Hangul fillers, variation and tag selectors) and combining marks along with format characters before matching, so none of them inside the receipts folder name hides it.
 - The private path test folds Greek letters (epsilon, iota, rho, tau and their capitals), the Cyrillic capital te and the Latin small capitals for r, e, c, i, p, t and s to the Latin letters of the receipts folder name before matching.

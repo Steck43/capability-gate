@@ -19,8 +19,8 @@ trailing slash) is judged by the whole path before it:
 - a URL with any scheme but http or https (file, vscode, ssh, ...): a path
   outside the checkout;
 - a GitHub blob, tree or raw URL: home only when it points into this
-  repository, judged by the path after the ref; any other code forge: another
-  repository;
+  repository, judged by the path after the ref; any other code forge, known by
+  its host or by its URL shape on any host: another repository;
 - any other web URL: not a repository path, not judged.
 
 The file names no private folder: a foreign path is refused because its folder
@@ -173,6 +173,15 @@ def _decoded(line: str) -> str:
     return text
 
 
+# Code forge URL shapes on any host: GitLab ("/-/blob/", "/-/tree/", "/-/raw/"),
+# Gitea and Forgejo ("/src/branch/", "/src/commit/", "/src/tag/"), and Bitbucket
+# ("/src/" or "/raw/" followed by a commit).
+_FORGE_SHAPE = re.compile(
+    r"/-/(?:blob|tree|raw)/|/src/(?:branch|commit|tag)/|/(?:src|raw)/[0-9a-f]{7,40}/",
+    re.I,
+)
+
+
 def _foreign_url(prefix: str) -> bool | str:
     """True or False for a URL; the repository path after the ref for a URL
     into this repository on GitHub, to be judged like any other path."""
@@ -190,6 +199,8 @@ def _foreign_url(prefix: str) -> bool | str:
     host = rest.split("/", 1)[0].lower()
     if "github" in host or any(host == f or host.endswith("." + f) for f in _FORGES):
         return True
+    if _FORGE_SHAPE.search("/" + rest.split("/", 1)[-1]):
+        return True  # a self-hosted forge: another repository
     return False  # another web site: not a repository path
 
 
