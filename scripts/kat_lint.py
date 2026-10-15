@@ -39,9 +39,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # The linter's own tests build rejected KATs as fixtures; they test the linter,
 # not the gate, and only match the KAT patterns by name and content.
-# Test files that name a receipts/ path without being known-answer tests: the
-# lint's own tests, and the check that public text cites no path into
-# another repository's receipt tree (it reads text and calls no gate).
+# Test files that match the name or receipts/ heuristics without being
+# known-answer tests: the lint's own tests, and the check that public text cites
+# no path into another repository's receipt tree (it reads text and calls no
+# gate). The exemption covers those two heuristics only: a "# KAT" marker still
+# makes either file a KAT. Each one is a pinned floor guard file.
 EXEMPT = {"tests/test_kat_lint.py", "tests/test_public_text_paths.py"}
 _MARKER = re.compile(r"^#\s*KAT\b")
 _NAME = re.compile(r"^test_k.*\.py$|kat", re.I)
@@ -83,10 +85,12 @@ def discover(root: Path) -> list[Path]:
     ]
     found = []
     for p in candidates:
-        if p.relative_to(root).as_posix() in EXEMPT:
-            continue
         src = p.read_text(encoding="utf-8", errors="replace")
-        if _NAME.search(p.name) or _has_marker(src) or _names_receipts(src):
+        if _has_marker(src):
+            found.append(p)
+        elif p.relative_to(root).as_posix() in EXEMPT:
+            continue
+        elif _NAME.search(p.name) or _names_receipts(src):
             found.append(p)
     return sorted(found)
 

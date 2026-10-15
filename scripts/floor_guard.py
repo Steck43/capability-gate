@@ -84,6 +84,9 @@ GUARD_FILES = (
     "scripts/no_ai_trailers.py",
     "scripts/run_record_check.py",
     "tests/test_floor_config.py",
+    # Files the KAT lint exempts from discovery by name or receipts path.
+    "tests/test_kat_lint.py",
+    "tests/test_public_text_paths.py",
     LOCK,
     "ruff.toml",
     ".pre-commit-config.yaml",
