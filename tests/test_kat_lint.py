@@ -2999,3 +2999,107 @@ def test_a_folder_pytest_does_not_recurse_into_is_not_linted(tmp_path: Path) -> 
     )
     r = _lint("--root", root, "--require-kats")
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# --- review round on #101, group D: an early return, a reassigned result, the
+# length of a display, getattr and __class__ as attribute access, and setitem on a
+# gate namespace.
+
+_FAKE_RESULT = "class FakeResult:\n    verdict = Verdict.DENY"
+
+GROUP_D = {
+    "return-before-assert": (
+        _plain("return\nassert d.verdict is Verdict.DENY"),
+        "never asserts on the gate's result",
+    ),
+    "helper-returns-before-assert": (
+        _plain(
+            "_check(d)",
+            "def _check(x):\n    return\n    assert x.verdict is Verdict.DENY",
+        ),
+        "never asserts on the gate's result",
+    ),
+    "result-reassigned-to-a-fake": (
+        _plain("d = FakeResult()\nassert d.verdict is Verdict.DENY", _FAKE_RESULT),
+        "never asserts on the gate's result",
+    ),
+    "result-reassigned-to-a-constant": (
+        _plain("d = None\nassert d is None"),
+        "never asserts on the gate's result",
+    ),
+    "length-of-a-display": (_plain("assert len([d]) == 1"), "constant comparison"),
+    "length-of-a-tuple": (
+        _plain("assert len((d, d.verdict)) > 1"),
+        "constant comparison",
+    ),
+    "class-attribute-store": (
+        _first("gate.__class__.evaluate = lambda *a, **k: None"),
+        None,
+    ),
+    "setattr-on-class-attribute": (
+        _first("setattr(gate.__class__, 'evaluate', lambda *a, **k: None)"),
+        None,
+    ),
+    "getattr-class-store": (
+        _first("getattr(gate, '__class__').evaluate = lambda *a, **k: None"),
+        None,
+    ),
+    "monkeypatch-on-getattr-class": (
+        _first(
+            "monkeypatch.setattr(getattr(gate, '__class__'), 'evaluate', lambda *a, **k: None)",
+            params="gate, monkeypatch",
+        ),
+        None,
+    ),
+    "monkeypatch-setitem-dict": (
+        _first(
+            "monkeypatch.setitem(gate.__dict__, 'evaluate', lambda *a, **k: None)",
+            params="gate, monkeypatch",
+        ),
+        None,
+    ),
+    "monkeypatch-setitem-vars": (
+        _first(
+            "monkeypatch.setitem(vars(gate), 'evaluate', lambda *a, **k: None)",
+            params="gate, monkeypatch",
+        ),
+        None,
+    ),
+    "monkeypatch-delitem-class-dict": (
+        _first(
+            "monkeypatch.delitem(vars(Gate), 'evaluate', raising=False)",
+            params="gate, monkeypatch",
+        ),
+        None,
+    ),
+}
+
+GROUP_D_CLEAN = {
+    "result-rebound-from-the-gate": _plain(
+        "d = gate.evaluate('s', 'read_file', ['zqxwvk'])\nassert d.verdict is Verdict.DENY"
+    ),
+    "length-of-a-real-list": _plain("assert len(d.reason) > 0"),
+    "class-of-another-object": _first(
+        "monkeypatch.setattr(tmp_path.__class__, 'zqxwvk', 1, raising=False)",
+        params="gate, monkeypatch, tmp_path",
+    ),
+    "setitem-elsewhere": _first(
+        "monkeypatch.setitem(os.environ, 'ZQXWVK', '1')", params="gate, monkeypatch"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(GROUP_D))
+def test_a_result_or_patch_form_from_review_is_rejected(
+    tmp_path: Path, shape: str
+) -> None:
+    src, reason = GROUP_D[shape]
+    _expect(tmp_path, src, reason or "patches the gate at line")
+
+
+@pytest.mark.parametrize("shape", sorted(GROUP_D_CLEAN))
+def test_the_honest_result_or_patch_form_stays_clean(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", GROUP_D_CLEAN[shape]))
+    assert r.returncode == 0, r.stdout
