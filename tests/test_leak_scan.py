@@ -524,3 +524,33 @@ def test_hit_line_numbers_count_only_newlines(repo: Path) -> None:
     r = _run([str(f)], repo, denylist=SYNTHETIC_NAME)
     assert r.returncode == 1, r.stdout + r.stderr
     assert ":2: denylist entry 1" in r.stdout, r.stdout
+
+
+# --- an attribute that marks a file binary never hides its added lines ------------
+
+
+@pytest.mark.parametrize("where", ["gitattributes", "attributes-file"])
+@pytest.mark.parametrize("mode", ["ci", "staged"])
+def test_a_binary_attribute_never_hides_added_lines(
+    repo: Path, where: str, mode: str
+) -> None:
+    if where == "gitattributes":
+        (repo / ".gitattributes").write_text("*.md -diff\n", encoding="utf-8")
+    else:
+        attrs = repo.parent / f"{repo.name}-attributes"
+        attrs.write_text("*.md binary\n", encoding="utf-8")
+        _git(repo, "config", "core.attributesFile", str(attrs))
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "doc.md").write_text(f"notes on {SYNTHETIC_NAME}\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    if mode == "ci":
+        _git(repo, "commit", "-q", "-m", "add doc")
+        args = ["--ci", "--base", base]
+    else:
+        args = ["--staged"]
+    r = _run(args, repo, denylist=SYNTHETIC_NAME)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist entry 1" in r.stdout, r.stdout
