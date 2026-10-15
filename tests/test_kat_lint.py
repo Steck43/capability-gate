@@ -3462,3 +3462,114 @@ def test_every_spelling_of_the_utf8_cookie_stays_clean(
     src = f"# coding: {cookie}\n" + _kat("")
     r = _lint(_write(tmp_path, "test_k_case.py", src))
     assert r.returncode == 0, r.stdout
+
+
+# --- the answer allowlist: an assert that reads the gate's answer has one form --
+# An assert that reads a gate result counts only as a single == or is between the
+# result's verdict and a Verdict member or verdict string. A few named richer
+# forms are accepted beside it; anything else that reads the answer is refused.
+
+_ANSWER_REFUSED = "not an accepted assert on the gate's answer"
+_NO_ANSWER = "never asserts on the gate's result in the accepted form"
+
+ANSWER_ACCEPTED = {
+    "is_member": "assert d.verdict is Verdict.DENY",
+    "eq_member": "assert d.verdict == Verdict.DENY",
+    "member_first": "assert Verdict.DENY is d.verdict",
+    "eq_string": "assert d.verdict == 'deny'",
+    "inline_call": "assert gate.evaluate('s', 'read_file', ['x']).verdict is Verdict.DENY",
+    "verdict_name": "v = d.verdict\nassert v is Verdict.DENY",
+    "named_reason_substring": "assert 'not' in d.reason",
+    "named_enforced_flag": "assert d.enforced is True",
+    "named_paths_literal": "assert d.paths == ('zqxwvk',)",
+    "named_throw_answer": "assert gate.throw('drill') is True",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(ANSWER_ACCEPTED))
+def test_an_accepted_answer_assert_stays_clean(tmp_path: Path, shape: str) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", _kat(ANSWER_ACCEPTED[shape])))
+    assert r.returncode == 0, r.stdout
+
+
+# Every shape the reviews listed, and the earlier rounds' refused shapes, read
+# the answer in a form outside the allowlist; each is refused by name.
+ANSWER_PROBES = {
+    "bound_partial": "import functools\nchk = functools.partial(lambda a, b: True, d.verdict)\nassert chk(Verdict.DENY)",
+    "keyword_partial": "import functools\nchk = functools.partial(lambda a=None, b=None: True, a=d)\nassert chk(b=1)",
+    "method_through_a_variable": "class C:\n    def __init__(s, x):\n        s.x = x\n    def v(s):\n        return True\nc = C(d)\nassert c.v()",
+    "property": "class P:\n    def __init__(s, x):\n        s.x = x\n    @property\n    def ok(s):\n        return True\nassert P(d).ok",
+    "classmethod": "class Q:\n    @classmethod\n    def ok(cls, x):\n        return True\nassert Q.ok(d)",
+    "keyword_identity_helper": "def ident(x=None):\n    return x\nassert ident(x=d) is ident(x=d)",
+    "default_identity_helper": "def ident(x, y=d):\n    return y\nassert ident(1) is d",
+    "helper_chain": "def a(x):\n    return b(x)\ndef b(x):\n    return True\nassert a(d)",
+    "lt_ge_pair": "assert d.verdict < 'zzz' or d.verdict >= 'zzz'",
+    "bool_p_or_not_p": "assert bool(d.verdict is Verdict.DENY or not d.verdict is Verdict.DENY)",
+    "xor": "assert (d.verdict is Verdict.DENY) ^ (d.verdict is not Verdict.DENY)",
+    "bitwise_or": "assert (d.verdict is Verdict.DENY) | True",
+    "ternary": "assert d.verdict is Verdict.DENY if d else True",
+    "comprehension": "assert [x for x in [d]]",
+    "constructor": "assert list([d])",
+    "format_call": "assert '{}'.format(d)",
+    "percent_format": "assert '%s' % (d,)",
+    "plus_str": "assert '' + str(d)",
+    "ascii": "assert ascii(d)",
+    "getattr_default": "assert getattr(d, 'zqxwvk', True)",
+    "any_trick": "assert any([d, True])",
+    "max_trick": "assert max(1, d is d)",
+    "sum_trick": "assert sum([1, d is d])",
+    "tuple_of_verdict": "assert d.verdict in tuple(Verdict)",
+    "all_of_empty_generator": "assert all(x for x in () if d)",
+    "dict_get_is": "assert {1: d}.get(1) is d",
+    "comprehension_fake": "assert [d][0] is [d for _ in (1,)][0]",
+    "sorted_display": "assert sorted([d.verdict])",
+    "repeated_display": "assert [d] * 1",
+    "dict_index_is": "assert {1: d}[1] is d",
+    "compared_with_itself": "assert d.verdict == d.verdict",
+    "itself_or_true": "assert d.verdict is d.verdict or True",
+    "isinstance_object": "assert isinstance(d, object)",
+    "starred_display": "assert (*[d],)",
+    "f_string": "assert f'{d}'",
+    "every_member": "assert d.verdict in (Verdict.ALLOW, Verdict.DENY, Verdict.ASK)",
+    "length_of_display": "assert len([d]) == 1",
+    "not_p_and_not_p": "assert not (d and not d)",
+    "not_equal": "assert d.verdict != Verdict.ALLOW",
+    "is_not": "assert d.verdict is not Verdict.ALLOW",
+    "chained_compare": "assert Verdict.DENY == d.verdict == Verdict.DENY",
+    "walrus": "assert (v := d.verdict) is v",
+    "subscript": "assert [d.verdict][0] is Verdict.DENY",
+    "membership_one": "assert d.verdict in (Verdict.DENY,)",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(ANSWER_PROBES))
+def test_every_reviewed_shape_that_reads_the_answer_is_refused(
+    tmp_path: Path, shape: str
+) -> None:
+    _expect(tmp_path, _kat(ANSWER_PROBES[shape]), _ANSWER_REFUSED)
+
+
+def _kat_without_answer(body: str) -> str:
+    lines = [
+        "    d = gate.evaluate('s', 'read_file', ['zqxwvk'])",
+        *("    " + x for x in body.splitlines()),
+    ]
+    return KAT_HEAD + "\n\n\ndef test_k_case(gate):\n" + "\n".join(lines) + "\n"
+
+
+# Only an accepted assert on the test's own straight path satisfies a KAT.
+ANSWER_MISSING = {
+    "helper_assert": "def check(x):\n    assert x.verdict is Verdict.DENY\ncheck(d)",
+    "not_equal_only": "assert d.verdict != Verdict.ALLOW",
+    "membership_only": "assert d.verdict in (Verdict.DENY,)",
+    "for_else_dead": "for _ in (1,):\n    break\nelse:\n    assert d.verdict is Verdict.DENY",
+    "named_form_only": "assert 'zqxwvk' in d.reason",
+    "under_a_branch": "if d:\n    assert d.verdict is Verdict.DENY",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(ANSWER_MISSING))
+def test_a_kat_without_an_accepted_answer_assert_on_its_path_is_refused(
+    tmp_path: Path, shape: str
+) -> None:
+    _expect(tmp_path, _kat_without_answer(ANSWER_MISSING[shape]), _NO_ANSWER)
