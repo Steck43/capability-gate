@@ -100,12 +100,41 @@ def _joined(match: re.Match[str]) -> str:
     return '"' + "/".join(_LITERAL.findall(match.group(1))) + '"'
 
 
+# Default-ignorable code points (Unicode DerivedCoreProperties) that are not
+# format characters: fillers, joiners and selectors that render as nothing.
+_IGNORABLE = (
+    (0x034F, 0x034F),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFFA0, 0xFFA0),
+    (0x1BCA0, 0x1BCA3),
+    (0xE0000, 0xE0FFF),
+)
+
+
+def _visible(text: str) -> str:
+    """Text without format characters, default-ignorables or combining marks,
+    so nothing invisible or stacked on a letter can split the folder name."""
+    out = []
+    for c in unicodedata.normalize("NFD", text):
+        cp = ord(c)
+        if unicodedata.category(c) in ("Cf", "Mn", "Me"):
+            continue
+        if any(lo <= cp <= hi for lo, hi in _IGNORABLE):
+            continue
+        out.append(c)
+    return unicodedata.normalize("NFC", "".join(out))
+
+
 def _decoded(line: str) -> str:
     text = line
     for _ in range(6):
         nxt = html.unescape(unquote(text.replace("\\/", "/")))
         nxt = unicodedata.normalize("NFKC", nxt)
-        nxt = "".join(c for c in nxt if unicodedata.category(c) != "Cf")
+        nxt = _visible(nxt)
         nxt = nxt.translate(_FOLD).replace("\\", "/")
         nxt = _LITERAL_PLUS.sub("", _JOIN_CALL.sub(_joined, nxt))
         if nxt == text:
