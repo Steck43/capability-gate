@@ -52,23 +52,44 @@ _RAW = re.compile(
 # Code forges other than GitHub: this repository lives only on GitHub, so a forge
 # URL that reaches a receipts folder points into another repository.
 _FORGES = ("gitlab.com", "bitbucket.org", "codeberg.org", "git.sr.ht", "gitea.com")
-# Slash look-alikes NFKC keeps, and Cyrillic letters that look like the Latin
-# letters of the folder name.
+# Slash look-alikes NFKC keeps, and letters from other scripts (Cyrillic,
+# Greek, Latin small capitals) that look like the Latin letters of the folder
+# name: r, e, c, i, p, t, s.
 _FOLD = str.maketrans(
     {
-        "∕": "/",
-        "⁄": "/",
-        "⧸": "/",
-        "е": "e",
-        "Е": "E",
-        "с": "c",
-        "С": "C",
-        "р": "p",
-        "Р": "P",
-        "і": "i",
-        "І": "I",
-        "ѕ": "s",
-        "Ѕ": "S",
+        "\u2215": "/",
+        "\u2044": "/",
+        "\u29f8": "/",
+        # Cyrillic
+        "\u0435": "e",
+        "\u0415": "E",
+        "\u0441": "c",
+        "\u0421": "C",
+        "\u0440": "p",
+        "\u0420": "P",
+        "\u0456": "i",
+        "\u0406": "I",
+        "\u0455": "s",
+        "\u0405": "S",
+        "\u0422": "T",
+        "\u0433": "r",
+        # Greek
+        "\u03b5": "e",
+        "\u0395": "E",
+        "\u03b9": "i",
+        "\u0399": "I",
+        "\u03c1": "p",
+        "\u03a1": "P",
+        "\u03c4": "t",
+        "\u03a4": "T",
+        # Latin small capitals
+        "\u0280": "r",
+        "\u1d07": "e",
+        "\u1d04": "c",
+        "\u026a": "i",
+        "\u1d18": "p",
+        "\u1d1b": "t",
+        "\ua731": "s",
     }
 )
 _JOIN_CALL = re.compile(r"(?:os\.path|posixpath|ntpath)\.join\(([^()]*)\)")
