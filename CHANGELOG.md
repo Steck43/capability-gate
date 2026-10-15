@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The run record counts an expected failure as a run only when the test carries an xfail mark. An imperative `pytest.xfail()` in a test body ends the body before its asserts, so a module whose tests all call it reads as not run.
 - The names-and-paths scan diffs with `--text`, `--no-textconv` and an empty attributes file, so a `-diff` or `binary` attribute in the tree or in any attributes file no longer turns added lines into an unread "Binary files differ" line.
 - The names-and-paths scan splits a diff and the text it judges on line feeds only. `str.splitlines()` also broke on U+0085, U+2028, U+2029, form feed, vertical tab and the separator controls, so an added line holding one of them before `diff --git` read as a new file header and hid the added lines after it; hit line numbers now count line feeds only.
 - Every per-line lint exemption is held by inventory. The guard counts each `noqa` comment ruff would honour (with codes separated by commas, spaces or both, blanket, or after other comment text) per file and code, and any new one, one more of an existing code, or a blanket one is a violation, so silencing ruff on a line needs a change to the guard. Notebooks are read too: a code cell's file-level or per-line exemption counts like a Python file's, and a notebook that does not parse is a violation.
