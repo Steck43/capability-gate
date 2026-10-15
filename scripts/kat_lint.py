@@ -32,6 +32,9 @@ Fiat outcomes, anywhere in the file (tests, helpers, nested functions, module):
   every ``Verdict`` member;
 * a statement, return value, or assigned value that always raises;
 * in a test function, a ``raise`` that runs on every path and nothing catches.
+  A loop over a non-empty constant, ``while True`` and the first case of a
+  ``match`` whose pattern matches everything run their body; a handler that
+  cannot catch the raised class does not stop it.
 
 Constant folding sees literals, empty literals, names provably assigned once
 (module, function, and tuple-unpacking bindings, annotated bindings, walrus),
@@ -64,11 +67,13 @@ Skip and xfail forms:
 A platform check is built only from ``sys.platform``, ``os.name``,
 ``platform.system()`` and the other ``platform`` calls, ``sys.version_info``,
 names assigned once from those, and constants. A platform check is evaluated
-on Linux, Windows and macOS: an imperative skip whose guard runs it on all
-three (``sys.platform != "none"``, ``os.name == os.name``, every system
-listed, two inequalities joined by ``or``), and a ``skipif`` true on all
-three, never run the check and are rejected. A guard false on all three never
-fires its skip, so the test runs and that stays clean.
+on Linux, Windows and macOS, each under Python 3.11 and 3.12 (the tests job's
+matrix): an imperative skip whose guard runs it in every one of those
+(``sys.platform != "none"``, ``os.name == os.name``, every system listed,
+two inequalities joined by ``or``, ``sys.version_info >= (3, 11)``), and a
+``skipif`` true in every one, never run the check and are rejected. A guard
+false in all of them never fires its skip, so the test runs and that stays
+clean.
 
 Reaching the real gate. A test reaches the gate when its straight-line path
 (try, with, and for bodies count; if branches, except handlers, while loops,
@@ -80,7 +85,10 @@ and dead code do not), before any return or raise, calls:
   one of those. A helper's parameter is a gate only when the caller passes one;
 * ``open_authorized_read``, ``_pre``, ``main`` or ``pre_tool_call`` imported
   from ``capability_gate`` or ``adapters``;
-* a subprocess that runs ``adapters/claude_code_hook.py``;
+* a subprocess that runs ``adapters/claude_code_hook.py`` under Python: the
+  program is ``sys.executable`` or a python command and the script is its
+  first argument after plain options (an ``echo``, ``cat`` or ``-c`` does not
+  run it);
 * a same-file helper, or same-file fixture the test takes, that does one of
   those.
 
@@ -89,8 +97,8 @@ test helper module, conftest, a class defined or subclassed in the file,
 ``getattr``, ``type()``, ``importlib``), when a ``capability_gate.py`` or
 ``adapters`` folder sits beside the test file, when the test, its fixtures,
 autouse fixtures, its helpers or the module patch the gate (``setattr`` or
-``monkeypatch.setattr`` or ``mock.patch`` on a gate, the Gate class, or a gate
-function; assignment to one of their attributes or to an attribute of
+``monkeypatch.setattr`` or ``mock.patch`` on a gate, the Gate class, a gate
+function, or the gate module reached through ``sys.modules``; assignment to one of their attributes or to an attribute of
 ``type(gate)``; ``__setattr__`` or ``__delattr__`` called on any of them, or
 through ``object`` or ``type``; a store into, or ``update``, ``setdefault``,
 ``pop`` or ``clear`` on, their ``__dict__`` or ``vars()``), when the test
@@ -133,7 +141,10 @@ are recognised only in the listed shapes; an assert that is always true for a
 reason the lint cannot see (for example ``d.verdict in tuple(Verdict)``, or a
 membership in a container built at run time) is not caught. Patching through
 an alias the lint cannot resolve (a gate stored in a container and patched
-from there) is not caught.
+from there) is not caught. Review findings N7 to N14 belong to other pull
+requests (the leak scan, the wiring check, the hook, the kill switch and the
+path matcher), not to this lint; H5d to H5n could not be identified from the
+review record.
 
 Exit 0 = clean. Exit 1 = violation, or no KAT file with ``--require-kats``.
 Exit 2 = a file did not parse.
@@ -259,12 +270,20 @@ _PLATFORM_VALUES = {
         "AIX",
     },
 }
-# One world per mainstream platform. A platform condition true in every world
-# (or false in every world) decides nothing about where the test runs.
-_WORLDS = (
+# One world per mainstream platform and supported Python. A platform
+# condition true in every world (or false in every world) decides nothing about
+# where the test runs.
+_SYSTEMS = (
     {"sys.platform": "linux", "os.name": "posix", "platform.system": "Linux"},
     {"sys.platform": "win32", "os.name": "nt", "platform.system": "Windows"},
     {"sys.platform": "darwin", "os.name": "posix", "platform.system": "Darwin"},
+)
+# The Pythons the floor's tests job runs (floor.yml matrix).
+_PYTHONS = ((3, 11, 0, "final", 0), (3, 12, 0, "final", 0))
+_WORLDS = tuple(
+    {**system, "sys.version_info": version}
+    for system in _SYSTEMS
+    for version in _PYTHONS
 )
 _NO_VALUE = object()
 # Exceptions an assert raises when it fails; a handler for one of these that
@@ -1208,11 +1227,49 @@ class _File:
         return self.runs_hook_script(call)
 
     def runs_hook_script(self, call: ast.Call) -> bool:
+        """A subprocess that runs the hook script under Python: the program is
+        sys.executable or a python command, and the script is its first
+        argument after plain options (an echo, cat or ``-c`` does not run it)."""
         if not (self.names.resolve(call.func) & SUBPROCESS):
             return False
+        argv = call.args[0] if call.args else None
+        for kw in call.keywords:
+            if kw.arg == "args":
+                argv = kw.value
+        if isinstance(argv, ast.Constant) and isinstance(argv.value, str):
+            words: list[ast.AST] = [ast.Constant(w) for w in argv.value.split()]
+        elif isinstance(argv, (ast.List, ast.Tuple)):
+            words = list(argv.elts)
+        else:
+            return False
+        if not words or not self._python_program(words[0]):
+            return False
+        for w in words[1:]:
+            if self._hook_path(w):
+                return True
+            if not (
+                isinstance(w, ast.Constant)
+                and isinstance(w.value, str)
+                and w.value.startswith("-")
+                and w.value not in ("-c", "-m")
+                and not w.value.startswith(("-c", "-m"))
+            ):
+                return False
+        return False
+
+    def _python_program(self, node: ast.AST) -> bool:
+        if self.names.resolve(node) & {"sys.executable"}:
+            return True
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            base = re.split(r"[\\/]", node.value)[-1].lower().removesuffix(".exe")
+            return bool(re.fullmatch(r"python(3(\.\d+)?)?|py", base))
+        return False
+
+    @staticmethod
+    def _hook_path(node: ast.AST) -> bool:
         consts = [
             c.value
-            for c in ast.walk(call)
+            for c in ast.walk(node)
             if isinstance(c, ast.Constant) and isinstance(c.value, str)
         ]
         if any(_HOOK_SCRIPT.search(c) for c in consts):
@@ -1505,8 +1562,29 @@ class _File:
         return self.is_gate(expr, typed) or self.real_gate_class(expr)
 
     def real_module(self, expr: ast.AST) -> bool:
+        if self._sys_modules_entry(expr):
+            return True
+        if isinstance(expr, ast.Name):
+            vals = self.names.binds.get(expr.id, [])
+            if vals and all(
+                kind == "value" and self._sys_modules_entry(v) for kind, v in vals
+            ):
+                return True
         return any(
             n and n.split(".", 1)[0] in REAL_ROOTS for n in self.names.resolve(expr)
+        )
+
+    def _sys_modules_entry(self, expr: ast.AST) -> bool:
+        """sys.modules["capability_gate"] (or an adapters module), by any
+        spelling the lint can fold."""
+        if not (
+            isinstance(expr, ast.Subscript)
+            and self.names.resolve(expr.value) & {"sys.modules"}
+        ):
+            return False
+        kind, v = self.fold.fold(expr.slice, self.fold.at(expr))
+        return (
+            kind == "value" and isinstance(v, str) and v.split(".", 1)[0] in REAL_ROOTS
         )
 
     def gate_namespace(self, expr: ast.AST, typed: set[str]) -> bool:
@@ -1882,6 +1960,8 @@ def _platform_eval(f: _File, node: ast.AST, world: dict, depth: int = 0):
                     ok = left in right
                 elif isinstance(op, ast.NotIn):
                     ok = left not in right
+                elif isinstance(op, (ast.Lt, ast.LtE, ast.Gt, ast.GtE)):
+                    ok = _CMPOPS[type(op)](left, right)
                 else:
                     return _NO_VALUE
             except TypeError:
@@ -2154,8 +2234,47 @@ def _is_called(f: _File, node: ast.AST) -> bool:
     return isinstance(p, ast.Call) and p.func is node
 
 
+def _irrefutable(pattern: ast.pattern) -> bool:
+    """A match pattern that matches every subject: a wildcard or a capture."""
+    if isinstance(pattern, ast.MatchAs):
+        return pattern.pattern is None or _irrefutable(pattern.pattern)
+    if isinstance(pattern, ast.MatchOr):
+        return any(_irrefutable(p) for p in pattern.patterns)
+    return False
+
+
+def _builtin_exception(f: _File, node: ast.AST | None) -> type | None:
+    """The builtin exception class a name resolves to, or None."""
+    if node is None:
+        return None
+    for r in f.names.resolve(node):
+        if r and r.startswith("builtins."):
+            cls = getattr(builtins, r.split(".", 1)[1], None)
+            if isinstance(cls, type) and issubclass(cls, BaseException):
+                return cls
+    return None
+
+
+def _may_catch(f: _File, handler: ast.ExceptHandler, raised: type | None) -> bool:
+    """Whether a handler can catch the raised class (yes when unsure)."""
+    if handler.type is None or raised is None:
+        return True
+    kinds = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    for k in kinds:
+        cls = _builtin_exception(f, k)
+        if cls is None or issubclass(raised, cls):
+            return True
+    return False
+
+
 def _uncaught_raise(f: _File, node: ast.Raise, fn) -> bool:
-    """A raise in a test that runs on every path and nothing catches."""
+    """A raise in a test that runs on every path and nothing catches. A loop
+    over a non-empty constant, ``while True`` and the first case of a match
+    whose pattern matches everything run their body; a handler that cannot
+    catch the raised class does not stop it."""
+    raised = _builtin_exception(
+        f, node.exc.func if isinstance(node.exc, ast.Call) else node.exc
+    )
     child: ast.AST = node
     while child in f.parents:
         p = f.parents[child]
@@ -2168,21 +2287,33 @@ def _uncaught_raise(f: _File, node: ast.Raise, fn) -> bool:
                 or (t == "false" and child in p.orelse)
             ):
                 return False
-        elif isinstance(
-            p,
-            (
-                ast.For,
-                ast.AsyncFor,
-                ast.While,
-                ast.ExceptHandler,
-                ast.Match,
-            ),
-        ):
+        elif isinstance(p, (ast.For, ast.AsyncFor)):
+            kind, v = f.fold.fold(p.iter, f.fold.at(p))
+            try:
+                runs = kind == "value" and len(v) > 0  # type: ignore[arg-type]
+            except TypeError:
+                runs = False
+            if not (runs and child in p.body):
+                return False
+        elif isinstance(p, ast.While):
+            if not (f.fold.truth(p.test) == "true" and child in p.body):
+                return False
+        elif isinstance(p, ast.match_case):
+            pass
+        elif isinstance(p, ast.Match):
+            if not (
+                p.cases
+                and child is p.cases[0]
+                and p.cases[0].guard is None
+                and _irrefutable(p.cases[0].pattern)
+            ):
+                return False
+        elif isinstance(p, ast.ExceptHandler):
             return False
         elif (
             (isinstance(p, ast.Try) or type(p).__name__ == "TryStar")
             and child in p.body
-            and p.handlers
+            and any(_may_catch(f, h, raised) for h in p.handlers)
         ):
             return False
         elif isinstance(p, (ast.With, ast.AsyncWith)) and any(

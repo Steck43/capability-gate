@@ -1660,7 +1660,9 @@ CLEAN = {
         "if sys.platform == 'zqxwvk':\n    pytest.skip('x')",
         "",
     ),
-    "raise_in_loop": ("for _ in (1,):\n    raise ValueError('zqxwvk')", ""),
+    # A loop over a value the lint cannot see may not run; over a non-empty
+    # constant it always runs (rejected, see the review round tests).
+    "raise_in_loop": ("for _ in d:\n    raise ValueError('zqxwvk')", ""),
     "raise_in_while": ("while d is None:\n    raise ValueError('zqxwvk')", ""),
     "raise_in_handler": (
         "try:\n    pass\nexcept OSError:\n    raise ValueError('zqxwvk')",
