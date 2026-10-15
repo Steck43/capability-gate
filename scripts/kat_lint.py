@@ -29,7 +29,8 @@ Fiat outcomes, anywhere in the file (tests, helpers, nested functions, module):
   (``==``, ``!=``, ``is``, ``is not``, ordering), its negation,
   ``isinstance(x, object)``, a constant element of a literal tuple or list
   picked by a constant index, or membership in a literal container that names
-  every ``Verdict`` member;
+  every ``Verdict`` member, and an ``or`` with an always-true side or an
+  ``and`` with an always-false side (``assert r == r or r``);
 * a statement, return value, or assigned value that always raises;
 * in a test function, a ``raise`` that runs on every path and nothing catches.
   A loop over a non-empty constant, ``while True`` and the first case of a
@@ -130,8 +131,11 @@ A name defined more than once at module level in a KAT file is rejected:
 pytest uses the last definition, so a second fixture of the same name can
 replace the real gate.
 
-KAT files are found recursively under tests/ and among top-level test files,
-case-insensitively: names like test_k*.py or containing "kat", any file with a
+KAT files are found among test files: those under tests/ and at the top level
+whose names start with test, and every file pytest itself collects (its
+testpaths, python_files and norecursedirs from pytest.ini, or pytest's
+defaults), so a KAT pytest runs is never skipped. Among them, case-
+insensitively: names like test_k*.py or containing "kat", any file with a
 "# KAT" comment, and any test file that names a receipts/ path. Files named on
 the command line are linted as KATs whatever their name. With
 ``--require-kats`` a run that finds no KAT file fails, so a check cannot pass
@@ -154,6 +158,9 @@ from there) is not caught. Review findings N7 to N14 belong to other pull
 requests (the leak scan, the wiring check, the hook, the kill switch and the
 path matcher), not to this lint; H5d to H5n could not be identified from the
 review record.
+
+Every file is read as Python reads it: a coding cookie other than UTF-8, or
+bytes that are not UTF-8, is a lint problem, never a traceback.
 
 Exit 0 = clean. Exit 1 = violation, or no KAT file with ``--require-kats``.
 Exit 2 = a file did not parse.
@@ -379,20 +386,74 @@ def _names_receipts(src: str) -> bool:
     )
 
 
+# pytest's defaults when pytest.ini does not set the key.
+_PYTEST_FILES = ("test_*.py", "*_test.py")
+_PYTEST_NORECURSE = (
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    "{arch}",
+)
+
+
+def _pytest_settings(root: Path) -> tuple[list[Path], list[str], list[str]]:
+    """testpaths, python_files and norecursedirs as pytest reads them from
+    pytest.ini, with pytest's defaults for any key it does not set."""
+    import configparser
+
+    ini = configparser.ConfigParser(interpolation=None)
+    try:
+        ini.read(root / "pytest.ini", encoding="utf-8")
+    except (configparser.Error, UnicodeDecodeError):
+        pass
+    sec = ini["pytest"] if ini.has_section("pytest") else {}
+    paths = [root / x for x in sec.get("testpaths", "").split()] or [root]
+    files = sec.get("python_files", "").split() or list(_PYTEST_FILES)
+    skip = sec.get("norecursedirs", "").split() or list(_PYTEST_NORECURSE)
+    return paths, files, skip
+
+
+def _pytest_collects(root: Path) -> set[Path]:
+    """Every file pytest would collect from root with no arguments."""
+    import fnmatch
+    import os
+
+    paths, files, skip = _pytest_settings(root)
+    out: set[Path] = set()
+    for base in paths:
+        if base.is_file():
+            out.add(base)
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [
+                d for d in dirnames if not any(fnmatch.fnmatch(d, s) for s in skip)
+            ]
+            for name in filenames:
+                if any(fnmatch.fnmatch(name, pat) for pat in files):
+                    out.add(Path(dirpath) / name)
+    return out
+
+
 def test_files(root: Path) -> list[Path]:
-    return sorted(
+    """Test files under tests/ and at the top level, and every file pytest
+    itself collects, so a KAT pytest runs is never skipped by the lint."""
+    found = {
         p
         for p in (*root.joinpath("tests").rglob("*.py"), *root.glob("*.py"))
-        if p.name.lower().startswith("test")
-        and p.is_file()
-        and p.relative_to(root).as_posix() not in EXEMPT
-    )
+        if p.name.lower().startswith("test") and p.is_file()
+    } | {p for p in _pytest_collects(root) if p.suffix == ".py" and p.is_file()}
+    return sorted(p for p in found if p.relative_to(root).as_posix() not in EXEMPT)
 
 
 def discover(root: Path) -> list[Path]:
     found = []
     for p in test_files(root):
-        src = p.read_text(encoding="utf-8", errors="replace")
+        src = p.read_bytes().decode("utf-8", errors="replace")
         if _NAME.search(p.name) or _has_marker(src) or _names_receipts(src):
             found.append(p)
     return sorted(found)
@@ -2603,6 +2664,8 @@ def _tautology(f: _File, test: ast.AST) -> bool:
     """An assert whose outcome does not depend on the value it names."""
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         return _tautology(f, test.operand)
+    if isinstance(test, ast.BoolOp):
+        return _side_truth(f, test) is not None
     if isinstance(test, ast.Compare) and len(test.ops) == 1:
         left, right = test.left, test.comparators[0]
         if _same(left, right) and isinstance(
@@ -2643,6 +2706,43 @@ def _tautology(f: _File, test: ast.AST) -> bool:
             kind, _v = f.fold.fold(elts[i], f.fold.at(test))
             return kind == "value" or _tautology(f, elts[i])
     return False
+
+
+def _side_truth(f: _File, node: ast.AST, depth: int = 0) -> bool | None:
+    """The truth a side of an or/and has whatever the gate answered, or None
+    when it depends on the answer. An `or` with an always-true side, or an
+    `and` with an always-false side, is decided by that side alone."""
+    if depth > 20:
+        return None
+    d = depth + 1
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = _side_truth(f, node.operand, d)
+        return None if inner is None else not inner
+    if isinstance(node, ast.BoolOp):
+        sides = [_side_truth(f, v, d) for v in node.values]
+        if isinstance(node.op, ast.Or):
+            if True in sides:
+                return True
+            return False if all(s is False for s in sides) else None
+        if False in sides:
+            return False
+        return True if all(s is True for s in sides) else None
+    if isinstance(node, ast.Compare) and len(node.ops) == 1:
+        op = node.ops[0]
+        if _same(node.left, node.comparators[0]):
+            if isinstance(op, (ast.Eq, ast.Is, ast.LtE, ast.GtE)):
+                return True
+            if isinstance(op, (ast.NotEq, ast.IsNot, ast.Lt, ast.Gt)):
+                return False
+    if not isinstance(node, ast.BoolOp) and _tautology(f, node):
+        kind, v = f.fold.fold(node, f.fold.at(node))
+        if kind == "value":
+            return bool(v)
+        if isinstance(node, ast.Compare) and isinstance(node.ops[0], ast.NotIn):
+            return False
+        return True
+    kind, v = f.fold.fold(node, f.fold.at(node))
+    return bool(v) if kind == "value" else None
 
 
 def _rebound_gate(f: _File, fn) -> ast.AST | None:
@@ -2865,6 +2965,24 @@ def _shadowed(path: Path, root: Path) -> bool:
     return (here / "capability_gate.py").exists() or (here / "adapters").is_dir()
 
 
+def _source(path: Path) -> tuple[str | None, str | None]:
+    """The file's text as Python reads it, or the problem that stops it. A
+    coding cookie other than UTF-8 makes Python read different text than the
+    lint would, so it is refused rather than followed."""
+    data = path.read_bytes()
+    lines = iter(data.splitlines(keepends=True))
+    try:
+        encoding, _ = tokenize.detect_encoding(lambda: next(lines, b""))
+    except SyntaxError:
+        return None, "declares a source encoding Python does not know"
+    if encoding.lower().replace("_", "-") not in ("utf-8", "utf-8-sig"):
+        return None, f"declares a source encoding other than UTF-8 ({encoding})"
+    try:
+        return data.decode(encoding), None
+    except UnicodeDecodeError:
+        return None, "is not valid UTF-8"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("files", nargs="*", type=Path)
@@ -2885,15 +3003,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         kats = {p.resolve() for p in files}
         for path in files:
-            problems += lint_source(
-                path.read_text(encoding="utf-8"),
-                path.as_posix(),
-                _shadowed(path, a.root),
-            )
+            src, why = _source(path)
+            if src is None:
+                problems.append(f"{path.as_posix()}:1: {why}")
+                continue
+            problems += lint_source(src, path.as_posix(), _shadowed(path, a.root))
         for path in every:
             if path.resolve() in kats:
                 continue
-            problems += lint_hatches(path.read_text(encoding="utf-8"), path.as_posix())
+            src, why = _source(path)
+            if src is None:
+                problems.append(f"{path.as_posix()}:1: {why}")
+                continue
+            problems += lint_hatches(src, path.as_posix())
     except SyntaxError as exc:
         print(f"kat lint: does not parse: {exc}", file=sys.stderr)
         return 2

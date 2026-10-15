@@ -2887,6 +2887,10 @@ GROUP_C_TAUTOLOGY_CLEAN = {
         "assert d.verdict is Verdict.DENY or d.verdict is Verdict.ASK"
     ),
     "and-with-one-real-check": _plain("assert d is d and d.verdict is Verdict.DENY"),
+    # An always-false side leaves an `or` to its other side.
+    "or-with-an-always-false-side": _plain(
+        "assert d.verdict != d.verdict or d.verdict is Verdict.DENY"
+    ),
 }
 
 
