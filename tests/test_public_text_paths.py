@@ -1,10 +1,21 @@
 """Public text cites no path that exists only in a private repository.
 
 Receipts and raw artifacts that live outside this repository are named as
-private, with their digests, never by a path a reader cannot open. A path of
-the form <folder>/receipts/... whose folder does not exist here points into
-another repository's receipt tree, so it is refused without this file naming
-any such folder.
+private, with their digests, never by a path a reader cannot open. Every
+tracked text file is read (any extension, or none). Each line is decoded first:
+backslashes become slashes, a JSON-escaped slash is a slash, and URL encoding is
+undone until the line stops changing. Then every path that reaches a receipts
+folder (in any letter case) is judged by the whole path before it:
+
+- nothing before it, or a folder path that exists inside this checkout: home;
+- a leading slash, a drive letter, or any ".." step: another tree, even when it
+  would land on a receipts folder outside the checkout;
+- a GitHub blob, tree or raw URL: home only when it points into this
+  repository, judged by the path after the ref;
+- any other URL: not a repository path, not judged.
+
+The file names no private folder: a foreign path is refused because its folder
+does not exist here, not because it is listed.
 """
 
 from __future__ import annotations
@@ -12,33 +23,77 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-# Every tracked text form a reader can open, code and metadata included.
-TEXT_GLOBS = ("*.md", "*.txt", "*.rst", "*.py", "*.json", "*.cff")
-FOREIGN_RECEIPTS = re.compile(r"(?<![\w./-])([\w.-]+)/receipts/")
+THIS_REPO = ("steck43", "capability-gate")
+# The text before a receipts folder, back to the start of the token it sits in.
+_BEFORE_RECEIPTS = re.compile(r"([^\s`'\"()<>\[\]{}|,;=*]*?)receipts/", re.I)
+_GITHUB = re.compile(
+    r"^(?:https?://)?(?:www\.)?github\.com/([\w.-]+)/([\w.-]+)/(?:blob|tree|raw)/[^/]+/(.*)$",
+    re.I,
+)
+_RAW = re.compile(
+    r"^(?:https?://)?raw\.githubusercontent\.com/([\w.-]+)/([\w.-]+)/[^/]+/(.*)$", re.I
+)
+
+
+def _decoded(line: str) -> str:
+    text = line
+    for _ in range(4):
+        nxt = unquote(text.replace("\\/", "/")).replace("\\", "/")
+        if nxt == text:
+            break
+        text = nxt
+    return text
+
+
+def _foreign_prefix(prefix: str) -> bool:
+    if "://" in prefix or prefix.lower().startswith(("github.com/", "www.github")):
+        m = _GITHUB.match(prefix) or _RAW.match(prefix)
+        if m is None:
+            return "github" in prefix.lower()
+        owner, repo, rest = m.groups()
+        if (owner.lower(), repo.lower().removesuffix(".git")) != THIS_REPO:
+            return True
+        prefix = rest
+    if prefix and not prefix.endswith("/"):
+        return False  # another word that ends in "receipts", not the folder
+    if prefix.startswith("/") or re.match(r"^[A-Za-z]:", prefix):
+        return True
+    parts = [p for p in prefix.split("/") if p not in ("", ".")]
+    if ".." in parts:
+        return True
+    return not ROOT.joinpath(*parts, "receipts").is_dir()
 
 
 def _foreign(line: str) -> bool:
     return any(
-        not (ROOT / m.group(1) / "receipts").is_dir()
-        for m in FOREIGN_RECEIPTS.finditer(line)
+        _foreign_prefix(m.group(1)) for m in _BEFORE_RECEIPTS.finditer(_decoded(line))
     )
+
+
+def _is_read(name: str, data: bytes) -> bool:
+    """Every tracked file is read unless its bytes say it is binary."""
+    return b"\0" not in data[:8192]
 
 
 def test_tracked_text_cites_no_private_repository_path() -> None:
     listed = subprocess.run(
-        ["git", "ls-files", "-z", *TEXT_GLOBS],
-        cwd=ROOT,
-        capture_output=True,
-        check=True,
+        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True
     )
     found = []
     for rel in filter(None, listed.stdout.decode("utf-8").split("\0")):
-        text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
-        for n, line in enumerate(text.splitlines(), 1):
+        path = ROOT / rel
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        if not _is_read(rel, data):
+            continue
+        text = data.decode("utf-8", errors="replace")
+        for n, line in enumerate(text.split("\n"), 1):
             if _foreign(line):
                 found.append(f"{rel}:{n}")
     assert found == []
