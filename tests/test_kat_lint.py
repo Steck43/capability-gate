@@ -2626,3 +2626,115 @@ def test_without_the_flag_an_empty_tree_still_passes(tmp_path: Path) -> None:
     root = _tree(tmp_path, {"tests/test_plain.py": "def test_x():\n    assert 1 + 1\n"})
     r = _lint("--root", root)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# --- review round on #101, group A: version guards, always-reached raises, a hook
+# script that is only echoed, and the gate module reached through sys.modules.
+_HOOK = "adapters/claude_code_hook.py"
+
+# Group A ---------------------------------------------------------------------
+GROUP_A = {
+    "version-true-on-every-python": (
+        _first("if sys.version_info >= (3, 11):\n    pytest.skip('x')"),
+        "true on every platform",
+    ),
+    "version-skipif-true-on-every-python": (
+        KAT_HEAD + "@pytest.mark.skipif(sys.version_info > (3, 0), reason='x')\n"
+        f"def test_k_case(gate):\n    {_EVAL}\n    assert d.verdict is Verdict.DENY\n",
+        "true on every platform",
+    ),
+    "raise-in-for-over-constant": (
+        _kat("for _ in [1]:\n    raise ValueError('x')"),
+        "forced failure in a KAT file fails by fiat",
+    ),
+    "raise-in-while-true": (
+        _kat("while True:\n    raise ValueError('x')"),
+        "forced failure in a KAT file fails by fiat",
+    ),
+    "raise-in-wildcard-case": (
+        _kat("match d:\n    case _:\n        raise ValueError('x')"),
+        "forced failure in a KAT file fails by fiat",
+    ),
+    "raise-in-capture-case": (
+        _kat("match d:\n    case v:\n        raise ValueError('x')"),
+        "forced failure in a KAT file fails by fiat",
+    ),
+    "raise-past-a-handler-that-cannot-catch": (
+        _kat("try:\n    raise ValueError('x')\nexcept KeyError:\n    pass"),
+        "forced failure in a KAT file fails by fiat",
+    ),
+    "hook-echoed": (
+        KAT_HEAD.replace("import os\n", "import os\nimport subprocess\n")
+        + f"\n\n\ndef test_k_case():\n    r = subprocess.run(['echo', '{_HOOK}'])\n"
+        "    assert r.returncode == 0\n",
+        "never reaches the gate",
+    ),
+    "hook-catted": (
+        KAT_HEAD.replace("import os\n", "import os\nimport subprocess\n")
+        + f"\n\n\ndef test_k_case():\n    r = subprocess.run(['cat', '{_HOOK}'])\n"
+        "    assert r.returncode == 0\n",
+        "never reaches the gate",
+    ),
+    "hook-python-c": (
+        KAT_HEAD.replace("import os\n", "import os\nimport subprocess\n")
+        + "\n\n\ndef test_k_case():\n    r = subprocess.run([sys.executable, '-c', "
+        f"'print(1)', '{_HOOK}'])\n    assert r.returncode == 0\n",
+        "never reaches the gate",
+    ),
+    "sys-modules-setattr": (
+        _first("setattr(sys.modules['capability_gate'], 'Gate', object)"),
+        None,
+    ),
+    "sys-modules-attribute-store": (
+        _first("sys.modules['capability_gate'].Gate = object"),
+        None,
+    ),
+    "sys-modules-alias": (
+        _first("m = sys.modules['capability_gate']\nsetattr(m, 'Gate', object)"),
+        None,
+    ),
+}
+
+GROUP_A_CLEAN = {
+    "version-real-guard": _first(
+        "if sys.version_info < (3, 12):\n    pytest.skip('x')"
+    ),
+    "version-false-everywhere": _first(
+        "if sys.version_info >= (3, 99):\n    pytest.skip('x')"
+    ),
+    "raise-in-for-over-empty": _kat("for _ in []:\n    raise ValueError('x')"),
+    "raise-in-refutable-case": _kat(
+        "match d:\n    case 1:\n        raise ValueError('x')"
+    ),
+    "raise-caught-by-its-handler": _kat(
+        "try:\n    raise ValueError('x')\nexcept ValueError:\n    pass"
+    ),
+    "raise-caught-by-a-base-handler": _kat(
+        "try:\n    raise KeyError('x')\nexcept LookupError:\n    pass"
+    ),
+    "hook-run-by-python": (
+        KAT_HEAD.replace("import os\n", "import os\nimport subprocess\n")
+        + "\n\n\ndef test_k_case():\n    r = subprocess.run([sys.executable, "
+        f"'{_HOOK}'], input='x', capture_output=True, text=True)\n"
+        "    assert r.returncode == 2\n"
+    ),
+    "private-helper-in-gate-module": _first(
+        "setattr(sys.modules['capability_gate'], '_zqxwvk', object)"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(GROUP_A))
+def test_a_guard_raise_hook_or_module_form_from_review_is_rejected(
+    tmp_path: Path, shape: str
+) -> None:
+    src, reason = GROUP_A[shape]
+    _expect(tmp_path, src, reason or "patches the gate at line")
+
+
+@pytest.mark.parametrize("shape", sorted(GROUP_A_CLEAN))
+def test_the_honest_guard_raise_hook_or_module_form_stays_clean(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", GROUP_A_CLEAN[shape]))
+    assert r.returncode == 0, r.stdout
