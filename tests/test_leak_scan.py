@@ -6,7 +6,9 @@ it tests.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -326,3 +328,25 @@ def test_a_git_failure_never_echoes_a_path(repo: Path) -> None:
     r = _run(["--ci", "--base", f"{FAKE}-missing-ref"], repo, denylist=FAKE)
     assert r.returncode == 2, r.stdout + r.stderr
     assert FAKE not in (r.stdout + r.stderr).lower(), r.stdout + r.stderr
+
+
+# --- a reported hash cannot be confirmed offline (brief 82-41c P5) -----------------
+
+
+def _tags(repo: Path) -> list[str]:
+    r = _run(["--tree"], repo, denylist=FAKE)
+    assert r.returncode == 1, r.stdout + r.stderr
+    return re.findall(r"file #([0-9a-f]{12})", r.stdout)
+
+
+def test_a_reported_hash_cannot_be_confirmed_offline(repo: Path) -> None:
+    name = f"notes-{FAKE}.md"
+    (repo / name).write_text("clean text\n", encoding="utf-8")
+    _commit_all(repo, "add notes")
+    first, second = _tags(repo), _tags(repo)
+    assert first and second, (first, second)
+    # Someone holding a list of candidate names cannot hash a guess to match.
+    unsalted = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+    assert unsalted not in first + second
+    # Each run draws its own salt, so two runs never print the same tag.
+    assert set(first).isdisjoint(second), (first, second)

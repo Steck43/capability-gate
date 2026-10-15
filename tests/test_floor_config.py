@@ -2369,3 +2369,542 @@ def test_startup_files_and_pytest_config_spellings_are_rules_violations(
     (root / rel).write_text(text, encoding="utf-8")
     found = _repin(root)
     assert any(expect in f for f in found), found
+
+
+# --- brief 82-41c: each property red first ----------------------------------------
+# P1: the shape and required-command checks read each word as written, quotes and
+# backslashes kept, so a word bash would not expand never matches a shape that
+# expects an expanded variable.
+
+
+def _replace_in_job(job: str, old: str, new: str):
+    def edit(doc: dict) -> None:
+        hits = 0
+        for step in doc["jobs"][job]["steps"]:
+            if "run" in step and old in step["run"]:
+                step["run"] = step["run"].replace(old, new)
+                hits += 1
+        assert hits, (job, old)
+
+    return edit
+
+
+_GUARD_RUN = '"$RUNNER_TEMP/floor/floor_guard.py"'
+_STAND_INS = [
+    pytest.param(
+        "floor-guard",
+        _GUARD_RUN,
+        "'$RUNNER_TEMP/floor/floor_guard.py'",
+        "$RUNNER_TEMP/floor/floor_guard.py",
+        id="guard-single-quoted",
+    ),
+    pytest.param(
+        "floor-guard",
+        _GUARD_RUN,
+        '"\\$RUNNER_TEMP/floor/floor_guard.py"',
+        "$RUNNER_TEMP/floor/floor_guard.py",
+        id="guard-backslash",
+    ),
+    pytest.param(
+        "leak-denylist",
+        'python -I "$RUNNER_TEMP/leak_scan.py" --ci',
+        "python -I '$RUNNER_TEMP/leak_scan.py' --ci",
+        "$RUNNER_TEMP/leak_scan.py",
+        id="scanner-single-quoted",
+    ),
+    pytest.param(
+        "authorship",
+        '"$RUNNER_TEMP/history.txt"',
+        "'$RUNNER_TEMP/history.txt'",
+        "$RUNNER_TEMP/history.txt",
+        id="authorship-single-quoted",
+    ),
+    pytest.param(
+        "authorship",
+        '"$RUNNER_TEMP/history.txt"',
+        "\\$RUNNER_TEMP/history.txt",
+        "$RUNNER_TEMP/history.txt",
+        id="authorship-backslash",
+    ),
+]
+
+
+@pytest.mark.parametrize(("job", "old", "new", "planted"), _STAND_INS)
+def test_no_committed_file_can_stand_in_for_a_guard_after_repin(
+    tmp_path: Path, job: str, old: str, new: str, planted: str
+) -> None:
+    """The run text names a literal path that a committed file supplies."""
+    root = _copy_tree(tmp_path)
+    (root / planted).parent.mkdir(parents=True, exist_ok=True)
+    (root / planted).write_text("print('zqxwvk')\n", encoding="utf-8")
+    wf = root / ".github" / "workflows" / "floor.yml"
+    doc = yaml.safe_load(wf.read_text(encoding="utf-8"))
+    _replace_in_job(job, old, new)(doc)
+    wf.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    found = _repin(root)
+    assert any(
+        f"is not an allowlisted command shape for job {job}" in f for f in found
+    ), found
+    assert any("a $ the shell does not expand" in f for f in found), found
+    assert any("holds $, a backtick or a backslash" in f for f in found), found
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        "git show '$X:a'",
+        "git rev-parse \\$X",
+        'git show "\\$X:a"',
+        "git show $'\\x24X'",
+        "python -I '$RUNNER_TEMP/x.py'",
+        "cp a '$RUNNER_TEMP'/b",
+    ],
+)
+def test_a_dollar_the_shell_never_expands_is_refused(run: str) -> None:
+    found = guard.run_violations(run, "step")
+    assert any("a $ the shell does not expand" in f for f in found), found
+
+
+@pytest.mark.parametrize(
+    "run",
+    ['git show "$X:a"', "printf '%s\\n' \"$X\"", "echo \"${X}\" '%s'"],
+)
+def test_a_dollar_the_shell_expands_is_not_refused(run: str) -> None:
+    found = guard.run_violations(run, "step")
+    assert not any("does not expand" in f for f in found), found
+
+
+@pytest.mark.parametrize(
+    ("job", "step"),
+    [
+        pytest.param(
+            "secrets",
+            {"run": "# gitleaks/gitleaks-action@ zqxwvk\ntrue"},
+            id="action-in-a-comment",
+        ),
+        pytest.param(
+            "workflow-lint",
+            {"run": "echo zizmorcore/zizmor-action@ zqxwvk"},
+            id="action-in-a-string",
+        ),
+    ],
+)
+def test_a_required_action_in_a_comment_or_string_never_counts(
+    job: str, step: dict
+) -> None:
+    doc = _workflow()
+    steps = doc["jobs"][job]["steps"]
+    index = next(
+        i for i, s in enumerate(steps) if "gitleaks" in str(s) or "zizmor" in str(s)
+    )
+    steps[index] = step
+    found = guard.protected_job_violations(doc)
+    assert any(f"job {job}: required action" in f for f in found), found
+
+
+@pytest.mark.parametrize(
+    ("job", "run", "missing"),
+    [
+        pytest.param(
+            "kat-lint",
+            "true\n# python -I scripts/kat_lint.py",
+            "kat_lint.py",
+            id="comment",
+        ),
+        pytest.param(
+            "kat-lint",
+            "printf '%s' 'python -I scripts/kat_lint.py'",
+            "kat_lint.py",
+            id="string",
+        ),
+        pytest.param(
+            "floor-guard",
+            "python -I '$RUNNER_TEMP/floor/floor_guard.py' --root . "
+            '--pins "$RUNNER_TEMP/floor/floor-pins.json"',
+            "floor_guard.py",
+            id="unexpanded",
+        ),
+    ],
+)
+def test_a_required_command_counts_only_as_written(
+    tmp_path: Path, job: str, run: str, missing: str
+) -> None:
+    found = _plant_wf(tmp_path, _set_last_run(job, run))
+    assert any(f"job {job}: required command" in f and missing in f for f in found), (
+        found
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["zqxwvk$x.py", "zqxwvk`x.py", "zqxwvk\\x.py", "scripts/$RUNNER_TEMP.py"],
+)
+def test_a_tracked_path_holding_dollar_backtick_or_backslash_is_a_violation(
+    tmp_path: Path, name: str
+) -> None:
+    root = _git_tree(tmp_path)
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=root,
+        input="x = 1\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    _git(root, "update-index", "--add", "--cacheinfo", f"100644,{blob},{name}")
+    found = guard.violations(root)
+    assert any("holds $, a backtick or a backslash" in f for f in found), found
+
+
+@pytest.mark.parametrize("name", ["zqxwvk$x.py", "tests/zqxwvk`x.py"])
+def test_a_path_on_disk_holding_dollar_or_backtick_is_a_violation(
+    tmp_path: Path, name: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    (root / name).parent.mkdir(parents=True, exist_ok=True)
+    (root / name).write_text("x = 1\n", encoding="utf-8")
+    found = _repin(root)
+    assert any("holds $, a backtick or a backslash" in f for f in found), found
+
+
+# P7 PR82-9: an assignment-only command is judged by the shape table.
+
+
+@pytest.mark.parametrize("assign", ["ZQXWVK=1", "ZQXWVK=$RUNNER_TEMP/x"])
+def test_an_assignment_only_command_is_judged_by_the_shape_table(
+    tmp_path: Path, assign: str
+) -> None:
+    run = f"{assign}\n{_last_run('kat-lint')}"
+    found = _plant_wf(tmp_path, _set_last_run("kat-lint", run))
+    assert any(
+        f"`{assign}` is not an allowlisted command shape for job kat-lint" in f
+        for f in found
+    ), found
+
+
+# P2: the lint configuration is pinned and cannot be loosened.
+
+
+def test_the_lint_config_is_a_pinned_guard_file() -> None:
+    assert "ruff.toml" in guard.guard_files(ROOT)
+
+
+def _ruff_edit(old: str, new: str):
+    def edit(text: str) -> str:
+        assert old in text, old
+        return text.replace(old, new, 1)
+
+    return edit
+
+
+_RUFF_LOOSENED = [
+    pytest.param(
+        _ruff_edit("ignore = [", 'ignore = [\n  "ALL",'), "ALL", id="ignore-all"
+    ),
+    pytest.param(
+        _ruff_edit("ignore = [", 'ignore = [\n  "*",'), "ALL", id="ignore-star"
+    ),
+    pytest.param(
+        _ruff_edit("[lint]", '[lint]\nselect = ["E9"]'), "select", id="select"
+    ),
+    pytest.param(
+        _ruff_edit("[lint]", 'extend-exclude = ["tests"]\n[lint]'), "", id="exclude"
+    ),
+    pytest.param(
+        _ruff_edit("[lint]", 'exclude = ["*"]\n[lint]'), "ALL", id="exclude-star"
+    ),
+    pytest.param(
+        _ruff_edit("[lint]", 'include = ["zqxwvk.py"]\n[lint]'), "", id="include"
+    ),
+    pytest.param(
+        _ruff_edit("[lint]", 'extend = "zqxwvk.toml"\n[lint]'), "", id="extend"
+    ),
+    pytest.param(
+        lambda t: t + '\n[lint.per-file-ignores]\n"*" = ["ALL"]\n', "ALL", id="per-file"
+    ),
+    pytest.param(_ruff_edit('"N999",', '"N999",\n  "F",'), "", id="ignore-a-family"),
+]
+
+
+@pytest.mark.parametrize(("edit", "specific"), _RUFF_LOOSENED)
+def test_a_loosened_ruff_config_is_a_rules_violation(
+    tmp_path: Path, edit, specific: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    path = root / "ruff.toml"
+    if not path.is_file():
+        shutil.copyfile(ROOT / "ruff.toml", path)
+    path.write_text(edit(path.read_text(encoding="utf-8")), encoding="utf-8")
+    found = _repin(root)
+    assert any(
+        "lint config: ruff.toml is not the floor's ruff config" in f for f in found
+    ), found
+    if specific:
+        assert any("lint config" in f and specific in f for f in found), found
+
+
+@pytest.mark.parametrize(
+    ("rel", "text", "expect"),
+    [
+        (".ruff.toml", '[lint]\nignore = ["ALL"]\n', "lint config: .ruff.toml"),
+        ("tests/.ruff.toml", "[lint]\n", "lint config: tests/.ruff.toml"),
+        (
+            "adapters/ruff.toml",
+            '[lint]\nignore = ["ALL"]\n',
+            "lint config: adapters/ruff.toml",
+        ),
+        (
+            "pyproject.toml",
+            "[tool.ruff]\nexclude = ['tests']\n",
+            "pyproject.toml configures ruff",
+        ),
+        (
+            "harness/pyproject.toml",
+            "[ tool . ruff . lint ]\nignore = ['ALL']\n",
+            "harness/pyproject.toml configures ruff",
+        ),
+        (
+            "pyproject.toml",
+            "[tool]\nruff = { exclude = ['tests'] }\n",
+            "pyproject.toml configures ruff",
+        ),
+        (
+            "tests/test_zqxwvk.py",
+            "# ruff: noqa\nimport os\n",
+            "file-level lint exemption",
+        ),
+        ("zqxwvk.py", "import os  # ruff: noqa: F401\n", "file-level lint exemption"),
+        ("zqxwvk.py", "#flake8:NOQA\nimport os\n", "file-level lint exemption"),
+        (".ignore", "tests/\n", "lint config: .ignore"),
+        ("harness/.ignore", "*.py\n", "lint config: harness/.ignore"),
+    ],
+)
+def test_every_other_ruff_config_place_is_a_rules_violation(
+    tmp_path: Path, rel: str, text: str, expect: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(text, encoding="utf-8")
+    found = _repin(root)
+    assert any(expect in f for f in found), found
+
+
+def test_a_noqa_comment_on_one_line_stays_allowed(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    (root / "zqxwvk.py").write_text(
+        "import os  # noqa: F401\nx = '# ruff: noqa'\n", encoding="utf-8"
+    )
+    found = _repin(root)
+    assert not any("lint exemption" in f for f in found), found
+
+
+def test_a_gitignored_tracked_file_is_a_rules_violation(tmp_path: Path) -> None:
+    """ruff skips what git ignores, so ignoring a tracked file skips its lint."""
+    root = _git_tree(tmp_path)
+    (root / ".gitignore").write_text("scripts/\n", encoding="utf-8")
+    found = guard.violations(root)
+    assert any("lint config: a tracked file is ignored by git" in f for f in found), (
+        found
+    )
+
+
+# P3: a plugin declared in any form never loads, and P4: a run that ends early
+# never passes. Both run the real pytest on a copy holding the floor's conftest.
+
+RUN_CHECK = ROOT / "scripts" / "pytest_run_check.py"
+
+
+def _pytest_tree(tmp_path: Path, modules: dict[str, str]) -> Path:
+    root = tmp_path / "suite"
+    root.mkdir()
+    shutil.copyfile(ROOT / "pytest.ini", root / "pytest.ini")
+    if (ROOT / "conftest.py").is_file():
+        shutil.copyfile(ROOT / "conftest.py", root / "conftest.py")
+    for rel, text in modules.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    return root
+
+
+def _run_pytest(root: Path, record: Path | None = None) -> subprocess.CompletedProcess:
+    env = {k: v for k, v in os.environ.items() if k != "FLOOR_RUN_RECORD"}
+    if record is not None:
+        env["FLOOR_RUN_RECORD"] = str(record)
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _run_check(root: Path, record: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-I", str(RUN_CHECK), str(record)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+_FLIP = (
+    "import pytest\n\n"
+    "@pytest.hookimpl(hookwrapper=True)\n"
+    "def pytest_runtest_makereport(item, call):\n"
+    "    out = yield\n"
+    "    out.get_result().outcome = 'passed'\n"
+)
+_FAILING = "\n\ndef test_zqxwvk():\n    assert False\n"
+_DECLARATIONS = [
+    pytest.param('globals()["pytest_" + "plugins"] = ["zqxwvk_plugin"]', id="concat"),
+    pytest.param(
+        'vars()["".join(["pytest", "_plugins"])] = ["zqxwvk_plugin"]', id="join"
+    ),
+    pytest.param(
+        "import sys\n"
+        "setattr(sys.modules[__name__], 'snigulp_tsetyp'[::-1], ['zqxwvk_plugin'])",
+        id="setattr-reversed",
+    ),
+    pytest.param(
+        "def __getattr__(name):\n"
+        "    if name == 'pytest_' + 'plugins':\n"
+        "        return ['zqxwvk_plugin']\n"
+        "    raise AttributeError(name)",
+        id="module-getattr",
+    ),
+    pytest.param(
+        "exec(bytes.fromhex('7079746573745f706c7567696e73').decode() + "
+        "\" = ['zqxwvk_plugin']\")",
+        id="exec-hex",
+    ),
+]
+
+
+@pytest.mark.parametrize("declaration", _DECLARATIONS)
+def test_a_plugin_declared_in_any_form_never_loads(
+    tmp_path: Path, declaration: str
+) -> None:
+    root = _pytest_tree(
+        tmp_path,
+        {"zqxwvk_plugin.py": _FLIP, "tests/test_zqxwvk.py": declaration + _FAILING},
+    )
+    r = _run_pytest(root)
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "registered during collection" in r.stdout + r.stderr, r.stdout
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'globals()["pytest_" + "plugins"] = ["zqxwvk"]\n',
+        "def __getattr__(name):\n    return ['zqxwvk']\n",
+    ],
+)
+def test_a_built_pytest_plugins_name_is_a_rules_violation(
+    tmp_path: Path, text: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    (root / "tests" / "test_zqxwvk.py").write_text(text, encoding="utf-8")
+    found = _repin(root)
+    assert any("tests/test_zqxwvk.py: declares pytest_plugins" in f for f in found), (
+        found
+    )
+
+
+def test_the_floor_conftest_cannot_change_even_with_pins_regenerated(
+    tmp_path: Path,
+) -> None:
+    root = _copy_tree(tmp_path)
+    live = ROOT / "conftest.py"
+    text = live.read_text(encoding="utf-8") if live.is_file() else ""
+    (root / "conftest.py").write_text(text + "\nZQXWVK = 1\n", encoding="utf-8")
+    found = _repin(root)
+    assert any("conftest.py is not the floor's conftest" in f for f in found), found
+
+
+_PASSING = "def test_zqxwvk():\n    assert True\n"
+
+
+@pytest.mark.parametrize(
+    "ender",
+    [
+        pytest.param("import os\nos._exit(0)\n", id="exit-on-import"),
+        pytest.param(
+            "import os\n\ndef test_zqxwvk_end():\n    os._exit(0)\n",
+            id="exit-in-a-test",
+        ),
+    ],
+)
+def test_a_process_exit_never_passes_the_run_check(tmp_path: Path, ender: str) -> None:
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": ender}
+    )
+    record = tmp_path / "run.json"
+    r = _run_pytest(root, record)
+    assert r.returncode == 0, r.stdout + r.stderr  # the exit itself reads as a pass
+    check = _run_check(root, record)
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert "no run record" in check.stdout, check.stdout
+
+
+def test_a_full_run_passes_the_run_check(tmp_path: Path) -> None:
+    root = _pytest_tree(
+        tmp_path,
+        {
+            "tests/test_a.py": _PASSING,
+            "tests/test_b.py": "import pytest\n"
+            "pytest.skip('x', allow_module_level=True)\n" + _PASSING,
+            "test_c.py": _PASSING,
+        },
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 0, check.stdout + check.stderr
+
+
+@pytest.mark.parametrize(
+    ("change", "expect"),
+    [
+        pytest.param(
+            lambda r: r["modules"].remove("tests/test_b.py"), "did not run", id="module"
+        ),
+        pytest.param(lambda r: r.update(exitstatus=1), "exit status", id="status"),
+        pytest.param(lambda r: r.update(finished=False), "did not finish", id="finish"),
+        pytest.param(
+            lambda r: r.update(reported=r["collected"] - 1), "reported", id="count"
+        ),
+    ],
+)
+def test_a_run_record_that_does_not_cover_the_suite_fails(
+    tmp_path: Path, change, expect: str
+) -> None:
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": _PASSING}
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    assert record.is_file(), "pytest wrote no run record"
+    data = json.loads(record.read_text(encoding="utf-8"))
+    change(data)
+    record.write_text(json.dumps(data), encoding="utf-8")
+    check = _run_check(root, record)
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert expect in check.stdout, check.stdout
+
+
+def test_the_tests_job_checks_its_run_record() -> None:
+    job = _workflow()["jobs"]["tests"]
+    runs = [s for s in job["steps"] if s.get("run")]
+    pytest_step = next(s for s in runs if s["run"].strip() == "pytest -q")
+    check_step = next(s for s in runs if "pytest_run_check.py" in s["run"])
+    assert runs.index(check_step) > runs.index(pytest_step)
+    for step in (pytest_step, check_step):
+        assert step["env"]["FLOOR_RUN_RECORD"] == guard.STEP_ENV["FLOOR_RUN_RECORD"]
+    assert (
+        'python -I scripts/pytest_run_check.py "$FLOOR_RUN_RECORD"'
+        in (guard.REQUIRED_COMMANDS["tests"])
+    )
