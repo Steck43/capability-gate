@@ -153,8 +153,11 @@ between either
 
 A name only ever holds a result when every store to it in the test is that
 binding; any other store anywhere in the test (a plain assignment, an
-unpacking, an augmented assignment, a loop target, a ``with`` name, a delete)
-takes it out. The assert must sit on the test's straight path: the body, the
+unpacking, an augmented assignment, a loop target, a ``with`` or ``except``
+name, an import, a store through ``globals()`` (under a key the lint cannot
+fold it takes every name out), a ``global`` or ``nonlocal`` declaration, a
+delete) takes it out. A ``raise`` caught inside a ``try`` body does not end
+the path. The assert must sit on the test's straight path: the body, the
 chosen branch of a constant ``if``, a ``try`` or ``with`` body, a ``finally``,
 and the body of a ``for`` over a non-empty constant, before any statement that
 always leaves. An assert in an ``if`` on an unknown test, a handler, a loop's
@@ -2331,7 +2334,10 @@ class _File:
             if inner is not None:
                 sub, left = self.straight_path(inner)
                 out += sub
-                if left == "func":
+                # A raise in a try body may be caught; whether the try as a
+                # whole leaves is decided by leaves() below.
+                is_try = isinstance(s, ast.Try) or type(s).__name__ == "TryStar"
+                if left == "func" and not is_try:
                     return out, "func"
             if (
                 isinstance(s, ast.Try) or type(s).__name__ == "TryStar"
@@ -2345,11 +2351,13 @@ class _File:
                 return out, how
         return out, None
 
-    @staticmethod
-    def stores(fn) -> dict[str, list[ast.AST | None]]:
+    def stores(self, fn) -> dict[str, list[ast.AST | None]]:
         """Every value each name in the test is set to; None where the store
         binds something the lint does not read as a value (an unpacking, an
-        augmented assignment, a loop target, a with name, a delete)."""
+        augmented assignment, a loop target, a with or except name, an import,
+        a store through globals(), a global or nonlocal declaration, a delete).
+        A globals() store under a key the lint cannot fold may be any name, so
+        it is recorded under "*" and takes every name out."""
         out: dict[str, list[ast.AST | None]] = {}
 
         def add(name: str, value: ast.AST | None) -> None:
@@ -2383,6 +2391,28 @@ class _File:
                 for tgt in n.targets:
                     for name in names_in(tgt):
                         add(name, None)
+            elif isinstance(n, ast.ExceptHandler) and n.name:
+                add(n.name, None)
+            elif isinstance(n, (ast.Import, ast.ImportFrom)):
+                for alias in n.names:
+                    add((alias.asname or alias.name).split(".")[0], None)
+            elif isinstance(n, (ast.Global, ast.Nonlocal)):
+                for name in n.names:
+                    add(name, None)
+            if isinstance(n, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+                targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+                for tgt in targets:
+                    if (
+                        isinstance(tgt, ast.Subscript)
+                        and isinstance(tgt.value, ast.Call)
+                        and isinstance(tgt.value.func, ast.Name)
+                        and tgt.value.func.id in ("globals", "vars", "locals")
+                    ):
+                        kind, key = self.fold.fold(tgt.slice, self.fold.at(tgt))
+                        add(
+                            key if kind == "value" and isinstance(key, str) else "*",
+                            None,
+                        )
         return out
 
     def result_value(self, node: ast.AST, direct: set[str], typed: set[str]) -> bool:
@@ -2415,6 +2445,8 @@ class _File:
         hold a result's verdict. Any other store to a name, anywhere in the
         test, takes it out."""
         stores = self.stores(fn)
+        if "*" in stores:
+            return set(), set()
         direct = {n for n in seed if n not in stores} | {
             n
             for n, values in stores.items()
