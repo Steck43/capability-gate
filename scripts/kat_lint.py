@@ -126,7 +126,9 @@ autouse fixtures, its helpers or the module patch the gate (``setattr`` or
 ``monkeypatch.setattr`` or ``mock.patch`` on a gate, the Gate class, a gate
 function, or the gate module reached through ``sys.modules``; assignment
 to one of their attributes or to an attribute of ``type(gate)`` or
-``gate.__class__``, with ``getattr(x, "name")`` read as ``x.name``;
+``gate.__class__``, with ``getattr(x, "name")`` read as ``x.name``, and
+the class read through ``__mro__[i]`` or through a name every binding of
+which is that class (``k = type(gate); setattr(k, ...)``);
 ``monkeypatch.setitem`` or ``delitem`` on their ``__dict__`` or ``vars()``;
 ``__setattr__`` or ``__delattr__`` called on any of them, or through
 ``object`` or ``type``; a store into, or ``update``, ``setdefault``,
@@ -139,7 +141,8 @@ comprehension over one, in a generator expression nothing consumes, or inside
 
 Every KAT that reaches the gate must also assert on its result (a name that
 held the result and is rebound on the straight path to something else no
-longer holds it, and ``len()`` of a list or tuple display is a constant): a
+longer holds it, by any store: a plain assignment, a name inside an
+unpacking target (``d, = (fake,)``) or a ``for`` loop's target, and ``len()`` of a list or tuple display is a constant): a
 live
 ``assert`` that uses a value derived from a gate call, directly, through a
 name, through a flag or counter set under a branch or handler that depends on
@@ -187,8 +190,9 @@ requests (the leak scan, the wiring check, the hook, the kill switch and the
 path matcher), not to this lint; H5d to H5n could not be identified from the
 review record.
 
-Every file is read as Python reads it: a coding cookie other than UTF-8, or
-bytes that are not UTF-8, is a lint problem, never a traceback.
+Every file is read as Python reads it: a coding cookie other than UTF-8 (any
+alias of UTF-8, such as ``utf8`` or ``U8``, is UTF-8), or bytes that are not
+UTF-8, is a lint problem, never a traceback.
 
 Exit 0 = clean. Exit 1 = violation, or no KAT file with ``--require-kats``.
 Exit 2 = a file did not parse.
@@ -199,6 +203,7 @@ from __future__ import annotations
 import argparse
 import ast
 import builtins
+import codecs
 import io
 import operator
 import re
@@ -2006,10 +2011,26 @@ class _File:
             return False
         return self.gate_target(inner, typed) or self.real_module(inner)
 
-    def gate_type(self, expr: ast.AST, typed: set[str]) -> bool:
+    def gate_type(self, expr: ast.AST, typed: set[str], depth: int = 0) -> bool:
         """type(gate) or gate.__class__ (getattr included): the class a gate
-        instance was built from."""
+        instance was built from, read through ``__mro__[i]`` and through a
+        name every binding of which is such a class."""
         expr = self.attr_view(expr)
+        if depth > 10:
+            return False
+        if isinstance(expr, ast.Subscript):
+            owner = self.attr_view(expr.value)
+            if isinstance(owner, ast.Attribute) and owner.attr == "__mro__":
+                return self.gate_type(owner.value, typed, depth + 1)
+        if isinstance(expr, ast.Name):
+            vals = self.names.binds.get(expr.id, [])
+            if vals and all(
+                kind == "value"
+                and v is not expr
+                and self.gate_type(v, typed, depth + 1)
+                for kind, v in vals
+            ):
+                return True
         if isinstance(expr, ast.Attribute) and expr.attr == "__class__":
             return self.gate_target(self.attr_view(expr.value), typed)
         return (
@@ -2256,22 +2277,34 @@ class _File:
         # placeholder (a flag or counter set later under a branch) is untouched.
         held: set[str] = set(seed)
         for s in self.live_stmts(fn.body):
+            # Any store counts: a plain name, a name inside an unpacking
+            # target (d, = ...), and a for loop's target.
+            source = None
+            targets: list[ast.AST] = []
             if (
                 isinstance(s, (ast.Assign, ast.AnnAssign))
                 and self.parents.get(s) is fn
                 and s.value is not None
             ):
-                holds = self.uses_result(s.value, typed, results)
+                source = s.value
                 targets = s.targets if isinstance(s, ast.Assign) else [s.target]
-                for tgt in targets:
-                    if not isinstance(tgt, ast.Name):
-                        continue
+            elif isinstance(s, (ast.For, ast.AsyncFor)) and self.parents.get(s) is fn:
+                source, targets = s.iter, [s.target]
+            if source is not None:
+                holds = self.uses_result(source, typed, results)
+                stored = [
+                    n.id
+                    for tgt in targets
+                    for n in ast.walk(tgt)
+                    if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+                ]
+                for name in stored:
                     if holds:
-                        held.add(tgt.id)
-                        results.add(tgt.id)
-                    elif tgt.id in held:
-                        held.discard(tgt.id)
-                        results.discard(tgt.id)
+                        held.add(name)
+                        results.add(name)
+                    elif name in held:
+                        held.discard(name)
+                        results.discard(name)
             if isinstance(s, ast.Assert):
                 if self.uses_result(s.test, typed, results) and not self.swallowed(
                     s, fn
@@ -3328,7 +3361,9 @@ def _source(path: Path) -> tuple[str | None, str | None]:
         encoding, _ = tokenize.detect_encoding(lambda: next(lines, b""))
     except SyntaxError:
         return None, "declares a source encoding Python does not know"
-    if encoding.lower().replace("_", "-") not in ("utf-8", "utf-8-sig"):
+    # codecs.lookup names every alias of a codec the same way (utf8, U8 and
+    # UTF8 are all utf-8).
+    if codecs.lookup(encoding).name not in ("utf-8", "utf-8-sig"):
         return None, f"declares a source encoding other than UTF-8 ({encoding})"
     try:
         return data.decode(encoding), None
