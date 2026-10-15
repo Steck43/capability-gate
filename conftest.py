@@ -6,7 +6,8 @@
    it collects; from that point every registration is refused.
 2. With FLOOR_RUN_RECORD set (the CI tests job sets it), the finished session
    writes a run record: its exit status, the modules it collected, the
-   modules skipped as a whole, and the tests that reported. A process that ends early, such as os._exit during an
+   modules skipped as a whole, the modules where at least one test reached
+   its call, and the tests that reported. A process that ends early, such as os._exit during an
    import or a test, writes none, and scripts/run_record_check.py then fails
    the job.
 
@@ -27,6 +28,7 @@ _STATE: dict = {
     "collecting": False,
     "modules": set(),
     "skipped_modules": set(),
+    "called_modules": set(),
     "reported": set(),
 }
 
@@ -54,6 +56,10 @@ def pytest_collectreport(report) -> None:
 
 def pytest_runtest_logreport(report) -> None:
     _STATE["reported"].add(report.nodeid)
+    # A test ran when its call phase ran; an expected failure counts, a test
+    # skipped before its call (by a mark or at setup) does not.
+    if report.when == "call":
+        _STATE["called_modules"].add(report.nodeid.split("::", 1)[0])
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:
@@ -67,5 +73,6 @@ def pytest_sessionfinish(session, exitstatus) -> None:
         "reported": len(_STATE["reported"]),
         "modules": sorted(_STATE["modules"]),
         "skipped_modules": sorted(_STATE["skipped_modules"]),
+        "called_modules": sorted(_STATE["called_modules"]),
     }
     Path(path).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")

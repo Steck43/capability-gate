@@ -3089,7 +3089,9 @@ def test_a_forged_record_then_an_exit_fails_the_check(tmp_path: Path) -> None:
         "path = os.environ['FLOOR_RUN_RECORD']\n"
         "json.dump({'finished': True, 'exitstatus': 0, 'collected': 2, "
         "'reported': 2, 'modules': ['tests/test_a.py', 'tests/test_b.py'], "
-        "'skipped_modules': []}, open(path, 'w'))\n"
+        "'skipped_modules': [], "
+        "'called_modules': ['tests/test_a.py', 'tests/test_b.py']}, "
+        "open(path, 'w'))\n"
         "os._exit(0)\n" + _PASSING
     )
     root = _pytest_tree(
@@ -3099,3 +3101,86 @@ def test_a_forged_record_then_an_exit_fails_the_check(tmp_path: Path) -> None:
     assert _run_pytest(root, record).returncode == 0
     check = _run_check(root, record)
     assert check.returncode == 1, check.stdout + check.stderr
+
+
+# --- 82 holds: codes split as ruff splits them; a module whose tests never ran -----
+
+
+@pytest.mark.parametrize(
+    ("comment", "codes"),
+    [
+        pytest.param("x = 1  # noqa: E402 F811", ["E402", "F811"], id="space"),
+        pytest.param("x = 1  # noqa: E402,F811", ["E402", "F811"], id="comma"),
+        pytest.param(
+            "x = 1  # noqa:E402, F811  F401", ["E402", "F811", "F401"], id="mixed"
+        ),
+        pytest.param("x = 1  # noqa", ["*"], id="blanket"),
+    ],
+)
+def test_noqa_codes_are_split_as_ruff_splits_them(
+    comment: str, codes: list[str]
+) -> None:
+    assert guard._line_exemptions(comment + "\n") == codes
+
+
+def test_a_space_separated_code_beyond_the_inventory_is_a_rules_violation(
+    tmp_path: Path,
+) -> None:
+    root = _copy_tree(tmp_path)
+    path = root / "tests" / "test_floor_config.py"
+    text = path.read_text(encoding="utf-8")
+    old = "import floor_guard as guard  # noqa: E402\n"
+    assert text.count(old) == 1
+    path.write_text(
+        text.replace(old, "import floor_guard as guard  # noqa: E402 F811\n"),
+        encoding="utf-8",
+    )
+    found = _repin(root)
+    assert any(
+        "tests/test_floor_config.py: per-line lint exemption (F811)" in f for f in found
+    ), found
+
+
+_NEVER_RUNS = [
+    pytest.param(
+        "import pytest\npytestmark = pytest.mark.skip(reason='x')\n\n" + _PASSING,
+        id="module-skip-mark",
+    ),
+    pytest.param(
+        "import pytest\npytestmark = [pytest.mark.skipif(True, reason='x')]\n\n"
+        + _PASSING,
+        id="module-skipif-mark",
+    ),
+    pytest.param(
+        "import pytest\n\n@pytest.mark.skip(reason='x')\n" + _PASSING,
+        id="every-test-skipped",
+    ),
+]
+
+
+@pytest.mark.parametrize("module", _NEVER_RUNS)
+def test_a_module_whose_tests_never_ran_is_not_a_run(
+    tmp_path: Path, module: str
+) -> None:
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": module}
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert "tests/test_b.py: no test in it ran" in check.stdout, check.stdout
+
+
+def test_a_module_of_expected_failures_still_ran(tmp_path: Path) -> None:
+    module = (
+        "import pytest\npytestmark = pytest.mark.xfail(strict=True, reason='x')\n\n"
+        "def test_zqxwvk():\n    assert False\n"
+    )
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": module}
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 0, check.stdout + check.stderr
