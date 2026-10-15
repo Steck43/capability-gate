@@ -9,7 +9,9 @@ a finished session, and this check requires that:
 - every test the session collected reported an outcome;
 - every file pytest would collect that defines a test (test_*.py or
   *_test.py with a top-level test function or Test class, outside
-  pytest.ini's norecursedirs) was collected, or skipped as a whole module.
+  pytest.ini's norecursedirs) was collected and run;
+- no module was skipped as a whole, except the ones SKIPPABLE_MODULES names,
+  since a whole-module skip runs none of its tests.
 
 A test module runs arbitrary code inside pytest, so one that writes a forged
 record before it ends the process is not caught here; see CHANGELOG.
@@ -26,6 +28,13 @@ import json
 import os
 import sys
 from pathlib import Path
+
+
+# Modules CI skips as a whole by design, with the reason. Each one runs no
+# test in CI, so adding to this list is a change review must see.
+SKIPPABLE_MODULES = {
+    "test_e2_mode_staleness.py": "needs a Hermes install the tests job leaves out",
+}
 
 
 def _defines_tests(path: Path) -> bool:
@@ -78,7 +87,15 @@ def problems(record: dict, root: Path) -> list[str]:
     if not isinstance(modules, list):
         out.append("the record lists no modules")
         modules = []
-    for missing in sorted(expected_modules(root) - set(map(str, modules))):
+    skipped = record.get("skipped_modules", [])
+    if not isinstance(skipped, list):
+        out.append("the record's skipped modules are not a list")
+        skipped = []
+    skipped = set(map(str, skipped))
+    for name in sorted(skipped - set(SKIPPABLE_MODULES)):
+        out.append(f"{name}: skipped as a whole module")
+    ran = set(map(str, modules)) | (skipped & set(SKIPPABLE_MODULES))
+    for missing in sorted(expected_modules(root) - ran):
         out.append(f"{missing}: did not run")
     return out
 

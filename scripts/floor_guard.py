@@ -115,7 +115,7 @@ GUARD_GLOBS = (
 # plugin that registers during collection and writes the run record. Changing
 # it is a change to this file, which base pins catch.
 FLOOR_CONFTEST_SHA256 = (
-    "6d036426d4c7950862c98c151f6c5a72020ebae44e15749f803acf04fd94c060"
+    "5d116113010331f7f2f558023d40d1d0f8207e161822291fa852acb0d9a03365"
 )
 
 ALLOWED_COMMANDS = frozenset(
@@ -1744,6 +1744,32 @@ RUFF_CONFIG = {
     }
 }
 _FILE_EXEMPTION = re.compile(r"(?i)^#\s*(?:ruff|flake8)\s*:\s*noqa\b")
+# Every per-line exemption the floor accepts, as "path:code" -> count. A new
+# one, one more of an existing code, or a blanket one with no code is a
+# violation, so silencing ruff on any line is a change to this file, which
+# base pins catch.
+NOQA_INVENTORY: dict[str, int] = {
+    "harness/d15_hermes_faithful.py:E402": 1,
+    "scripts/floor_guard.py:S506": 1,
+    "test_e2_mode_staleness.py:F401": 1,
+    "tests/grind01_util.py:E402": 1,
+    "tests/test_alias_class.py:E402": 2,
+    "tests/test_arg_schemas.py:E402": 1,
+    "tests/test_base_dir.py:E402": 2,
+    "tests/test_cases_table.py:E402": 2,
+    "tests/test_d15_hermes_faithful.py:E402": 1,
+    "tests/test_floor_config.py:E402": 1,
+    "tests/test_floor_fixes.py:E402": 1,
+    "tests/test_gate_boundary.py:E402": 1,
+    "tests/test_gate_files.py:E402": 1,
+    "tests/test_harness_tally.py:E402": 1,
+    "tests/test_hook_behavior.py:E402": 1,
+    "tests/test_issue33_shapes.py:E402": 1,
+    "tests/test_kill_switch.py:E402": 1,
+    "tests/test_receipt_paths.py:E402": 1,
+    "tests/test_s1_distinguish.py:E402": 2,
+    "tests/test_secondary_path_key.py:E402": 1,
+}
 
 
 def _strings(obj) -> list[str]:
@@ -1756,17 +1782,95 @@ def _strings(obj) -> list[str]:
     return []
 
 
-def _file_exemption(text: str) -> bool:
+# A per-line exemption: the noqa marker alone (every code) or with a code
+# list. ruff finds it anywhere in a comment, so it is searched, not matched at
+# the start.
+_LINE_EXEMPTION = re.compile(
+    r"(?i)#\s*noqa\b(?:\s*:\s*([a-z]+[0-9]+(?:\s*,\s*[a-z]+[0-9]+)*))?"
+)
+
+
+def _comments(text: str) -> list[str]:
+    """Every comment python's tokenizer finds; on a tokenize error, every line
+    from its first # (so an unparsable file cannot hide an exemption)."""
     import io
     import tokenize
 
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
     except (tokenize.TokenError, SyntaxError):
-        return bool(re.search(r"(?im)^\s*#\s*(?:ruff|flake8)\s*:\s*noqa\b", text))
-    return any(
-        t.type == tokenize.COMMENT and _FILE_EXEMPTION.match(t.string) for t in tokens
-    )
+        return [line[line.index("#") :] for line in text.splitlines() if "#" in line]
+    return [tok.string for tok in tokens if tok.type == tokenize.COMMENT]
+
+
+def _file_exemption(text: str) -> bool:
+    return any(_FILE_EXEMPTION.match(c.lstrip()) for c in _comments(text))
+
+
+def _line_exemptions(text: str) -> list[str]:
+    """The codes each per-line noqa names; "*" for a blanket one."""
+    out: list[str] = []
+    for comment in _comments(text):
+        if _FILE_EXEMPTION.match(comment.lstrip()):
+            continue
+        for m in _LINE_EXEMPTION.finditer(comment):
+            codes = m.group(1)
+            out += [c.strip().upper() for c in codes.split(",")] if codes else ["*"]
+    return out
+
+
+def _notebook_code(path: Path) -> str | None:
+    """The code cells of a notebook as one text; None if it does not parse."""
+    try:
+        nb = json.loads(path.read_text(encoding="utf-8"))
+        cells = nb["cells"]
+        parts = []
+        for cell in cells:
+            if cell.get("cell_type") != "code":
+                continue
+            source = cell.get("source", "")
+            parts.append("".join(source) if isinstance(source, list) else str(source))
+    except (
+        OSError,
+        UnicodeDecodeError,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+    ):
+        return None
+    return "\n".join(parts)
+
+
+def _lint_texts(root: Path, files: list[str]) -> tuple[dict[str, str], list[str]]:
+    """Text ruff lints in each Python file and notebook, and parse problems."""
+    texts: dict[str, str] = {}
+    problems: list[str] = []
+    for rel in files:
+        if rel.endswith((".py", ".pyi")):
+            try:
+                texts[rel] = (root / rel).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+        elif rel.endswith(".ipynb"):
+            code = _notebook_code(root / rel)
+            if code is None:
+                problems.append(f"{rel}: notebook does not parse")
+            else:
+                texts[rel] = code
+    return texts, problems
+
+
+def noqa_inventory(root: Path) -> dict[str, int]:
+    """Per-line exemptions in the tree, as "path:code" -> count."""
+    files, _problems = _repo_files(root)
+    texts, _parse = _lint_texts(root, files)
+    found: dict[str, int] = {}
+    for rel, text in texts.items():
+        for code in _line_exemptions(text):
+            key = f"{rel}:{code}"
+            found[key] = found.get(key, 0) + 1
+    return dict(sorted(found.items()))
 
 
 def lint_config_violations(root: Path) -> list[str]:
@@ -1804,13 +1908,21 @@ def lint_config_violations(root: Path) -> list[str]:
             else:
                 if isinstance(tool, dict) and "ruff" in tool:
                     found.append(f"lint config: {rel} configures ruff")
-        elif name.endswith((".py", ".pyi")):
-            try:
-                text = (root / rel).read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            if _file_exemption(text):
-                found.append(f"{rel}: file-level lint exemption")
+    texts, parse_problems = _lint_texts(root, files)
+    found += parse_problems
+    have: dict[str, int] = {}
+    for rel, text in texts.items():
+        if _file_exemption(text):
+            found.append(f"{rel}: file-level lint exemption")
+        for code in _line_exemptions(text):
+            key = f"{rel}:{code}"
+            have[key] = have.get(key, 0) + 1
+    for key, count in sorted(have.items()):
+        if count > NOQA_INVENTORY.get(key, 0):
+            rel, _, code = key.rpartition(":")
+            found.append(
+                f"{rel}: per-line lint exemption ({code}) beyond the floor's inventory"
+            )
     if (root / ".git").exists():
         ignored = subprocess.run(
             ["git", "ls-files", "-ci", "--exclude-standard", "-z"],

@@ -2972,14 +2972,14 @@ def test_one_more_noqa_in_an_inventoried_file_is_a_rules_violation(
     tmp_path: Path,
 ) -> None:
     root = _copy_tree(tmp_path)
-    path = root / "tests" / "test_floor_fixes.py"
+    path = root / "tests" / "test_floor_config.py"
     path.write_text(
         path.read_text(encoding="utf-8") + "\nimport os  # noqa: E402\n",
         encoding="utf-8",
     )
     found = _repin(root)
     assert any(
-        "tests/test_floor_fixes.py: per-line lint exemption" in f for f in found
+        "tests/test_floor_config.py: per-line lint exemption" in f for f in found
     ), found
 
 

@@ -5,8 +5,8 @@
    built at run time, a module __getattr__), and pytest loads that list while
    it collects; from that point every registration is refused.
 2. With FLOOR_RUN_RECORD set (the CI tests job sets it), the finished session
-   writes a run record: its exit status, the modules it collected and the
-   tests that reported. A process that ends early, such as os._exit during an
+   writes a run record: its exit status, the modules it collected, the
+   modules skipped as a whole, and the tests that reported. A process that ends early, such as os._exit during an
    import or a test, writes none, and scripts/run_record_check.py then fails
    the job.
 
@@ -23,7 +23,12 @@ from pathlib import Path
 
 import pytest
 
-_STATE: dict = {"collecting": False, "modules": set(), "reported": set()}
+_STATE: dict = {
+    "collecting": False,
+    "modules": set(),
+    "skipped_modules": set(),
+    "reported": set(),
+}
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -39,8 +44,12 @@ def pytest_plugin_registered(plugin, plugin_name, manager) -> None:
 
 
 def pytest_collectreport(report) -> None:
-    if report.outcome in {"passed", "skipped"} and report.nodeid.endswith(".py"):
+    if not report.nodeid.endswith(".py"):
+        return
+    if report.outcome == "passed":
         _STATE["modules"].add(report.nodeid)
+    elif report.outcome == "skipped":
+        _STATE["skipped_modules"].add(report.nodeid)
 
 
 def pytest_runtest_logreport(report) -> None:
@@ -57,5 +66,6 @@ def pytest_sessionfinish(session, exitstatus) -> None:
         "collected": session.testscollected,
         "reported": len(_STATE["reported"]),
         "modules": sorted(_STATE["modules"]),
+        "skipped_modules": sorted(_STATE["skipped_modules"]),
     }
     Path(path).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
