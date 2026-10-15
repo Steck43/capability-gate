@@ -2,17 +2,24 @@
 
 Receipts and raw artifacts that live outside this repository are named as
 private, with their digests, never by a path a reader cannot open. Every
-tracked text file is read (any extension, or none). Each line is decoded first:
-backslashes become slashes, a JSON-escaped slash is a slash, and URL encoding is
-undone until the line stops changing. Then every path that reaches a receipts
-folder (in any letter case) is judged by the whole path before it:
+tracked file is read in each text view a reader could get from its bytes (UTF-8
+with NUL bytes dropped, and UTF-16 when a byte-order mark or a NUL byte says it
+may be). Each line is decoded until it stops changing: HTML entities, URL
+encoding, NFKC, format characters dropped, slash look-alikes and Cyrillic
+letters that look like the folder name's letters folded, backslashes and JSON
+escaped slashes as slashes, os.path.join calls and two adjacent string
+literals joined. Then every receipts folder (any letter case, with or without a
+trailing slash) is judged by the whole path before it:
 
 - nothing before it, or a folder path that exists inside this checkout: home;
-- a leading slash, a drive letter, or any ".." step: another tree, even when it
-  would land on a receipts folder outside the checkout;
+- a leading slash, a drive letter, or any ".." step: another tree, even when
+  it would land on this checkout's own receipts folder;
+- a URL with any scheme but http or https (file, vscode, ssh, ...): a path
+  outside the checkout;
 - a GitHub blob, tree or raw URL: home only when it points into this
-  repository, judged by the path after the ref;
-- any other URL: not a repository path, not judged.
+  repository, judged by the path after the ref; any other code forge: another
+  repository;
+- any other web URL: not a repository path, not judged.
 
 The file names no private folder: a foreign path is refused because its folder
 does not exist here, not because it is listed.
@@ -20,8 +27,11 @@ does not exist here, not because it is listed.
 
 from __future__ import annotations
 
+import codecs
+import html
 import re
 import subprocess
+import unicodedata
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -30,7 +40,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 THIS_REPO = ("steck43", "capability-gate")
 # The text before a receipts folder, back to the start of the token it sits in.
-_BEFORE_RECEIPTS = re.compile(r"([^\s`'\"()<>\[\]{}|,;=*]*?)receipts/", re.I)
+# The folder name needs no trailing slash; a longer word is not the folder.
+_BEFORE_RECEIPTS = re.compile(r"([^\s`'\"()<>\[\]{}|,;=*]*?)receipts(?![\w-])", re.I)
 _GITHUB = re.compile(
     r"^(?:https?://)?(?:www\.)?github\.com/([\w.-]+)/([\w.-]+)/(?:blob|tree|raw)/[^/]+/(.*)$",
     re.I,
@@ -38,27 +49,77 @@ _GITHUB = re.compile(
 _RAW = re.compile(
     r"^(?:https?://)?raw\.githubusercontent\.com/([\w.-]+)/([\w.-]+)/[^/]+/(.*)$", re.I
 )
+# Code forges other than GitHub: this repository lives only on GitHub, so a forge
+# URL that reaches a receipts folder points into another repository.
+_FORGES = ("gitlab.com", "bitbucket.org", "codeberg.org", "git.sr.ht", "gitea.com")
+# Slash look-alikes NFKC keeps, and Cyrillic letters that look like the Latin
+# letters of the folder name.
+_FOLD = str.maketrans(
+    {
+        "∕": "/",
+        "⁄": "/",
+        "⧸": "/",
+        "е": "e",
+        "Е": "E",
+        "с": "c",
+        "С": "C",
+        "р": "p",
+        "Р": "P",
+        "і": "i",
+        "І": "I",
+        "ѕ": "s",
+        "Ѕ": "S",
+    }
+)
+_JOIN_CALL = re.compile(r"(?:os\.path|posixpath|ntpath)\.join\(([^()]*)\)")
+_LITERAL = re.compile(r"""["']([^"']*)["']""")
+_LITERAL_PLUS = re.compile(r"""(["'])\s*\+\s*(["'])""")
+
+
+def _joined(match: re.Match[str]) -> str:
+    return '"' + "/".join(_LITERAL.findall(match.group(1))) + '"'
 
 
 def _decoded(line: str) -> str:
     text = line
-    for _ in range(4):
-        nxt = unquote(text.replace("\\/", "/")).replace("\\", "/")
+    for _ in range(6):
+        nxt = html.unescape(unquote(text.replace("\\/", "/")))
+        nxt = unicodedata.normalize("NFKC", nxt)
+        nxt = "".join(c for c in nxt if unicodedata.category(c) != "Cf")
+        nxt = nxt.translate(_FOLD).replace("\\", "/")
+        nxt = _LITERAL_PLUS.sub("", _JOIN_CALL.sub(_joined, nxt))
         if nxt == text:
             break
         text = nxt
     return text
 
 
-def _foreign_prefix(prefix: str) -> bool:
-    if "://" in prefix or prefix.lower().startswith(("github.com/", "www.github")):
-        m = _GITHUB.match(prefix) or _RAW.match(prefix)
-        if m is None:
-            return "github" in prefix.lower()
-        owner, repo, rest = m.groups()
+def _foreign_url(prefix: str) -> bool | str:
+    """True or False for a URL; the repository path after the ref for a URL
+    into this repository on GitHub, to be judged like any other path."""
+    scheme, _, rest = prefix.partition("://")
+    if not rest:
+        scheme, rest = "https", prefix
+    if scheme.lower() not in ("http", "https"):
+        return True  # file, vscode, ssh and the rest: a path outside the checkout
+    m = _GITHUB.match("https://" + rest) or _RAW.match("https://" + rest)
+    if m is not None:
+        owner, repo, path = m.groups()
         if (owner.lower(), repo.lower().removesuffix(".git")) != THIS_REPO:
             return True
-        prefix = rest
+        return path
+    host = rest.split("/", 1)[0].lower()
+    if "github" in host or any(host == f or host.endswith("." + f) for f in _FORGES):
+        return True
+    return False  # another web site: not a repository path
+
+
+def _foreign_prefix(prefix: str) -> bool:
+    if "://" in prefix or prefix.lower().startswith(("github.com/", "www.github")):
+        verdict = _foreign_url(prefix)
+        if isinstance(verdict, bool):
+            return verdict
+        prefix = verdict
     if prefix and not prefix.endswith("/"):
         return False  # another word that ends in "receipts", not the folder
     if prefix.startswith("/") or re.match(r"^[A-Za-z]:", prefix):
@@ -75,9 +136,18 @@ def _foreign(line: str) -> bool:
     )
 
 
-def _is_read(name: str, data: bytes) -> bool:
-    """Every tracked file is read unless its bytes say it is binary."""
-    return b"\0" not in data[:8192]
+def _text_views(data: bytes) -> list[str]:
+    """Every text a reader could get from the bytes: UTF-8 with NUL bytes
+    dropped, and UTF-16 when a byte-order mark or a NUL byte says it may be."""
+    views = [data.replace(b"\0", b"").decode("utf-8", errors="replace")]
+    if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        views.append(data.decode("utf-16", errors="replace"))
+    if b"\0" in data:
+        even = data[: len(data) // 2 * 2]
+        views += [
+            even.decode(enc, errors="replace") for enc in ("utf-16-le", "utf-16-be")
+        ]
+    return views
 
 
 def test_tracked_text_cites_no_private_repository_path() -> None:
@@ -89,14 +159,11 @@ def test_tracked_text_cites_no_private_repository_path() -> None:
         path = ROOT / rel
         if not path.is_file():
             continue
-        data = path.read_bytes()
-        if not _is_read(rel, data):
-            continue
-        text = data.decode("utf-8", errors="replace")
-        for n, line in enumerate(text.split("\n"), 1):
-            if _foreign(line):
-                found.append(f"{rel}:{n}")
-    assert found == []
+        for view in _text_views(path.read_bytes()):
+            for n, line in enumerate(view.split("\n"), 1):
+                if _foreign(line):
+                    found.append(f"{rel}:{n}")
+    assert sorted(set(found)) == []
 
 
 def test_a_receipt_path_into_another_tree_is_caught() -> None:
@@ -173,11 +240,12 @@ def test_this_repositorys_own_receipt_paths_pass(line: str) -> None:
     ],
 )
 def test_every_tracked_text_file_is_read(name: str) -> None:
-    assert _is_read(name, b"plain text\n")
+    assert any("plain text" in view for view in _text_views(b"plain text\n"))
 
 
-def test_a_binary_file_is_not_read_as_text() -> None:
-    assert not _is_read("x.png", b"\x89PNG\r\n\x1a\n\0\0\0")
+def test_a_binary_file_raises_no_false_hit() -> None:
+    data = b"\x89PNG\r\n\x1a\n\0\0\0"
+    assert not any(_foreign(ln) for v in _text_views(data) for ln in v.split("\n"))
 
 
 # --- every non-web scheme is a local path; every spelling of the folder counts ---
@@ -250,3 +318,37 @@ def test_a_file_that_is_not_plain_utf8_is_still_read(data: bytes, label: str) ->
     assert any(
         _foreign(line) for view in _text_views(data) for line in view.split("\n")
     ), label
+
+
+# Cases where only one rule decides: each path would land on a receipts folder
+# that exists, or the name only appears in one text view.
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(f"../{ROOT.name}/{_R}/y.md", id="dotdot-back-into-checkout"),
+        pytest.param(f"/{_R}/y.md", id="absolute-root-receipts"),
+    ],
+)
+def test_a_path_that_lands_on_this_checkouts_receipts_is_still_foreign(
+    line: str,
+) -> None:
+    assert ROOT.joinpath(_R).is_dir()
+    assert _foreign(line)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param(
+            f"elsewhere/{_R[:4]}\0{_R[4:]}/y.md\n".encode(), id="nul-inside-name"
+        ),
+        pytest.param(
+            f"elsewhere/{_R.replace('e', chr(0x435))}/y.md\n".encode("utf-16-le"),
+            id="utf-16-non-ascii",
+        ),
+    ],
+)
+def test_a_name_only_one_text_view_shows_is_still_read(data: bytes) -> None:
+    assert any(_foreign(ln) for v in _text_views(data) for ln in v.split("\n"))
