@@ -3276,3 +3276,36 @@ def test_an_exempt_file_without_a_marker_is_not_a_kat(tmp_path: Path) -> None:
     )
     found = _kat_lint().discover(tmp_path)
     assert found == [], found
+
+
+# --- an imperative xfail in a test body ends the test before its asserts run --------
+
+
+def test_a_module_whose_tests_call_xfail_in_their_body_is_not_a_run(
+    tmp_path: Path,
+) -> None:
+    module = (
+        "import pytest\n\ndef test_zqxwvk():\n    pytest.xfail('x')\n    assert True\n"
+    )
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": module}
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert "tests/test_b.py: no test in it ran" in check.stdout, check.stdout
+
+
+def test_a_marked_expected_failure_still_ran(tmp_path: Path) -> None:
+    module = (
+        "import pytest\n\n@pytest.mark.xfail(strict=True, reason='x')\n"
+        "def test_zqxwvk():\n    assert False\n"
+    )
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": module}
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 0, check.stdout + check.stderr
