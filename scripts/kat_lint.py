@@ -106,8 +106,9 @@ autouse fixtures, its helpers or the module patch the gate (``setattr`` or
 function, or the gate module reached through ``sys.modules``; assignment
 to one of their attributes or to an attribute of ``type(gate)`` or
 ``gate.__class__``, with ``getattr(x, "name")`` read as ``x.name``;
-``monkeypatch.setitem`` or ``delitem`` on their ``__dict__`` or ``vars()``; ``__setattr__`` or ``__delattr__`` called on any of them, or
-through ``object`` or ``type``; a store into, or ``update``, ``setdefault``,
+``monkeypatch.setitem`` or ``delitem`` on their ``__dict__`` or ``vars()``;
+``__setattr__`` or ``__delattr__`` called on any of them, or through
+``object`` or ``type``; a store into, or ``update``, ``setdefault``,
 ``pop`` or ``clear`` on, their ``__dict__`` or ``vars()``), when the test
 rebinds a gate fixture it takes to anything other than a real gate (plain,
 tuple-unpacking or walrus assignment), or when the call is dead:

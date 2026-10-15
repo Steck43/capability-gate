@@ -2685,6 +2685,12 @@ GROUP_A = {
         f"'print(1)', '{_HOOK}'])\n    assert r.returncode == 0\n",
         "never reaches the gate",
     ),
+    "hook-as-c-code": (
+        KAT_HEAD.replace("import os\n", "import os\nimport subprocess\n")
+        + "\n\n\ndef test_k_case():\n    r = subprocess.run([sys.executable, '-c', "
+        f"'{_HOOK}'])\n    assert r.returncode == 0\n",
+        "never reaches the gate",
+    ),
     "sys-modules-setattr": (
         _first("setattr(sys.modules['capability_gate'], 'Gate', object)"),
         None,
