@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The private path test reads code, JSON and citation files as well as prose, and no longer names the private tree it guards against: a `<folder>/receipts/` path whose folder does not exist in this repository is refused.
 - `REPRODUCE-PAPER.md` no longer cites the raw prove artifact by its path in a private repository; it names the artifact as private and keeps its sha256, so the digest can still be checked by anyone holding the file.
 - `REPRODUCE-PAPER.md` and `receipts/K2-ADAPTER-S3-2026-10-09.md` no longer name a private repository; the live replay receipt is described as private. Earlier commits still hold the name; history is not rewritten.
 - Public text no longer names private machines, hosts, folders, or reviewers: the test box, a workstation, an internal working copy, and independent review stand in for them in the README, reproduction notes, design notes, receipts, and test docstrings. The README no longer says the audit trail is real from the first call or that a fresh clone's `pytest -q` passes; it says what the log does and how the suite is run against its pinned siblings. The workflow comment no longer cites a stale test count.
