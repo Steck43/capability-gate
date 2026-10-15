@@ -163,7 +163,7 @@ delete) takes it out. A ``raise`` caught inside a ``try`` body does not end
 the path. The assert must sit on the test's straight path: the body, the
 chosen branch of a constant ``if``, a ``try`` or ``with`` body, a ``finally``,
 and the body of a ``for`` over a non-empty constant, before any statement that
-always leaves. An assert in an ``if`` on an unknown test, a handler, a loop's
+always leaves (a call to ``pytest.xfail``, ``skip``, ``fail`` or ``exit`` leaves). An assert in an ``if`` on an unknown test, a handler, a loop's
 ``else``, a ``while`` body, a nested function or a helper does not satisfy the
 KAT, nor does one inside a ``try`` whose handler catches its failure
 (``AssertionError``, ``Exception``, ``BaseException``, a bare ``except`` or a
@@ -499,7 +499,9 @@ def _pytest_collects(root: Path) -> set[Path]:
         if base.is_file():
             out.add(base)
             continue
-        for dirpath, dirnames, filenames in os.walk(base):
+        # A symlinked folder is never followed; the floor guard refuses any
+        # link in the tree as well.
+        for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
             dirnames[:] = [
                 d for d in dirnames if not any(fnmatch.fnmatch(d, s) for s in skip)
             ]
@@ -2407,10 +2409,18 @@ class _File:
                 out += sub
                 if left:
                     return out, left
-            how = self.leaves(s)
+            how = self.leaves(s) or ("func" if self.ends_the_test(s) else None)
             if how:
                 return out, how
         return out, None
+
+    def ends_the_test(self, s: ast.stmt) -> bool:
+        """A call to pytest.xfail, skip, fail or exit: nothing after it runs."""
+        return (
+            isinstance(s, ast.Expr)
+            and isinstance(s.value, ast.Call)
+            and bool(self.names.resolve(s.value.func) & _ENDS_THE_TEST)
+        )
 
     def stores(self, fn) -> dict[str, list[ast.AST | None]]:
         """Every value each name in the test is set to; None where the store
@@ -3141,6 +3151,11 @@ def _plain_literal(node: ast.AST) -> bool:
         node.value is None or isinstance(node.value, (bool, int, float, str))
     )
 
+
+# Imperative outcomes: a test that calls one stops there.
+_ENDS_THE_TEST = frozenset(
+    {"pytest.xfail", "pytest.skip", "pytest.fail", "pytest.exit"}
+)
 
 _VERDICT_STRINGS = frozenset({"allow", "deny", "ask"})
 # The richer answer forms a real KAT needs beside the verdict comparison.
