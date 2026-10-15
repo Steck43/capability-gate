@@ -154,7 +154,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # The linter's own tests build rejected KATs as fixtures; they test the linter,
 # not the gate, and only match the KAT patterns by name and content.
-EXEMPT = {"tests/test_kat_lint.py"}
+# Test files that name a receipts/ path without being known-answer tests: the
+# lint's own tests, and the check that public text cites no path into
+# another repository's receipt tree (it reads text and calls no gate).
+EXEMPT = {"tests/test_kat_lint.py", "tests/test_public_text_paths.py"}
 _MARKER = re.compile(r"^#\s*KAT\b")
 _NAME = re.compile(r"^test_k.*\.py$|kat", re.I)
 _RECEIPTS = re.compile(r"(^|[\\/])receipts([\\/]|$)", re.I)
