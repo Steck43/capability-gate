@@ -3111,3 +3111,50 @@ def test_the_honest_result_or_patch_form_stays_clean(
 ) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", GROUP_D_CLEAN[shape]))
     assert r.returncode == 0, r.stdout
+
+
+# --- always-pass review round: a side and its own negation -------------------------
+# An or of a test and its negation is always true; an and of the two is always
+# false. Each side is normalised first (not, operand order, bool()).
+
+ALWAYS_PASS_PAIRS = {
+    "eq-or-ne": "assert d.verdict == Verdict.DENY or d.verdict != Verdict.DENY",
+    "ne-or-eq-swapped": "assert Verdict.DENY != d.verdict or d.verdict == Verdict.DENY",
+    "is-or-is-not": "assert d.verdict is Verdict.DENY or d.verdict is not Verdict.DENY",
+    "in-or-not-in": (
+        "assert d.verdict in (Verdict.DENY,) or d.verdict not in (Verdict.DENY,)"
+    ),
+    "p-or-not-p": "assert d.reason or not d.reason",
+    "bool-or-not-bool": "assert bool(d) or not bool(d)",
+    "not-p-or-p": "assert not d.reason or bool(d.reason)",
+    "pair-among-three": "assert d.verdict is Verdict.ASK or d.reason or not d.reason",
+    "not-of-p-and-not-p": (
+        "assert not (d.verdict is Verdict.DENY and not d.verdict is Verdict.DENY)"
+    ),
+    "p-and-not-p": "assert d.reason and not d.reason",
+    "eq-and-ne": "assert d.verdict == Verdict.DENY and d.verdict != Verdict.DENY",
+}
+
+ALWAYS_PASS_PAIRS_CLEAN = {
+    "two-different-verdicts": (
+        "assert d.verdict is Verdict.DENY or d.verdict is Verdict.ASK"
+    ),
+    "two-different-fields": "assert d.reason or not d.verdict",
+    "not-of-a-real-and": "assert not (d.verdict is Verdict.ALLOW and d.reason)",
+    "eq-and-another-ne": (
+        "assert d.verdict == Verdict.DENY and d.verdict != Verdict.ALLOW"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(ALWAYS_PASS_PAIRS))
+def test_a_side_and_its_negation_is_a_tautology(tmp_path: Path, shape: str) -> None:
+    _expect(tmp_path, _plain(ALWAYS_PASS_PAIRS[shape]), "tautological assert")
+
+
+@pytest.mark.parametrize("shape", sorted(ALWAYS_PASS_PAIRS_CLEAN))
+def test_sides_that_are_not_negations_stay_clean(tmp_path: Path, shape: str) -> None:
+    r = _lint(
+        _write(tmp_path, "test_k_case.py", _plain(ALWAYS_PASS_PAIRS_CLEAN[shape]))
+    )
+    assert r.returncode == 0, r.stdout
