@@ -12,11 +12,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # Layout prefixes of the private estate repository's receipt tree.
 PRIVATE_PREFIXES = ("wsl/receipts/",)
+# Every tracked text form a reader can open, code and metadata included.
+TEXT_GLOBS = ("*.md", "*.txt", "*.rst", "*.py", "*.json", "*.cff")
 
 
 def test_tracked_text_cites_no_private_repository_path() -> None:
     listed = subprocess.run(
-        ["git", "ls-files", "-z", "*.md", "*.txt", "*.rst"],
+        ["git", "ls-files", "-z", *TEXT_GLOBS],
         cwd=ROOT,
         capture_output=True,
         check=True,
