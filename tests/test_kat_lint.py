@@ -2867,3 +2867,131 @@ def test_require_kats_is_a_documented_flag() -> None:
     assert "--require-kats" in r.stdout
     doc = ast.get_docstring(ast.parse(SCRIPT.read_text(encoding="utf-8")))
     assert "--require-kats" in (doc or "")
+
+
+# --- review round on #101, group C: source encoding, pytest's own discovery, and
+# tautologies built with or and and.
+
+_FIAT_KAT = "import pytest\n\n\ndef test_k_case():\n    pytest.fail('zqxwvk')\n"
+
+GROUP_C_TAUTOLOGY = {
+    "or-with-self-comparison": _plain("assert d.verdict == d.verdict or d.verdict"),
+    "or-with-identity": _plain("assert d is d or d.verdict is Verdict.DENY"),
+    "or-with-isinstance-object": _plain(
+        "assert d.verdict is Verdict.DENY or isinstance(d, object)"
+    ),
+    "and-of-tautologies": _plain("assert d is d and d.verdict == d.verdict"),
+}
+GROUP_C_TAUTOLOGY_CLEAN = {
+    "or-of-two-real-checks": _plain(
+        "assert d.verdict is Verdict.DENY or d.verdict is Verdict.ASK"
+    ),
+    "and-with-one-real-check": _plain("assert d is d and d.verdict is Verdict.DENY"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(GROUP_C_TAUTOLOGY))
+def test_a_tautology_built_with_or_and_is_rejected(tmp_path: Path, shape: str) -> None:
+    _expect(tmp_path, GROUP_C_TAUTOLOGY[shape], "tautological assert")
+
+
+@pytest.mark.parametrize("shape", sorted(GROUP_C_TAUTOLOGY_CLEAN))
+def test_an_or_and_that_still_tests_the_answer_stays_clean(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", GROUP_C_TAUTOLOGY_CLEAN[shape]))
+    assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize(
+    ("data", "expect"),
+    [
+        pytest.param(
+            b"# -*- coding: latin-1 -*-\n" + _kat("").encode("utf-8"),
+            "declares a source encoding other than UTF-8",
+            id="latin-1-cookie",
+        ),
+        pytest.param(
+            b"# vim: set fileencoding=cp1252 :\n" + _kat("").encode("utf-8"),
+            "declares a source encoding other than UTF-8",
+            id="cp1252-cookie",
+        ),
+        pytest.param(
+            _kat("").encode("utf-8") + b"\n# \xff\xfe\n",
+            "is not valid UTF-8",
+            id="invalid-bytes",
+        ),
+    ],
+)
+def test_a_source_that_is_not_utf8_is_a_lint_problem(
+    tmp_path: Path, data: bytes, expect: str
+) -> None:
+    path = tmp_path / "tests" / "test_k_case.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    r = _lint(path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert expect in r.stdout, r.stdout
+    assert "Traceback" not in r.stderr, r.stderr
+
+
+def test_a_utf8_cookie_stays_clean(tmp_path: Path) -> None:
+    path = tmp_path / "tests" / "test_k_case.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"# -*- coding: utf-8 -*-\n" + _kat("").encode("utf-8"))
+    r = _lint(path)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize(
+    ("files", "kat"),
+    [
+        pytest.param(
+            {"harness/test_k_case.py": _FIAT_KAT},
+            "harness/test_k_case.py",
+            id="outside-tests",
+        ),
+        pytest.param(
+            {"tests/k_case_kat_test.py": _FIAT_KAT},
+            "tests/k_case_kat_test.py",
+            id="suffix-name",
+        ),
+        pytest.param(
+            {
+                "pytest.ini": "[pytest]\npython_files = check_*.py\n",
+                "tests/check_kat.py": _FIAT_KAT,
+            },
+            "tests/check_kat.py",
+            id="python-files-setting",
+        ),
+        pytest.param(
+            {
+                "pytest.ini": "[pytest]\ntestpaths = suite\n",
+                "suite/deep/test_k_case.py": _FIAT_KAT,
+            },
+            "suite/deep/test_k_case.py",
+            id="testpaths-setting",
+        ),
+    ],
+)
+def test_a_kat_file_pytest_collects_is_never_skipped(
+    tmp_path: Path, files: dict[str, str], kat: str
+) -> None:
+    root = _tree(tmp_path, files)
+    r = _lint("--root", root, "--require-kats")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "fails by fiat" in r.stdout, r.stdout
+    assert kat in r.stdout.replace("\\", "/"), r.stdout
+
+
+def test_a_folder_pytest_does_not_recurse_into_is_not_linted(tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path,
+        {
+            "pytest.ini": "[pytest]\nnorecursedirs = .* design\n",
+            "design/test_k_case.py": _FIAT_KAT,
+            "tests/test_k_clean.py": _kat(""),
+        },
+    )
+    r = _lint("--root", root, "--require-kats")
+    assert r.returncode == 0, r.stdout + r.stderr
