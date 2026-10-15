@@ -115,7 +115,7 @@ GUARD_GLOBS = (
 # plugin that registers during collection and writes the run record. Changing
 # it is a change to this file, which base pins catch.
 FLOOR_CONFTEST_SHA256 = (
-    "5d116113010331f7f2f558023d40d1d0f8207e161822291fa852acb0d9a03365"
+    "26220881e6f04a099bf52d284ec680dd8a7bc5232421350856537ac4799d324d"
 )
 
 ALLOWED_COMMANDS = frozenset(
@@ -1786,7 +1786,7 @@ def _strings(obj) -> list[str]:
 # list. ruff finds it anywhere in a comment, so it is searched, not matched at
 # the start.
 _LINE_EXEMPTION = re.compile(
-    r"(?i)#\s*noqa\b(?:\s*:\s*([a-z]+[0-9]+(?:\s*,\s*[a-z]+[0-9]+)*))?"
+    r"(?i)#\s*noqa\b(?:\s*:\s*([a-z]+[0-9]+(?:[,\s]+[a-z]+[0-9]+)*))?"
 )
 
 
@@ -1815,7 +1815,10 @@ def _line_exemptions(text: str) -> list[str]:
             continue
         for m in _LINE_EXEMPTION.finditer(comment):
             codes = m.group(1)
-            out += [c.strip().upper() for c in codes.split(",")] if codes else ["*"]
+            # ruff separates codes by commas, spaces or both.
+            out += (
+                [c.upper() for c in re.split(r"[,\s]+", codes) if c] if codes else ["*"]
+            )
     return out
 
 

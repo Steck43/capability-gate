@@ -9,7 +9,9 @@ a finished session, and this check requires that:
 - every test the session collected reported an outcome;
 - every file pytest would collect that defines a test (test_*.py or
   *_test.py with a top-level test function or Test class, outside
-  pytest.ini's norecursedirs) was collected and run;
+  pytest.ini's norecursedirs) was collected, and at least one of its tests
+  reached its call (an expected failure counts; a test skipped by a mark or
+  at setup does not), so a module-level skip mark is not a run;
 - no module was skipped as a whole, except the ones SKIPPABLE_MODULES names,
   since a whole-module skip runs none of its tests.
 
@@ -95,8 +97,17 @@ def problems(record: dict, root: Path) -> list[str]:
     for name in sorted(skipped - set(SKIPPABLE_MODULES)):
         out.append(f"{name}: skipped as a whole module")
     ran = set(map(str, modules)) | (skipped & set(SKIPPABLE_MODULES))
+    called = record.get("called_modules")
+    if not isinstance(called, list):
+        out.append("the record lists no called modules")
+        called = []
+    called = set(map(str, called))
     for missing in sorted(expected_modules(root) - ran):
         out.append(f"{missing}: did not run")
+    for idle in sorted(
+        (expected_modules(root) & ran) - called - set(SKIPPABLE_MODULES)
+    ):
+        out.append(f"{idle}: no test in it ran")
     return out
 
 

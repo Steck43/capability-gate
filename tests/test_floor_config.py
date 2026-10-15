@@ -3089,7 +3089,9 @@ def test_a_forged_record_then_an_exit_fails_the_check(tmp_path: Path) -> None:
         "path = os.environ['FLOOR_RUN_RECORD']\n"
         "json.dump({'finished': True, 'exitstatus': 0, 'collected': 2, "
         "'reported': 2, 'modules': ['tests/test_a.py', 'tests/test_b.py'], "
-        "'skipped_modules': []}, open(path, 'w'))\n"
+        "'skipped_modules': [], "
+        "'called_modules': ['tests/test_a.py', 'tests/test_b.py']}, "
+        "open(path, 'w'))\n"
         "os._exit(0)\n" + _PASSING
     )
     root = _pytest_tree(
