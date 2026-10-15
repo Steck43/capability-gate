@@ -3866,3 +3866,33 @@ def test_a_kat_without_an_accepted_answer_assert_on_its_path_is_refused(
     tmp_path: Path, shape: str
 ) -> None:
     _expect(tmp_path, _kat_without_answer(ANSWER_MISSING[shape]), _NO_ANSWER)
+
+
+# BH101-4: every way a test can rebind the result name takes it out.
+REBINDS_OF_THE_RESULT = {
+    "with-as": "import contextlib\nwith contextlib.nullcontext(Verdict.DENY) as d:\n    pass\nassert d.verdict is Verdict.DENY",
+    "except-as": "try:\n    raise ValueError(Verdict.DENY)\nexcept ValueError as d:\n    pass\nassert d.verdict is Verdict.DENY",
+    "import-as": "import os as d\nassert d.verdict is Verdict.DENY",
+    "from-import-as": "from os import sep as d\nassert d.verdict is Verdict.DENY",
+    "globals-store": "globals()['d'] = None\nassert d.verdict is Verdict.DENY",
+    "globals-store-of-a-built-name": "globals()['d' + ''] = None\nassert d.verdict is Verdict.DENY",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(REBINDS_OF_THE_RESULT))
+def test_every_rebind_of_the_result_name_takes_it_out(
+    tmp_path: Path, shape: str
+) -> None:
+    _expect(tmp_path, _kat_without_answer(REBINDS_OF_THE_RESULT[shape]), _NO_ANSWER)
+
+
+def test_an_import_or_handler_name_that_is_not_the_result_stays_clean(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "import os as other\n"
+        "try:\n    raise ValueError('x')\nexcept ValueError as err:\n    pass\n"
+        "assert d.verdict is Verdict.DENY"
+    )
+    r = _lint(_write(tmp_path, "test_k_case.py", _kat_without_answer(body)))
+    assert r.returncode == 0, r.stdout
