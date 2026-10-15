@@ -3255,3 +3255,89 @@ def test_a_compare_that_reads_the_answer_stays_clean(
 ) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", _plain(SELF_IN_DISGUISE_CLEAN[shape])))
     assert r.returncode == 0, r.stdout
+
+
+# --- always-pass review round: a constant routed through a call --------------------
+# An inline lambda called on the spot, functools.partial of a pure builtin with
+# constant arguments, a same-file identity helper and an instance method of a
+# same-file class that returns a constant all fold. Each fiat form sits beside a
+# valid assert on the answer, so only folding can catch it.
+
+ROUTED_PRELUDE = """
+
+import functools
+
+
+def ident(x):
+    return x
+
+
+class Fixed:
+    def value(self):
+        return False
+
+    def yes(self):
+        return True
+
+    def same(self, x):
+        return x
+"""
+
+ROUTED_CONSTANT = {
+    "inline-lambda-false": (
+        _kat("assert (lambda: False)()", ROUTED_PRELUDE),
+        "fails by fiat",
+    ),
+    "partial-bool-zero": (
+        _kat("assert functools.partial(bool, 0)()", ROUTED_PRELUDE),
+        "fails by fiat",
+    ),
+    "identity-helper-false": (
+        _kat("assert ident(False)", ROUTED_PRELUDE),
+        "fails by fiat",
+    ),
+    "instance-method-false": (
+        _kat("assert Fixed().value()", ROUTED_PRELUDE),
+        "fails by fiat",
+    ),
+    "inline-lambda-true-or": (
+        _plain("assert (lambda: True)() or d.verdict is Verdict.DENY", ROUTED_PRELUDE),
+        "assert in a KAT file",
+    ),
+    "partial-bool-one-or": (
+        _plain("assert functools.partial(bool, 1)() or d.reason", ROUTED_PRELUDE),
+        "assert in a KAT file",
+    ),
+    "identity-helper-true-or": (
+        _plain("assert ident(True) or d.reason", ROUTED_PRELUDE),
+        "assert in a KAT file",
+    ),
+    "instance-method-true-or": (
+        _plain("assert Fixed().yes() or d.reason", ROUTED_PRELUDE),
+        "assert in a KAT file",
+    ),
+}
+
+ROUTED_CONSTANT_CLEAN = {
+    "identity-of-the-answer": _plain(
+        "assert ident(d.verdict) is Verdict.DENY", ROUTED_PRELUDE
+    ),
+    "method-of-the-answer": _plain(
+        "assert Fixed().same(d.verdict) is Verdict.DENY", ROUTED_PRELUDE
+    ),
+    "lambda-of-the-answer": _plain(
+        "assert (lambda v: v)(d.verdict) is Verdict.DENY", ROUTED_PRELUDE
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(ROUTED_CONSTANT))
+def test_a_constant_routed_through_a_call_folds(tmp_path: Path, shape: str) -> None:
+    src, reason = ROUTED_CONSTANT[shape]
+    _expect(tmp_path, src, reason)
+
+
+@pytest.mark.parametrize("shape", sorted(ROUTED_CONSTANT_CLEAN))
+def test_a_call_on_the_answer_stays_clean(tmp_path: Path, shape: str) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", ROUTED_CONSTANT_CLEAN[shape]))
+    assert r.returncode == 0, r.stdout
