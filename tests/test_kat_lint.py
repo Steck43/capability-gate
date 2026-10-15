@@ -2354,3 +2354,267 @@ def test_a_string_compare_outside_a_platform_check_is_not_judged(
     _write(tmp_path, "test_ordinary.py", "import pytest\n" + src)
     r = _lint("--root", tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# --- holes from review: platform tautologies, raises, patching, rebinding, asserts ----
+# Each case below is a KAT that still looks valid (it calls the real gate and
+# asserts on the answer) but is decided by something else.
+
+_EVAL = "d = gate.evaluate('s', 'read_file', ['zqxwvk'])"
+_FAKE = "class FakeGate:\n    def evaluate(self, *a, **k):\n        return None"
+
+
+def _first(line: str, prelude: str = "", params: str = "gate") -> str:
+    """A valid KAT whose body starts with the given lines."""
+    src = _kat("", prelude, params)
+    head = f"def test_k_case({params}):\n"
+    return src.replace(head, head + "".join(f"    {x}\n" for x in line.splitlines()))
+
+
+def _plain(body: str, prelude: str = "", params: str = "gate") -> str:
+    """A KAT with a gate call and the given lines instead of the base assert."""
+    lines = "".join(f"    {x}\n" for x in body.splitlines())
+    return (
+        KAT_HEAD
+        + prelude
+        + "\n\n\n"
+        + f"def test_k_case({params}):\n    {_EVAL}\n"
+        + lines
+    )
+
+
+HOLE_PLATFORM = {
+    "ne_impossible_value": (
+        _first("if sys.platform != 'zqxwvk':\n    pytest.skip('x')"),
+        "true on every platform",
+    ),
+    "eq_impossible_value": (
+        _first("if sys.platform == 'zqxwvk':\n    pytest.skip('x')"),
+        "a value no platform has",
+    ),
+    "self_comparison": (
+        _first("if os.name == os.name:\n    pytest.skip('x')"),
+        "true on every platform",
+    ),
+    "every_system_listed": (
+        _first(
+            "if platform.system() in ('Linux', 'Windows', 'Darwin', 'Java', 'FreeBSD', 'OpenBSD', 'AIX'):\n    pytest.skip('x')",
+            "import platform",
+        ),
+        "true on every platform",
+    ),
+    "alias_or_of_two_values": (
+        _first(
+            "if P != 'win32' or P != 'linux':\n    pytest.skip('x')", "P = sys.platform"
+        ),
+        "true on every platform",
+    ),
+    "skipif_every_system": (
+        KAT_HEAD + "import platform\n\n\n@pytest.mark.skipif(platform.system() in "
+        "('Linux', 'Windows', 'Darwin', 'Java', 'FreeBSD', 'OpenBSD', 'AIX'), reason='x')\n"
+        f"def test_k_case(gate):\n    {_EVAL}\n    assert d.verdict is Verdict.DENY\n",
+        "true on every platform",
+    ),
+    "skipif_name_not_name": (
+        KAT_HEAD + "@pytest.mark.skipif(os.name != 'zqxwvk', reason='x')\n"
+        f"def test_k_case(gate):\n    {_EVAL}\n    assert d.verdict is Verdict.DENY\n",
+        "value no platform has",
+    ),
+}
+
+HOLE_RAISE = {
+    "throw_into_generator": (
+        _first("g = (i for i in [1])\nnext(g)\ng.throw(AssertionError('x'))"),
+        "throw AssertionError in a KAT file fails by fiat",
+    ),
+    "throw_alias": (
+        _first("g = (i for i in [1])\nnext(g)\ng.throw(E)", "E = SystemExit"),
+        "throw forced exit in a KAT file fails by fiat",
+    ),
+    "helper_raises_local_subclass": (
+        _first(
+            "_boom()",
+            "class Boom(AssertionError):\n    pass\n\n\ndef _boom():\n    raise Boom()",
+        ),
+        "raise AssertionError in a KAT file fails by fiat",
+    ),
+    "subclass_of_subclass": (
+        _first(
+            "_boom()",
+            "class Boom(SystemExit):\n    pass\n\n\nclass Boom2(Boom):\n    pass\n\n\n"
+            "def _boom():\n    raise Boom2",
+        ),
+        "forced exit in a KAT file fails by fiat",
+    ),
+}
+
+HOLE_PATCH = {
+    "instance_dict": (_first("gate.__dict__['evaluate'] = lambda *a, **k: None"), None),
+    "vars_of_gate": (_first("vars(gate)['evaluate'] = lambda *a, **k: None"), None),
+    "vars_update": (_first("vars(gate).update(evaluate=lambda *a, **k: None)"), None),
+    "dict_update": (
+        _first("gate.__dict__.update(evaluate=lambda *a, **k: None)"),
+        None,
+    ),
+    "object_setattr": (
+        _first("object.__setattr__(gate, 'evaluate', lambda *a, **k: None)"),
+        None,
+    ),
+    "type_setattr": (
+        _first("type.__setattr__(Gate, 'evaluate', lambda *a, **k: None)"),
+        None,
+    ),
+    "dunder_setattr_method": (
+        _first("gate.__setattr__('evaluate', lambda *a, **k: None)"),
+        None,
+    ),
+    "type_of_gate": (_first("type(gate).evaluate = lambda *a, **k: None"), None),
+}
+
+HOLE_REBIND = {
+    "param_reassigned": (_first("gate = FakeGate()", _FAKE), "rebinds the gate"),
+    "tuple_unpacking": (_first("gate, _ = FakeGate(), 1", _FAKE), "rebinds the gate"),
+    "walrus": (_first("(gate := FakeGate())", _FAKE), "rebinds the gate"),
+    "fixture_defined_again": (
+        KAT_HEAD
+        + _FAKE
+        + "\n\n\n@pytest.fixture()\ndef gate():\n    return FakeGate()\n\n\n"
+        f"def test_k_case(gate):\n    {_EVAL}\n    assert d.verdict is Verdict.DENY\n",
+        "defined more than once",
+    ),
+}
+
+HOLE_ASSERT = {
+    "equal_to_itself": (_plain("assert d.verdict == d.verdict"), "tautological assert"),
+    "is_itself": (_plain("assert d is d"), "tautological assert"),
+    "not_unequal_to_itself": (
+        _plain("assert not d.verdict != d.verdict"),
+        "tautological assert",
+    ),
+    "isinstance_object": (
+        _plain("assert isinstance(d, object)"),
+        "tautological assert",
+    ),
+    "tuple_index_constant": (_plain("assert (d.verdict, 1)[1]"), "tautological assert"),
+    "in_every_verdict": (
+        _plain("assert d.verdict in (Verdict.ALLOW, Verdict.DENY)"),
+        "tautological assert",
+    ),
+    "in_every_verdict_list": (
+        _plain("assert d.verdict in [Verdict.DENY, Verdict.ALLOW]"),
+        "tautological assert",
+    ),
+    "swallowed_assertion_error": (
+        _plain(
+            "try:\n    assert d.verdict is Verdict.DENY\nexcept AssertionError:\n    pass"
+        ),
+        "never asserts on the gate's result",
+    ),
+    "swallowed_exception": (
+        _plain(
+            "try:\n    assert d.verdict is Verdict.DENY\nexcept Exception:\n    pass"
+        ),
+        "never asserts on the gate's result",
+    ),
+    "swallowed_bare_except": (
+        _plain("try:\n    assert d.verdict is Verdict.DENY\nexcept:\n    pass"),
+        "never asserts on the gate's result",
+    ),
+    "swallowed_tuple": (
+        _plain(
+            "try:\n    assert d.verdict is Verdict.DENY\nexcept (ValueError, AssertionError):\n    pass"
+        ),
+        "never asserts on the gate's result",
+    ),
+}
+
+HOLES = {
+    **{f"platform-{k}": v for k, v in HOLE_PLATFORM.items()},
+    **{f"raise-{k}": v for k, v in HOLE_RAISE.items()},
+    **{f"patch-{k}": v for k, v in HOLE_PATCH.items()},
+    **{f"rebind-{k}": v for k, v in HOLE_REBIND.items()},
+    **{f"assert-{k}": v for k, v in HOLE_ASSERT.items()},
+}
+
+
+@pytest.mark.parametrize("shape", sorted(HOLES))
+def test_a_kat_decided_by_something_else_is_rejected(
+    tmp_path: Path, shape: str
+) -> None:
+    src, reason = HOLES[shape]
+    _expect(tmp_path, src, reason or "patches the gate at line")
+
+
+HOLE_CLEAN = {
+    "real_platform_skip": _first(
+        "if sys.platform == 'win32':\n    pytest.skip('posix only')"
+    ),
+    "real_platform_prefix": _first(
+        "if sys.platform.startswith('win'):\n    pytest.skip('posix only')"
+    ),
+    "real_platform_skipif": (
+        KAT_HEAD + "@pytest.mark.skipif(sys.platform == 'win32', reason='posix only')\n"
+        f"def test_k_case(gate):\n    {_EVAL}\n    assert d.verdict is Verdict.DENY\n"
+    ),
+    "two_real_systems": _first(
+        "if platform.system() in ('Windows', 'Darwin'):\n    pytest.skip('linux only')",
+        "import platform",
+    ),
+    "fault_injection_elsewhere": _first(
+        "monkeypatch.setattr(os, 'lstat', os.lstat)", params="gate, monkeypatch"
+    ),
+    "vars_of_another_object": _first("vars(tmp_path)", params="gate, tmp_path"),
+    "assert_in_one_verdict": _plain("assert d.verdict in (Verdict.DENY,)"),
+    "assert_equal_to_constant": _plain("assert d.verdict == Verdict.DENY"),
+    "try_that_reraises": _plain(
+        "try:\n    assert d.verdict is Verdict.DENY\nexcept AssertionError:\n    raise"
+    ),
+    "try_other_exception": _plain(
+        "try:\n    assert d.verdict is Verdict.DENY\nexcept ValueError:\n    pass"
+    ),
+    "rebound_to_a_real_gate": _first(
+        "gate = Gate(load_policy({'skills': {}}), log_path=str(tmp_path / 'e.jsonl'))",
+        params="gate, tmp_path",
+    ),
+    "gate_throw_is_the_gate": _plain(
+        "assert gate.throw('drill') is True\nassert d.verdict is Verdict.DENY"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(HOLE_CLEAN))
+def test_the_honest_form_of_each_hole_stays_clean(tmp_path: Path, shape: str) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", HOLE_CLEAN[shape]))
+    assert r.returncode == 0, r.stdout
+
+
+# --require-kats: a run that finds no KAT file fails, so the CI step cannot pass
+# by having nothing to judge.
+
+
+def _tree(tmp_path: Path, files: dict[str, str]) -> Path:
+    root = tmp_path / "repo"
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    return root
+
+
+def test_require_kats_fails_when_no_kat_file_is_found(tmp_path: Path) -> None:
+    root = _tree(tmp_path, {"tests/test_plain.py": "def test_x():\n    assert 1 + 1\n"})
+    r = _lint("--root", root, "--require-kats")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no KAT file found" in r.stdout, r.stdout
+    assert str(tmp_path) not in r.stdout + r.stderr
+
+
+def test_require_kats_passes_when_a_clean_kat_is_found(tmp_path: Path) -> None:
+    root = _tree(tmp_path, {"tests/test_k_case.py": _kat("")})
+    r = _lint("--root", root, "--require-kats")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_without_the_flag_an_empty_tree_still_passes(tmp_path: Path) -> None:
+    root = _tree(tmp_path, {"tests/test_plain.py": "def test_x():\n    assert 1 + 1\n"})
+    r = _lint("--root", root)
+    assert r.returncode == 0, r.stdout + r.stderr
