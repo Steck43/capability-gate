@@ -319,3 +319,44 @@ def test_a_list_holding_only_the_canary_is_not_configured(repo: Path) -> None:
     r = _run(["--ci", "--base", base], repo, denylist=f"{CANARY}\n")
     assert r.returncode == 1, r.stdout + r.stderr
     assert "denylist not configured" in r.stdout, r.stdout
+
+
+# Only the exact canary line is skipped. A line that contains the canary, or
+# looks like it, is a real entry and still hits.
+
+
+@pytest.mark.parametrize(
+    ("entry", "planted"),
+    [
+        pytest.param(f"{CANARY}2", f"{CANARY}2", id="suffix"),
+        pytest.param(f"x{CANARY}", f"x{CANARY}", id="prefix"),
+        pytest.param(f"{CANARY} {CANARY}", f"{CANARY} {CANARY}", id="doubled"),
+        pytest.param(f"{CANARY}.", f"{CANARY}.", id="punctuated"),
+        pytest.param("zqx wvk", "zqx wvk", id="split"),
+        pytest.param("zqxwvк", "zqxwvк", id="look-alike-letter"),
+        pytest.param(f"re:{CANARY}", CANARY, id="regex-of-canary"),
+        pytest.param(f"re:\\b{CANARY}\\b", CANARY, id="bounded-regex-of-canary"),
+    ],
+)
+def test_a_line_that_only_resembles_the_canary_stays_a_real_entry(
+    repo: Path, entry: str, planted: str
+) -> None:
+    f = _write(repo, f"text {planted} text\n")
+    r = _run([str(f)], repo, denylist=f"{CANARY}\n{entry}\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist entry 1" in r.stdout, r.stdout
+
+
+def test_negative_control_the_scanner_finds_a_planted_canary_when_asked(
+    repo: Path,
+) -> None:
+    """The skip is not a blind spot in matching. With the canary line present
+    and the canary also listed as a pattern, a planted canary is found; with
+    only the canary line beside another name, the same text passes."""
+    f = _write(repo, f"planted {CANARY} here\n")
+    asked = _run([str(f)], repo, denylist=f"{CANARY}\nre:{CANARY}\n")
+    assert asked.returncode == 1, asked.stdout + asked.stderr
+    assert "denylist entry 1" in asked.stdout, asked.stdout
+    assert CANARY not in asked.stdout + asked.stderr
+    skipped = _run([str(f)], repo, denylist=f"{CANARY}\n{SYNTHETIC_NAME}\n")
+    assert skipped.returncode == 0, skipped.stdout + skipped.stderr
