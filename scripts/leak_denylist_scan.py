@@ -188,11 +188,19 @@ def _added_lines(*diff_args: str) -> list[tuple[str, str]]:
     by_file: dict[str, dict[int, str]] = {}
     current = None
     lineno = 0
+    # A file header is only the block between "diff --git" and the first "@@".
+    # After that every "+" line is content, even one whose text starts "++ b/".
+    in_header = False
     for line in diff.splitlines():
-        if line.startswith("+++ "):
+        if line.startswith("diff --git "):
+            in_header, current = True, None
+        elif in_header and line.startswith("+++ "):
             current = _target(line)
         elif m := _HUNK.match(line):
+            in_header = False
             lineno = int(m.group(1))
+        elif in_header:
+            continue
         elif current and line.startswith("+"):
             by_file.setdefault(current, {})[lineno] = line[1:]
             lineno += 1
