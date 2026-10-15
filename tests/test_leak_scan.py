@@ -482,3 +482,45 @@ def test_an_added_line_that_looks_like_a_header_is_scanned(
     r = _run(args, repo, denylist=SYNTHETIC_NAME)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "denylist entry 1" in r.stdout, r.stdout
+
+
+# --- H1: only "\n" ends a diff line --------------------------------------------------
+# str.splitlines() also breaks on U+0085, U+2028, U+2029, form feed and the file,
+# group and record separators. An added line holding one of them followed by
+# "diff --git" then read as a fresh file header, and the added lines after it
+# were never scanned.
+
+_LINE_BREAKERS = ["\x85", " ", " ", "\x0c", "\x1c", "\x1d", "\x1e", "\x0b"]
+
+
+@pytest.mark.parametrize(
+    "sep", _LINE_BREAKERS, ids=[f"U+{ord(c):04X}" for c in _LINE_BREAKERS]
+)
+@pytest.mark.parametrize("mode", ["ci", "staged"])
+def test_a_line_separator_inside_an_added_line_never_fakes_a_header(
+    repo: Path, sep: str, mode: str
+) -> None:
+    (repo / "base.md").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    text = (
+        f"clean{sep}diff --git a/x b/x{sep}+++ /dev/null\nnotes on {SYNTHETIC_NAME}\n"
+    )
+    (repo / "doc.md").write_bytes(text.encode("utf-8"))
+    _git(repo, "add", "-A")
+    if mode == "ci":
+        _git(repo, "commit", "-q", "-m", "add doc")
+        args = ["--ci", "--base", base]
+    else:
+        args = ["--staged"]
+    r = _run(args, repo, denylist=SYNTHETIC_NAME)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist entry 1" in r.stdout, r.stdout
+
+
+def test_hit_line_numbers_count_only_newlines(repo: Path) -> None:
+    f = _write(repo, f"one still one\nnotes on {SYNTHETIC_NAME}\n")
+    r = _run([str(f)], repo, denylist=SYNTHETIC_NAME)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert ":2: denylist entry 1" in r.stdout, r.stdout
