@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -3930,3 +3931,43 @@ def test_a_class_alias_of_something_else_is_not_a_gate_patch(tmp_path: Path) -> 
     )
     r = _lint(_write(tmp_path, "test_k_case.py", _kat_without_answer(body)))
     assert r.returncode == 0, r.stdout
+
+
+# Discovery never follows a symlinked folder (the floor guard also refuses any
+# link in the tree); the walk says so explicitly.
+def test_discovery_does_not_follow_symlinked_folders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sys.path.insert(0, str(SCRIPT.parent))
+    import kat_lint
+
+    calls: list[dict] = []
+    real_walk = os.walk
+
+    def spy(top, *args, **kwargs):
+        calls.append(kwargs)
+        return real_walk(top, *args, **kwargs)
+
+    monkeypatch.setattr(os, "walk", spy)
+    (tmp_path / "tests").mkdir()
+    kat_lint.discover(tmp_path)
+    assert calls, "discovery never walked a folder"
+    assert all(c.get("followlinks") is False for c in calls), calls
+
+
+# A pytest.xfail, skip, fail or exit called on the straight path ends it: the
+# answer assert after it never runs.
+ENDS_THE_TEST = {
+    "xfail": "pytest.xfail('zqxwvk')",
+    "skip": "pytest.skip('zqxwvk')",
+    "fail": "pytest.fail('zqxwvk')",
+    "exit": "pytest.exit('zqxwvk')",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(ENDS_THE_TEST))
+def test_an_assert_after_an_imperative_outcome_never_runs(
+    tmp_path: Path, shape: str
+) -> None:
+    body = ENDS_THE_TEST[shape] + "\nassert d.verdict is Verdict.DENY"
+    _expect(tmp_path, _kat_without_answer(body), _NO_ANSWER)
