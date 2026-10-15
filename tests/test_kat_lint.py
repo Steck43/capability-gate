@@ -1619,7 +1619,12 @@ def test_fold_limits_stop_large_values() -> None:
 
 CLEAN = {
     "keywords_are_not_folded": ("assert int('10', base=2) == 2", ""),
-    "shadowed_builtin_is_not_folded": ("assert len([])", "def len(x):\n    return 1"),
+    # The shadowing helper reads its argument: a helper that returns a constant
+    # now folds through the call, which is a different rule.
+    "shadowed_builtin_is_not_folded": (
+        "assert len([])",
+        "def len(x):\n    return x.count(1)",
+    ),
     "local_rebinding_shadows_module": (
         "NO = d.verdict is Verdict.DENY\nassert NO",
         "NO = False",

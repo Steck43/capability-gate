@@ -62,7 +62,11 @@ pure builtins (``bool``, ``int``, ``len`` and the rest of ``_PURE``), and a
 constant routed through something the file binds once: a no-argument helper
 whose body is one ``return``, a lambda, a ``functools.partial``, a class
 attribute or staticmethod of a class used only by attribute reads and calls,
-``getattr`` with a constant name, and a dict or list read by subscript. A name
+``getattr`` with a constant name, and a dict or list read by subscript; a lambda
+or ``functools.partial`` called where it is written; a same-file helper or
+lambda with parameters whose one ``return`` reads none of them, or returns one
+of them unchanged (the argument that parameter received folds); and a method of
+a sealed same-file class called on a fresh instance, judged the same way. A name
 with a second binding of any kind (augmented, loop, handler, ``global`` or
 ``nonlocal`` from another scope, ``del``) is not folded, and a mutable literal
 stops folding once it is passed anywhere it could change.
@@ -1024,10 +1028,76 @@ class Folder:
                 found.append(None)
         return found[0] if len(found) == 1 else None
 
+    def _fold_returned(self, fn: ast.AST, node: ast.Call, env, d, method: bool):
+        """A call of a function or lambda whose body is one return: the returned
+        value when it reads none of the parameters, or the argument a parameter
+        received when it returns that parameter unchanged (an identity)."""
+        args = fn.args
+        if args.vararg or args.kwarg or args.kwonlyargs or node.keywords:
+            return None
+        params = [a.arg for a in (*args.posonlyargs, *args.args)]
+        if method:
+            if not params:
+                return None
+            params = params[1:]
+        if len(node.args) != len(params) or any(
+            isinstance(a, ast.Starred) for a in node.args
+        ):
+            return None
+        if isinstance(fn, ast.Lambda):
+            value = fn.body
+        else:
+            body = [
+                s
+                for s in fn.body
+                if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))
+            ]
+            if not (
+                len(body) == 1 and isinstance(body[0], ast.Return) and body[0].value
+            ):
+                return None
+            value = body[0].value
+        if isinstance(value, ast.Name) and value.id in params:
+            return self._fold(node.args[params.index(value.id)], env, d)
+        reads = {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
+        own = {*params, *([args.args[0].arg] if method and args.args else [])}
+        if reads & own:
+            return None
+        return self._fold(value, self.at(value), d)
+
     def _fold_routed(self, node: ast.Call, env, d):
-        """A no-argument call of a same-file helper, lambda, staticmethod or
-        functools.partial that the file binds once."""
+        """A call of a same-file helper, lambda, staticmethod or
+        functools.partial that the file binds once, a lambda or partial called
+        where it is written, and a method of a sealed same-file class called on
+        a fresh instance."""
         f = node.func
+        if isinstance(f, ast.Lambda):
+            return self._fold_returned(f, node, env, d, method=False)
+        if (
+            isinstance(f, ast.Call)
+            and ast.unparse(f.func) in ("functools.partial", "partial")
+            and f.args
+            and not f.keywords
+            and not node.keywords
+        ):
+            call = ast.Call(f.args[0], [*f.args[1:], *node.args], [])
+            ast.copy_location(call, node)
+            self.parents[call] = self.parents.get(node, self.tree)
+            return self._fold_call(call, env, d)
+        if (
+            isinstance(f, ast.Attribute)
+            and isinstance(f.value, ast.Call)
+            and not f.value.args
+            and not f.value.keywords
+        ):
+            cls = self._sealed_class(f.value.func)
+            if cls is not None:
+                methods = [
+                    s for s in cls.body if isinstance(s, _FUNCS) and s.name == f.attr
+                ]
+                if len(methods) == 1 and not methods[0].decorator_list:
+                    return self._fold_returned(methods[0], node, env, d, method=True)
+            return None
         target: ast.AST | None = None
         if isinstance(f, ast.Name) and (
             f.id not in env or isinstance(self.top.get(f.id), ast.Lambda)
@@ -1047,6 +1117,8 @@ class Folder:
             ast.copy_location(call, node)
             self.parents[call] = self.parents.get(node, self.tree)
             return self._fold_call(call, env, d)
+        if node.args and isinstance(target, (*_FUNCS, ast.Lambda)):
+            return self._fold_returned(target, node, env, d, method=False)
         if node.args or node.keywords:
             return None
         if isinstance(target, ast.Lambda) and not target.args.args:
