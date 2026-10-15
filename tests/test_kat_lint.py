@@ -3896,3 +3896,37 @@ def test_an_import_or_handler_name_that_is_not_the_result_stays_clean(
     )
     r = _lint(_write(tmp_path, "test_k_case.py", _kat_without_answer(body)))
     assert r.returncode == 0, r.stdout
+
+
+# BH101-5: the gate's class reached through any alias the result tracking sees.
+GATE_CLASS_ALIASES = {
+    "unpacking": "k, = (type(gate),)\nsetattr(k, 'evaluate', lambda *a, **kw: None)",
+    "list-unpacking": "[k] = [gate.__class__]\nk.evaluate = lambda *a, **kw: None",
+    "for-target": "for k in (type(gate),):\n    setattr(k, 'evaluate', lambda *a, **kw: None)",
+    "walrus": "(k := type(gate))\nk.evaluate = lambda *a, **kw: None",
+    "helper-returning-type": "def cls(x):\n    return type(x)\nk = cls(gate)\nk.evaluate = lambda *a, **kw: None",
+    "bases": "setattr(type(gate).__bases__[0], 'evaluate', lambda *a, **kw: None)",
+    "bases-through-a-name": "k = type(gate)\nb = k.__bases__[0]\nb.evaluate = lambda *a, **kw: None",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(GATE_CLASS_ALIASES))
+def test_the_gate_class_through_any_alias_is_a_gate_patch(
+    tmp_path: Path, shape: str
+) -> None:
+    src = _kat_without_answer(
+        GATE_CLASS_ALIASES[shape] + "\nd = gate.evaluate('s', 'read_file', ['zqxwvk'])"
+        "\nassert d.verdict is Verdict.DENY"
+    )
+    _expect(tmp_path, src, "patches the gate")
+
+
+def test_a_class_alias_of_something_else_is_not_a_gate_patch(tmp_path: Path) -> None:
+    body = (
+        "for k in (int,):\n    pass\n"
+        "def cls(x):\n    return type(x)\n"
+        "kind = cls(1)\n"
+        "assert d.verdict is Verdict.DENY"
+    )
+    r = _lint(_write(tmp_path, "test_k_case.py", _kat_without_answer(body)))
+    assert r.returncode == 0, r.stdout
