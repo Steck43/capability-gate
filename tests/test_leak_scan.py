@@ -6,7 +6,9 @@ it tests.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -269,3 +271,174 @@ def test_text_mode_fails_closed_without_list(repo: Path) -> None:
     )
     assert r.returncode == 1
     assert "denylist not configured" in r.stdout
+
+
+# --- the scanner never prints a raw matched path or name (brief 82-41b P4) --------
+# The fake term stands in for a private name. It sits in a file name, alone or
+# beside a content hit, in every mode; no output stream may carry it. It is not
+# the shared list's canary, which the scanner skips (see below).
+
+FAKE = "qvz" + "kxj"
+
+
+def _commit_all(repo: Path, message: str) -> None:
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", message)
+
+
+@pytest.mark.parametrize(
+    ("content", "mode"),
+    [
+        pytest.param("clean text\n", "ci", id="name-only-ci"),
+        pytest.param(f"{SYNTHETIC_PRIVATE_IP}\n", "ci", id="name-and-content-ci"),
+        pytest.param("clean text\n", "staged", id="name-only-staged"),
+        pytest.param(
+            f"{SYNTHETIC_POSIX_PATH}\n", "staged", id="name-and-content-staged"
+        ),
+        pytest.param("clean text\n", "tree", id="name-only-tree"),
+        pytest.param(f"{SYNTHETIC_PRIVATE_IP}\n", "tree", id="name-and-content-tree"),
+        pytest.param(f"{SYNTHETIC_PRIVATE_IP}\n", "files", id="name-and-content-files"),
+        pytest.param("clean text\n", "files", id="name-only-files"),
+    ],
+)
+def test_a_matched_file_name_never_reaches_the_output(
+    repo: Path, content: str, mode: str
+) -> None:
+    (repo / "base.md").write_text("base\n", encoding="utf-8")
+    _commit_all(repo, "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    name = f"notes-{FAKE}.md"
+    (repo / name).write_text(content, encoding="utf-8")
+    if mode == "staged":
+        _git(repo, "add", "-A")
+        args = ["--staged"]
+    elif mode == "ci":
+        _commit_all(repo, "add notes")
+        args = ["--ci", "--base", base]
+    elif mode == "tree":
+        _commit_all(repo, "add notes")
+        args = ["--tree"]
+    else:
+        args = [name]
+    r = _run(args, repo, denylist=FAKE)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert FAKE not in (r.stdout + r.stderr).lower(), r.stdout + r.stderr
+
+
+def test_a_git_failure_never_echoes_a_path(repo: Path) -> None:
+    r = _run(["--ci", "--base", f"{FAKE}-missing-ref"], repo, denylist=FAKE)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert FAKE not in (r.stdout + r.stderr).lower(), r.stdout + r.stderr
+
+
+# --- a reported hash cannot be confirmed offline (brief 82-41c P5) -----------------
+
+
+def _tags(repo: Path) -> list[str]:
+    r = _run(["--tree"], repo, denylist=FAKE)
+    assert r.returncode == 1, r.stdout + r.stderr
+    return re.findall(r"file #([0-9a-f]{12})", r.stdout)
+
+
+def test_a_reported_hash_cannot_be_confirmed_offline(repo: Path) -> None:
+    name = f"notes-{FAKE}.md"
+    (repo / name).write_text("clean text\n", encoding="utf-8")
+    _commit_all(repo, "add notes")
+    first, second = _tags(repo), _tags(repo)
+    assert first and second, (first, second)
+    # Someone holding a list of candidate names cannot hash a guess to match.
+    unsalted = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+    assert unsalted not in first + second
+    # Each run draws its own salt, so two runs never print the same tag.
+    assert set(first).isdisjoint(second), (first, second)
+
+
+# --- the shared list's canary line is not a name (shared secret, 2026-10-14) ------
+# The same LEAK_DENYLIST value feeds isolation-layer's public surface scan, which
+# needs the fixed canary "zqxwvk" to prove the list matches. Here that line is
+# skipped: it names nothing private, and the tests use it as a fake term.
+
+CANARY = "zqx" + "wvk"
+
+
+def _commit(repo: Path, message: str) -> str:
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", message], check=True)
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+@pytest.mark.parametrize("canary", [CANARY, CANARY.upper(), f"  {CANARY}  "])
+def test_the_canary_line_is_not_a_name(repo: Path, canary: str) -> None:
+    f = _write(repo, f"fixture {CANARY} and {CANARY.upper()}\n")
+    r = _run([str(f)], repo, denylist=f"{canary}\n{SYNTHETIC_NAME}\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_canary_line_is_not_a_name_in_ci_mode(repo: Path) -> None:
+    _write(repo, "base\n")
+    base = _commit(repo, "base")
+    _write(repo, f"fixture {CANARY}\n")
+    _commit(repo, f"add a {CANARY} fixture")
+    r = _run(["--ci", "--base", base], repo, denylist=f"{CANARY}\n{SYNTHETIC_NAME}\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_every_other_entry_still_hits_beside_the_canary(repo: Path) -> None:
+    f = _write(repo, f"notes on {SYNTHETIC_NAME}\n")
+    r = _run([str(f)], repo, denylist=f"{CANARY}\n{SYNTHETIC_NAME}\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist entry 1" in r.stdout, r.stdout
+
+
+def test_a_list_holding_only_the_canary_is_not_configured(repo: Path) -> None:
+    _write(repo, "base\n")
+    base = _commit(repo, "base")
+    r = _run(["--ci", "--base", base], repo, denylist=f"{CANARY}\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist not configured" in r.stdout, r.stdout
+
+
+# Only the exact canary line is skipped. A line that contains the canary, or
+# looks like it, is a real entry and still hits.
+
+
+@pytest.mark.parametrize(
+    ("entry", "planted"),
+    [
+        pytest.param(f"{CANARY}2", f"{CANARY}2", id="suffix"),
+        pytest.param(f"x{CANARY}", f"x{CANARY}", id="prefix"),
+        pytest.param(f"{CANARY} {CANARY}", f"{CANARY} {CANARY}", id="doubled"),
+        pytest.param(f"{CANARY}.", f"{CANARY}.", id="punctuated"),
+        pytest.param("zqx wvk", "zqx wvk", id="split"),
+        pytest.param("zqxwvк", "zqxwvк", id="look-alike-letter"),
+        pytest.param(f"re:{CANARY}", CANARY, id="regex-of-canary"),
+        pytest.param(f"re:\\b{CANARY}\\b", CANARY, id="bounded-regex-of-canary"),
+    ],
+)
+def test_a_line_that_only_resembles_the_canary_stays_a_real_entry(
+    repo: Path, entry: str, planted: str
+) -> None:
+    f = _write(repo, f"text {planted} text\n")
+    r = _run([str(f)], repo, denylist=f"{CANARY}\n{entry}\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist entry 1" in r.stdout, r.stdout
+
+
+def test_negative_control_the_scanner_finds_a_planted_canary_when_asked(
+    repo: Path,
+) -> None:
+    """The skip is not a blind spot in matching. With the canary line present
+    and the canary also listed as a pattern, a planted canary is found; with
+    only the canary line beside another name, the same text passes."""
+    f = _write(repo, f"planted {CANARY} here\n")
+    asked = _run([str(f)], repo, denylist=f"{CANARY}\nre:{CANARY}\n")
+    assert asked.returncode == 1, asked.stdout + asked.stderr
+    assert "denylist entry 1" in asked.stdout, asked.stdout
+    assert CANARY not in asked.stdout + asked.stderr
+    skipped = _run([str(f)], repo, denylist=f"{CANARY}\n{SYNTHETIC_NAME}\n")
+    assert skipped.returncode == 0, skipped.stdout + skipped.stderr

@@ -41,6 +41,6 @@ checked by `tests/test_source_map.py::test_source_map_nodes_exist`.
 
 ## Not measured
 
-Live Hermes doors, a live AgentDojo suite, aegisbox execution, judge apply,
+Live Hermes doors, a live AgentDojo suite, test box execution, judge apply,
 layer-order permutations, disk-full tmpfs behavior, Windows ACLs, and a
 sanitized benign-day recording remain outside this offline map.

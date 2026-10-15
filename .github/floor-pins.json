@@ -26,7 +26,7 @@
     },
     {
       "path": ".github/workflows/floor.yml",
-      "sha256": "cb71cc2da15552eae6f4d0d503a89ec2d4f08031fe16365113e007f802082577"
+      "sha256": "00ac5b1dae0f2c0beaf9d1c7e4e5d4a18a1be770b278ad7f822157373223cfa3"
     },
     {
       "path": ".github/workflows/plugin-bundle.yml",
@@ -41,8 +41,16 @@
       "sha256": "72cd732aa8da3890e81c06a42dd49c1731f23cb3264db7fb10064e8c9eeac343"
     },
     {
+      "path": ".gitleaksignore",
+      "sha256": "89c72cb9080d5f5a86f541b1086a99bc22bff23001cd99af8a7085d2642f3d13"
+    },
+    {
       "path": ".pre-commit-config.yaml",
       "sha256": "6e2a4c6e7857ff3931fdb42d383d21df199c938cc788306355f4e2b99df895b5"
+    },
+    {
+      "path": "conftest.py",
+      "sha256": "5d116113010331f7f2f558023d40d1d0f8207e161822291fa852acb0d9a03365"
     },
     {
       "path": "pytest.ini",
@@ -53,8 +61,12 @@
       "sha256": "b0883c22e6b31cca54a2180736c25294afac5e2f119c39c6ed6a4cb6e21ee6b7"
     },
     {
+      "path": "ruff.toml",
+      "sha256": "d46146935d7e85777297a687c6fd33294758750371aeeb4aa2050cbb84f08e93"
+    },
+    {
       "path": "scripts/floor_guard.py",
-      "sha256": "ec90eba1c36f9cd1c16c1465428e75679a8905b11f9b6a85d6880dc5c060ed36"
+      "sha256": "94caf3fb5bc4dff88da1181a08f3b4c2f2122c45d810a09a3dbce3c1495def37"
     },
     {
       "path": "scripts/kat_lint.py",
@@ -62,49 +74,57 @@
     },
     {
       "path": "scripts/leak_denylist_scan.py",
-      "sha256": "e44934d6ac19235c024d2cc3b86667ef04f955dc6a555c0878aee99eb737a136"
+      "sha256": "f5b3a609a4cd03e611db1f739d727b879d6afae14bb6b301c11b3eaf555ac452"
+    },
+    {
+      "path": "scripts/no_ai_trailers.py",
+      "sha256": "552f24eeb3a69f8234bc7a4481fc0f91cecb1b5e0b5b7aa3e5e2172aad0feeaf"
+    },
+    {
+      "path": "scripts/run_record_check.py",
+      "sha256": "456b68a255b5fbd6311ead47861a6f43f9b4b7ee47ad9ae82bb06f9cf5a1df21"
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "28be953b055f8be2c39e2517e6fea90ddba687fa7b957e8fe97098a6287b8809"
+      "sha256": "a9d69343a089222455666c916ca7ef365f7c4b9d4ba911c33557326e110b4279"
     }
   ],
   "jobs": [
     {
       "job": "authorship",
-      "sha256": "83275b07c86396684fe4df378e33499dcfd4d7f1789455f179f4be369bb6a583"
+      "sha256": "ab6f44439bd070fad6add07782ff1eee4b0725c33e71f65ac69a2ca70b3e78c9"
     },
     {
       "job": "craft-changelog",
-      "sha256": "13b7ba0794707ee54b9be356196f79c8619fecd2ceba5f1d88daf62c1b6ee313"
+      "sha256": "ff9ddf1f43adb994c6ec883d9e964088a7244cca1ae55557fccf0d965d1a99b0"
     },
     {
       "job": "craft-comments",
-      "sha256": "828c725f31591e4fd05b4514fa201ebce3f2d56a3752ee4504797f5fe1b0cbec"
+      "sha256": "c781b8e9d0cf70055dd628bd57ba1cc76345db47ea11d3aa611fe12a526ad991"
     },
     {
       "job": "craft-empty-diff",
-      "sha256": "5c4960942e8679ae2427e1527e0c9ebbd0fdc7f9d9fe792cb1b92205e4eb4435"
+      "sha256": "d1ef4648cb36ef4485cacb7f499235f0e04849a15b3de39d8f51be5431021d2a"
     },
     {
       "job": "craft-voice",
-      "sha256": "65d86c60881a3d4e15a14a687828c36a2a5806dafa1b5b522a8ba0b7b2195921"
+      "sha256": "1f5c1f708d1f319bede4ddbe5c7392728dc638ac62057d58d163d4f9a7db46ef"
     },
     {
       "job": "floor-guard",
-      "sha256": "8d17d6c644167b1397a436976adaf3a8fdd55287edfc8b66303dee9dcb8ebd89"
+      "sha256": "2e30cf89f66267c8d9c23781b25e098ad865bae08fac42859622a60c2abd9f00"
     },
     {
       "job": "kat-lint",
-      "sha256": "1748cd53ba5c1a15a7f9ee2a9ec3247401170895854ca0b511145e59d6153fa0"
+      "sha256": "19267e88a93b327454d0b11a940671ef4b42cdb760c1ebe6fb21250c0c4b29d4"
     },
     {
       "job": "leak-denylist",
-      "sha256": "b716352b513c165f70ccbce30d6db3231d03e98b4ac7879fad9444c104419072"
+      "sha256": "30d0d322501d333143704e50b6b5e50ebe3c3cf8e22c8b13b2153452979cb2f2"
     },
     {
       "job": "lint",
-      "sha256": "b54b36abd2662587f57b5ff0a1515907b43dae6c171e7accbc808fd47db3513b"
+      "sha256": "77c70cbd8381853a0215c2a04e4d6bff221b5d1ae7499f4e279fa497d23029a0"
     },
     {
       "job": "secrets",
@@ -112,7 +132,7 @@
     },
     {
       "job": "tests",
-      "sha256": "e88d8821eb1acb062c2a096edb4a36868df7aff4b450428458e88c973951a7a7"
+      "sha256": "996ab3ea33ca0a41dcdef73812e49b501df91ef6d19b0ee99f14cfb6c3d96722"
     },
     {
       "job": "workflow-lint",
@@ -120,6 +140,6 @@
     }
   ],
   "workflow": {
-    "sha256": "00d9934e759a93c13e9902ec0412f12474574973fe134172b091d7fabf3222ee"
+    "sha256": "b399f8a1ac560da3b4d81bc971928862c87ea0e6cd6a55909d302475a67a876b"
   }
 }
