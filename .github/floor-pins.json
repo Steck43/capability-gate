@@ -90,7 +90,7 @@
     },
     {
       "path": "tests/test_kat_lint.py",
-      "sha256": "dd6e24353bf5ddcffeed51600fe2feb0944e7381c904691c1f202370252887b3"
+      "sha256": "0a41a19e2ad2be030f60e7b270113ad8ed4f5b99cdec47f0c845d6db0a2d776f"
     },
     {
       "path": "tests/test_public_text_paths.py",

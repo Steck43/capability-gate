@@ -3971,3 +3971,51 @@ def test_an_assert_after_an_imperative_outcome_never_runs(
 ) -> None:
     body = ENDS_THE_TEST[shape] + "\nassert d.verdict is Verdict.DENY"
     _expect(tmp_path, _kat_without_answer(body), _NO_ANSWER)
+
+
+# Each named richer form holds only with its own literal on the other side.
+NAMED_FORMS_WITH_THE_WRONG_SIDE = {
+    "enforced-against-a-string": "assert d.enforced == 'zqxwvk'",
+    "enforced-against-the-reason": "assert d.enforced is d.reason",
+    "paths-against-the-reason": "assert d.paths == (d.reason,)",
+    "paths-against-a-number": "assert d.paths == (1,)",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(NAMED_FORMS_WITH_THE_WRONG_SIDE))
+def test_a_named_form_with_the_wrong_side_is_refused(
+    tmp_path: Path, shape: str
+) -> None:
+    body = "assert d.verdict is Verdict.DENY\n" + NAMED_FORMS_WITH_THE_WRONG_SIDE[shape]
+    _expect(tmp_path, _kat_without_answer(body), _ANSWER_REFUSED)
+
+
+# A globals() store under a key the lint cannot fold may be any name.
+def test_a_globals_store_under_an_unknown_key_takes_every_name_out(
+    tmp_path: Path,
+) -> None:
+    body = "globals()[os.environ.get('ZQXWVK', 'd')] = None\nassert d.verdict is Verdict.DENY"
+    _expect(tmp_path, _kat_without_answer(body), _NO_ANSWER)
+
+
+_FIXTURE_RESULT = (
+    KAT_HEAD + "\n@pytest.fixture()\ndef decision(gate):\n"
+    "    return gate.evaluate('s', 'read_file', ['zqxwvk'])\n\n\n"
+    "def test_k_case(decision):\n"
+)
+
+
+# A fixture that returns the gate's result stops counting once the test
+# stores to its parameter.
+def test_a_result_fixture_rebound_in_the_test_is_not_an_answer(tmp_path: Path) -> None:
+    src = (
+        _FIXTURE_RESULT
+        + "    decision = None\n    assert decision.verdict is Verdict.DENY\n"
+    )
+    _expect(tmp_path, src, _NO_ANSWER)
+
+
+def test_a_result_fixture_left_alone_is_an_answer(tmp_path: Path) -> None:
+    src = _FIXTURE_RESULT + "    assert decision.verdict is Verdict.DENY\n"
+    r = _lint(_write(tmp_path, "test_k_case.py", src))
+    assert r.returncode == 0, r.stdout
