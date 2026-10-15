@@ -13,7 +13,9 @@ Two pattern sources:
   substring, so a name glued to other text ("NameReview") still matches;
   prefix it with "re:" for a raw regex, for example word boundaries on a name
   that is also part of common words. Blank lines and lines starting with "#"
-  are skipped.
+  are skipped, and so is the line "zqxwvk" in any case: the same list feeds
+  another repository's scan, which needs that fixed canary, and it names
+  nothing private. A list holding only the canary counts as not configured.
 
 Modes:
 
@@ -50,6 +52,7 @@ from collections import Counter
 from pathlib import Path
 
 ENV_VAR = "LEAK_DENYLIST"
+CANARY = "zqxwvk"
 LOCAL_FILE = "leak-denylist"
 
 _OCTET = r"(?:25[0-5]|2[0-4]\d|1?\d?\d)"
@@ -104,7 +107,11 @@ def load_denylist() -> list[re.Pattern[str]] | None:
             return None
         raw = path.read_text(encoding="utf-8")
     lines = [ln.strip() for ln in raw.splitlines()]
-    pats = [_compile_line(ln) for ln in lines if ln and not ln.startswith("#")]
+    pats = [
+        _compile_line(ln)
+        for ln in lines
+        if ln and not ln.startswith("#") and ln.casefold() != CANARY
+    ]
     return pats or None
 
 
