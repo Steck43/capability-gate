@@ -40,7 +40,11 @@ Constant folding sees literals, empty literals, names provably assigned once
 (module, function, and tuple-unpacking bindings, annotated bindings, walrus),
 ternaries, ``and`` and ``or`` with a constant side, ``not``, arithmetic,
 comparisons and chains, membership in an empty container, subscripts, and the
-pure builtins (``bool``, ``int``, ``len`` and the rest of ``_PURE``). A name
+pure builtins (``bool``, ``int``, ``len`` and the rest of ``_PURE``), and a
+constant routed through something the file binds once: a no-argument helper
+whose body is one ``return``, a lambda, a ``functools.partial``, a class
+attribute or staticmethod of a class used only by attribute reads and calls,
+``getattr`` with a constant name, and a dict or list read by subscript. A name
 with a second binding of any kind (augmented, loop, handler, ``global`` or
 ``nonlocal`` from another scope, ``del``) is not folded, and a mutable literal
 stops folding once it is passed anywhere it could change.
@@ -115,7 +119,12 @@ one, through a list it was appended to, through a same-file fixture that
 returns one, or through a same-file helper that asserts on the argument it is
 given. An ``assert`` inside a ``try`` whose handler catches its failure
 (``AssertionError``, ``Exception``, ``BaseException``, a bare ``except`` or a
-tuple holding one) and does not raise again does not count.
+tuple holding one) and does not raise again does not count, nor does one
+inside a ``try`` whose ``finally`` returns, breaks or continues (that discards
+the failure), nor one that follows a ``break`` or ``continue``, or follows a
+block that always returns or raises (a constant-true branch, a ``with`` or
+``try`` body, a loop over a non-empty constant, ``while True``, or a ``match``
+whose first case matches everything).
 
 A name defined more than once at module level in a KAT file is rejected:
 pytest uses the last definition, so a second fixture of the same name can
@@ -542,6 +551,36 @@ class Folder:
             for name in n.names
         }
         self._envs: dict[ast.AST, dict[str, object]] = {}
+        # How often each name is bound anywhere in the file, and the module-level
+        # definition of each name bound exactly once: a constant routed through
+        # one of these (a helper, lambda, partial, class attribute) still folds.
+        counts: dict[str, int] = {}
+        for n in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+                names = [n.id]
+            elif isinstance(n, (*_FUNCS, ast.ClassDef)):
+                names = [n.name]
+            elif isinstance(n, (ast.Import, ast.ImportFrom)):
+                names = [(a.asname or a.name).split(".", 1)[0] for a in n.names]
+            elif isinstance(n, ast.arg):
+                names = [n.arg]
+            for name in names:
+                counts[name] = counts.get(name, 0) + 1
+        self.top: dict[str, ast.AST] = {}
+        for s in tree.body:
+            if isinstance(s, (*_FUNCS, ast.ClassDef)):
+                name, value = s.name, s
+            elif (
+                isinstance(s, ast.Assign)
+                and len(s.targets) == 1
+                and isinstance(s.targets[0], ast.Name)
+            ):
+                name, value = s.targets[0].id, s.value
+            else:
+                continue
+            if counts.get(name) == 1 and name not in self.shared:
+                self.top[name] = value
 
     def scope_of(self, node: ast.AST) -> ast.AST:
         """The function whose body holds node. Decorators and defaults run outside."""
@@ -595,6 +634,15 @@ class Folder:
                 continue
             p = self.parents.get(n)
             if isinstance(p, _READ_PARENTS):
+                continue
+            # A subscript read whose value is only read (an assert, a test, a
+            # comparison) cannot change the container.
+            if (
+                isinstance(p, ast.Subscript)
+                and p.value is n
+                and isinstance(p.ctx, ast.Load)
+                and isinstance(self.parents.get(p), _READ_PARENTS)
+            ):
                 continue
             if (
                 isinstance(p, (ast.For, ast.AsyncFor, ast.comprehension))
@@ -724,6 +772,11 @@ class Folder:
             return self._fold_compare(node, env, d)
         if isinstance(node, ast.Call):
             return self._fold_call(node, env, d)
+        if isinstance(node, ast.Attribute):
+            value = self._class_member(node.value, node.attr)
+            if isinstance(value, ast.expr):
+                return self._fold(value, self.at(value), d)
+            return UNKNOWN
         if isinstance(node, ast.Subscript):
             vk, vv = self._fold(node.value, env, d)
             sk, sv = self._fold(node.slice, env, d)
@@ -834,8 +887,109 @@ class Folder:
         except Exception:
             return RAISES
 
+    def _sealed_class(self, node: ast.AST) -> ast.ClassDef | None:
+        """A module class bound once whose every use reads an attribute or
+        calls it, so nothing outside its body can change its members."""
+        if not isinstance(node, ast.Name):
+            return None
+        cls = self.top.get(node.id)
+        if not isinstance(cls, ast.ClassDef):
+            return None
+        for n in ast.walk(self.tree):
+            if isinstance(n, ast.Name) and n.id == node.id and n is not node:
+                p = self.parents.get(n)
+                if isinstance(p, ast.Attribute) and isinstance(p.ctx, ast.Load):
+                    continue
+                if isinstance(p, ast.Call) and p.func is n:
+                    continue
+                return None
+        return cls
+
+    def _class_member(self, owner: ast.AST, attr: str) -> ast.AST | None:
+        """The one definition of attr in a sealed class: an assigned value or a
+        staticmethod."""
+        cls = self._sealed_class(owner)
+        if cls is None:
+            return None
+        found = []
+        for s in cls.body:
+            if (
+                isinstance(s, ast.Assign)
+                and len(s.targets) == 1
+                and isinstance(s.targets[0], ast.Name)
+                and s.targets[0].id == attr
+            ):
+                found.append(s.value)
+            elif isinstance(s, (*_FUNCS, ast.ClassDef)) and s.name == attr:
+                static = any(
+                    isinstance(dd, ast.Name) and dd.id == "staticmethod"
+                    for dd in getattr(s, "decorator_list", [])
+                )
+                found.append(s if static else None)
+            elif isinstance(s, (ast.AugAssign, ast.AnnAssign)) and (
+                getattr(s.target, "id", None) == attr
+            ):
+                found.append(None)
+        return found[0] if len(found) == 1 else None
+
+    def _fold_routed(self, node: ast.Call, env, d):
+        """A no-argument call of a same-file helper, lambda, staticmethod or
+        functools.partial that the file binds once."""
+        f = node.func
+        target: ast.AST | None = None
+        if isinstance(f, ast.Name) and (
+            f.id not in env or isinstance(self.top.get(f.id), ast.Lambda)
+        ):
+            target = self.top.get(f.id)
+        elif isinstance(f, ast.Attribute):
+            target = self._class_member(f.value, f.attr)
+        if target is None:
+            return None
+        if (
+            isinstance(target, ast.Call)
+            and ast.unparse(target.func) in ("functools.partial", "partial")
+            and target.args
+            and not target.keywords
+        ):
+            call = ast.Call(target.args[0], [*target.args[1:], *node.args], [])
+            ast.copy_location(call, node)
+            self.parents[call] = self.parents.get(node, self.tree)
+            return self._fold_call(call, env, d)
+        if node.args or node.keywords:
+            return None
+        if isinstance(target, ast.Lambda) and not target.args.args:
+            return self._fold(target.body, self.at(target.body), d)
+        if isinstance(target, _FUNCS) and not (
+            target.args.args or target.args.posonlyargs or target.args.kwonlyargs
+        ):
+            body = [
+                s
+                for s in target.body
+                if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))
+            ]
+            if len(body) == 1 and isinstance(body[0], ast.Return) and body[0].value:
+                return self._fold(body[0].value, self.at(body[0].value), d)
+        return None
+
     def _fold_call(self, node: ast.Call, env, d):
         f = node.func
+        if (
+            isinstance(f, ast.Name)
+            and f.id == "getattr"
+            and f.id not in self.file_bound
+            and len(node.args) == 2
+            and not node.keywords
+        ):
+            kind, name = self._fold(node.args[1], env, d)
+            if kind == "value" and isinstance(name, str):
+                attr = ast.Attribute(node.args[0], name, ast.Load())
+                ast.copy_location(attr, node)
+                self.parents[attr] = self.parents.get(node, self.tree)
+                return self._fold(attr, env, d)
+            return UNKNOWN
+        routed = self._fold_routed(node, env, d)
+        if routed is not None:
+            return routed
         if not (
             isinstance(f, ast.Name) and f.id in _PURE and f.id not in self.file_bound
         ):
@@ -1379,8 +1533,66 @@ class _File:
             elif isinstance(s, ast.Match):
                 for c in s.cases:
                     yield from self.live_stmts(c.body)
-            if isinstance(s, (ast.Return, ast.Raise)):
+            if self.leaves(s):
                 return
+
+    def leaves(self, s: ast.stmt, jumps_only: bool = False) -> str | None:
+        """'func' when a statement always leaves the function (return, or
+        raise unless jumps_only), 'loop' when it always leaves the enclosing
+        loop body (break, continue), else None."""
+        if isinstance(s, ast.Return) or (isinstance(s, ast.Raise) and not jumps_only):
+            return "func"
+        if isinstance(s, (ast.Break, ast.Continue)):
+            return "loop"
+        if isinstance(s, ast.If):
+            t = self.fold.truth(s.test)
+            if t == "true":
+                return self.block_leaves(s.body, jumps_only)
+            if t == "false":
+                return self.block_leaves(s.orelse, jumps_only)
+            a = self.block_leaves(s.body, jumps_only)
+            b = self.block_leaves(s.orelse, jumps_only)
+            if a and b:
+                return "func" if a == b == "func" else "loop"
+            return None
+        if isinstance(s, (ast.With, ast.AsyncWith)):
+            if any(self.expected_exception(i) for i in s.items):
+                return None
+            return self.block_leaves(s.body, jumps_only)
+        if isinstance(s, ast.Try) or type(s).__name__ == "TryStar":
+            final = self.block_leaves(s.finalbody, jumps_only)
+            if final:
+                return final
+            body = self.block_leaves(s.body, True if s.handlers else jumps_only)
+            return body
+        if isinstance(s, (ast.For, ast.AsyncFor)):
+            kind, v = self.fold.fold(s.iter, self.fold.at(s))
+            try:
+                runs = kind == "value" and len(v) > 0  # type: ignore[arg-type]
+            except TypeError:
+                runs = False
+            if runs and self.block_leaves(s.body, jumps_only) == "func":
+                return "func"
+            return None
+        if isinstance(s, ast.While):
+            if (
+                self.fold.truth(s.test) == "true"
+                and self.block_leaves(s.body, jumps_only) == "func"
+            ):
+                return "func"
+            return None
+        if isinstance(s, ast.Match) and s.cases:
+            first = s.cases[0]
+            if first.guard is None and _irrefutable(first.pattern):
+                return self.block_leaves(first.body, jumps_only)
+        return None
+
+    def block_leaves(self, stmts: list[ast.stmt], jumps_only: bool = False):
+        for s in stmts:
+            how = self.leaves(s, jumps_only)
+            if how:
+                return how
+        return None
 
     @staticmethod
     def stmt_exprs(s: ast.stmt) -> list[ast.AST]:
@@ -1817,6 +2029,15 @@ class _File:
                         isinstance(x, ast.Raise) for x in ast.walk(h)
                     ):
                         return True
+            # A finally that returns, breaks or continues discards the
+            # assert's failure on the way out.
+            if (
+                (isinstance(p, ast.Try) or type(p).__name__ == "TryStar")
+                and child is not None
+                and child not in p.finalbody
+                and self.block_leaves(p.finalbody, jumps_only=True)
+            ):
+                return True
             child = p
         return False
 
