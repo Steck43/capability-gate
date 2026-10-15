@@ -152,7 +152,8 @@ inside a ``try`` whose ``finally`` returns, breaks or continues (that discards
 the failure), nor one that follows a ``break`` or ``continue``, or follows a
 block that always returns or raises (a constant-true branch, a ``with`` or
 ``try`` body, a loop over a non-empty constant, ``while True``, or a ``match``
-whose first case matches everything).
+whose first case matches everything), nor one in the ``else`` of a ``while``
+loop whose test is always true (that ``else`` never runs).
 
 A name defined more than once at module level in a KAT file is rejected:
 pytest uses the last definition, so a second fixture of the same name can
@@ -1692,9 +1693,13 @@ class _File:
                     yield from self.live_stmts(s.body)
                 yield from self.live_stmts(s.orelse)
             elif isinstance(s, ast.While):
-                if self.fold.truth(s.test) != "false":
+                t = self.fold.truth(s.test)
+                if t != "false":
                     yield from self.live_stmts(s.body)
-                yield from self.live_stmts(s.orelse)
+                # The else runs only when the test turns false; a test that is
+                # always true never does, so its else is dead.
+                if t != "true":
+                    yield from self.live_stmts(s.orelse)
             elif isinstance(s, (ast.With, ast.AsyncWith)):
                 if not any(self.expected_exception(i) for i in s.items):
                     yield from self.live_stmts(s.body)
