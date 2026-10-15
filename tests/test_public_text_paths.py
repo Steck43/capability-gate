@@ -471,3 +471,37 @@ def test_an_invisible_or_combining_character_inside_the_name_never_hides_it(
 
 def test_a_combining_mark_on_another_word_stays_clean() -> None:
     assert not _foreign("café and naïve prose")
+
+
+# --- a path built from a runtime value is not a path in this checkout -------------
+
+_RUNTIME_JOINS = [
+    pytest.param(f'base / "{_R}" / "y.md"', id="path-operator-variable"),
+    pytest.param(f'Path(home) / "{_R}"', id="path-operator-call"),
+    pytest.param(f'cfg.root / "{_R}/y.md"', id="path-operator-attribute"),
+    pytest.param(f'os.path.join(base, "{_R}", "y.md")', id="os-path-join-variable"),
+    pytest.param(
+        f'os.path.join("docs", base, "{_R}")', id="os-path-join-middle-variable"
+    ),
+    pytest.param(f'os.path.join(get_root(), "{_R}")', id="os-path-join-call"),
+    pytest.param(f'root.joinpath("{_R}", "y.md")', id="joinpath-variable"),
+    pytest.param(f'base + "{_R}/y.md"', id="concat-variable-first"),
+    pytest.param(f'"/x/" + base + "{_R}/y.md"', id="concat-variable-middle"),
+]
+
+
+@pytest.mark.parametrize("line", _RUNTIME_JOINS)
+def test_a_receipt_path_joined_onto_a_runtime_value_is_foreign(line: str) -> None:
+    assert _foreign(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(f'os.path.join("{_R}", "y.md")', id="join-starting-at-the-folder"),
+        pytest.param(f'"{_R}/" + name', id="variable-after-the-folder"),
+        pytest.param("total = a / b + c", id="arithmetic"),
+    ],
+)
+def test_a_join_that_starts_at_this_checkouts_folder_stays_clean(line: str) -> None:
+    assert not _foreign(line)
