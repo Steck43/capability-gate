@@ -70,7 +70,7 @@
     },
     {
       "path": "scripts/kat_lint.py",
-      "sha256": "25595211f2d8b794f4591d629a8e79fe943e2c580025a069120785813ad2f9d4"
+      "sha256": "01b034991fbbd2a115a49dd40a1edc79a51b5f791b3380f7e10ccc1917039798"
     },
     {
       "path": "scripts/leak_denylist_scan.py",
@@ -90,7 +90,7 @@
     },
     {
       "path": "tests/test_kat_lint.py",
-      "sha256": "b5c34f3e46543fd2ee7e4a1c08bade83a60fd7d6e4879812eb0d018e312f82a1"
+      "sha256": "32c8ed761ef6eae96de2904835b8db8565af7fc412bc41c70f32a979a7ea45e5"
     },
     {
       "path": "tests/test_public_text_paths.py",

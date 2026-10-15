@@ -30,7 +30,12 @@ Fiat outcomes, anywhere in the file (tests, helpers, nested functions, module):
   ``isinstance(x, object)``, a constant element of a literal tuple or list
   picked by a constant index, or membership in a literal container that names
   every ``Verdict`` member, and an ``or`` with an always-true side or an
-  ``and`` with an always-false side (``assert r == r or r``);
+  ``and`` with an always-false side (``assert r == r or r``), including a
+  side beside its own negation (``x == y or x != y``, ``p or not p``,
+  ``not (p and not p)``); sides are compared after ``not`` is folded in,
+  ``bool(x)`` is read as ``x``, ``!=``, ``is not`` and ``not in`` are read as
+  negated ``==``, ``is`` and ``in``, and ``==`` and ``is`` operands are put in
+  a fixed order;
 * a statement, return value, or assigned value that always raises;
 * in a test function, a ``raise`` that runs on every path and nothing catches.
   A loop over a non-empty constant, ``while True`` and the first case of a
@@ -2778,6 +2783,55 @@ def _tautology(f: _File, test: ast.AST) -> bool:
     return False
 
 
+_NEGATED_CMP = {
+    ast.Eq: (ast.Eq, True),
+    ast.NotEq: (ast.Eq, False),
+    ast.Is: (ast.Is, True),
+    ast.IsNot: (ast.Is, False),
+    ast.In: (ast.In, True),
+    ast.NotIn: (ast.In, False),
+}
+
+
+def _literal(f: _File, node: ast.AST, depth: int = 0) -> tuple[str, bool]:
+    """A side reduced to a key and a polarity, so a test and its negation share
+    the key with opposite polarity: ``not`` flips it, ``bool(x)`` is ``x``,
+    ``!=``, ``is not`` and ``not in`` are negated ``==``, ``is`` and ``in``,
+    and the operands of ``==`` and ``is`` are put in a fixed order."""
+    if depth < 20:
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            key, positive = _literal(f, node.operand, depth + 1)
+            return key, not positive
+        if (
+            isinstance(node, ast.Call)
+            and len(node.args) == 1
+            and not node.keywords
+            and f.names.resolve(node.func) == {"builtins.bool"}
+        ):
+            return _literal(f, node.args[0], depth + 1)
+        if isinstance(node, ast.Compare) and len(node.ops) == 1:
+            base = _NEGATED_CMP.get(type(node.ops[0]))
+            if base is not None:
+                op, positive = base
+                sides = [
+                    ast.dump(node.left, annotate_fields=False),
+                    ast.dump(node.comparators[0], annotate_fields=False),
+                ]
+                if op is not ast.In:
+                    sides.sort()
+                return f"{op.__name__}:{sides[0]}:{sides[1]}", positive
+    return ast.dump(node, annotate_fields=False), True
+
+
+def _has_pair(f: _File, values: list[ast.AST]) -> bool:
+    """Whether some side appears beside its own negation."""
+    seen: dict[str, set[bool]] = {}
+    for v in values:
+        key, positive = _literal(f, v)
+        seen.setdefault(key, set()).add(positive)
+    return any(len(p) == 2 for p in seen.values())
+
+
 def _side_truth(f: _File, node: ast.AST, depth: int = 0) -> bool | None:
     """The truth a side of an or/and has whatever the gate answered, or None
     when it depends on the answer. An `or` with an always-true side, or an
@@ -2789,6 +2843,9 @@ def _side_truth(f: _File, node: ast.AST, depth: int = 0) -> bool | None:
         inner = _side_truth(f, node.operand, d)
         return None if inner is None else not inner
     if isinstance(node, ast.BoolOp):
+        if _has_pair(f, node.values):
+            # A side and its own negation: an or is true, an and is false.
+            return isinstance(node.op, ast.Or)
         sides = [_side_truth(f, v, d) for v in node.values]
         if isinstance(node.op, ast.Or):
             if True in sides:
