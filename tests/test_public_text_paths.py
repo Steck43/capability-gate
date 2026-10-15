@@ -352,3 +352,46 @@ def test_a_path_that_lands_on_this_checkouts_receipts_is_still_foreign(
 )
 def test_a_name_only_one_text_view_shows_is_still_read(data: bytes) -> None:
     assert any(_foreign(ln) for v in _text_views(data) for ln in v.split("\n"))
+
+
+# --- look-alike letters in the folder name ------------------------------------
+
+
+def _swap(old: str, new: str) -> str:
+    return _R.replace(old, new)
+
+
+_LOOKALIKE_NAMES = [
+    pytest.param(_swap("r", "ʀ"), id="small-capital-r"),
+    pytest.param(_swap("e", "ᴇ"), id="small-capital-e"),
+    pytest.param(_swap("c", "ᴄ"), id="small-capital-c"),
+    pytest.param(_swap("i", "ɪ"), id="small-capital-i"),
+    pytest.param(_swap("p", "ᴘ"), id="small-capital-p"),
+    pytest.param(_swap("t", "ᴛ"), id="small-capital-t"),
+    pytest.param(_swap("s", "ꜱ"), id="small-capital-s"),
+    pytest.param(_swap("i", "ι"), id="greek-iota"),
+    pytest.param(_swap("p", "ρ"), id="greek-rho"),
+    pytest.param(_swap("e", "ε"), id="greek-epsilon"),
+    pytest.param(_swap("t", "τ"), id="greek-tau"),
+    pytest.param(_R.upper().replace("E", "Ε"), id="greek-capital-epsilon"),
+    pytest.param(_R.upper().replace("I", "Ι"), id="greek-capital-iota"),
+    pytest.param(_R.upper().replace("P", "Ρ"), id="greek-capital-rho"),
+    pytest.param(_R.upper().replace("T", "Τ"), id="greek-capital-tau"),
+    pytest.param(_R.upper().replace("T", "Т"), id="cyrillic-capital-te"),
+]
+
+
+@pytest.mark.parametrize("name", _LOOKALIKE_NAMES)
+def test_a_look_alike_letter_in_the_folder_name_never_hides_it(name: str) -> None:
+    assert _foreign(f"elsewhere/{name}/y.md")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param("ειρηνη is a word", id="greek-word"),
+        pytest.param("ᴇᴄʀ alone", id="small-capitals-alone"),
+    ],
+)
+def test_look_alike_letters_outside_the_folder_name_stay_clean(line: str) -> None:
+    assert not _foreign(line)
