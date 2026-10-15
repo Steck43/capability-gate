@@ -535,3 +535,57 @@ def test_a_receipt_path_joined_onto_a_runtime_value_is_foreign(line: str) -> Non
 )
 def test_a_join_that_starts_at_this_checkouts_folder_stays_clean(line: str) -> None:
     assert not _foreign(line)
+
+
+# --- a self-hosted forge is known by its URL shape, not its host -------------------
+
+_FORGE_SHAPES = [
+    pytest.param(
+        f"https://git.example.invalid/team/repo/-/blob/main/{_R}/y.md", id="gitlab-blob"
+    ),
+    pytest.param(
+        f"https://git.example.invalid/team/repo/-/tree/main/{_R}", id="gitlab-tree"
+    ),
+    pytest.param(
+        f"https://git.example.invalid/team/repo/-/raw/main/{_R}/y.md", id="gitlab-raw"
+    ),
+    pytest.param(
+        f"https://code.example.invalid/team/repo/src/branch/main/{_R}/y.md",
+        id="gitea-branch",
+    ),
+    pytest.param(
+        f"https://code.example.invalid/team/repo/src/commit/0123abcd/{_R}/y.md",
+        id="gitea-commit",
+    ),
+    pytest.param(
+        f"https://code.example.invalid/team/repo/src/tag/v1/{_R}/y.md", id="gitea-tag"
+    ),
+    pytest.param(
+        f"https://bb.example.invalid/team/repo/src/0123abcd4567/{_R}/y.md",
+        id="bitbucket-commit",
+    ),
+    pytest.param(
+        f"https://bb.example.invalid/team/repo/raw/0123abcd4567/{_R}/y.md",
+        id="bitbucket-raw",
+    ),
+]
+
+
+@pytest.mark.parametrize("line", _FORGE_SHAPES)
+def test_a_self_hosted_forge_url_points_into_another_repository(line: str) -> None:
+    assert _foreign(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(
+            f"https://docs.example.invalid/src/guide/{_R}/x", id="src-word-on-a-site"
+        ),
+        pytest.param(
+            f"https://example.invalid/blob/{_R}/x", id="blob-word-without-dash"
+        ),
+    ],
+)
+def test_a_web_url_without_a_forge_shape_stays_clean(line: str) -> None:
+    assert not _foreign(line)
