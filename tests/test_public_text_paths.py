@@ -415,3 +415,30 @@ def test_a_look_alike_letter_in_the_folder_name_never_hides_it(name: str) -> Non
 )
 def test_look_alike_letters_outside_the_folder_name_stay_clean(line: str) -> None:
     assert not _foreign(line)
+
+
+# --- invisible and combining characters inside the folder name -----------------
+
+_INSIDE = [
+    pytest.param("͏", id="combining-grapheme-joiner"),
+    pytest.param("ㅤ", id="hangul-filler"),
+    pytest.param("ﾠ", id="halfwidth-hangul-filler"),
+    pytest.param("ᅟ", id="hangul-choseong-filler"),
+    pytest.param("ᅠ", id="hangul-jungseong-filler"),
+    pytest.param("̇", id="combining-dot-above"),
+    pytest.param("́", id="combining-acute"),
+    pytest.param("⃝", id="combining-enclosing-circle"),
+    pytest.param("️", id="variation-selector"),
+    pytest.param("᠎", id="mongolian-vowel-separator"),
+]
+
+
+@pytest.mark.parametrize("mark", _INSIDE)
+def test_an_invisible_or_combining_character_inside_the_name_never_hides_it(
+    mark: str,
+) -> None:
+    assert _foreign(f"elsewhere/{_R[:4]}{mark}{_R[4:]}/y.md")
+
+
+def test_a_combining_mark_on_another_word_stays_clean() -> None:
+    assert not _foreign("café and naïve prose")
