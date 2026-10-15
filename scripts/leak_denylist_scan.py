@@ -226,13 +226,20 @@ def _added_lines(*diff_args: str) -> list[tuple[str, str]]:
     Scanning whole files would fail every edit to a file that already carries a
     known hit, so pre-commit and CI judge only what the change adds.
     """
+    # --text and an empty attributes file: a "-diff" or "binary" attribute, from
+    # the tree or from any attributes file, would turn added lines into a
+    # "Binary files differ" line the scan never reads.
     diff = _git(
         "-c",
         "core.quotepath=false",
+        "-c",
+        f"core.attributesFile={os.devnull}",
         "diff",
+        "--text",
         "--unified=0",
         "--no-color",
         "--no-ext-diff",
+        "--no-textconv",
         "--no-renames",
         *diff_args,
     )
