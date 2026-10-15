@@ -351,6 +351,8 @@ def test_a_reported_hash_cannot_be_confirmed_offline(repo: Path) -> None:
     assert unsalted not in first + second
     # Each run draws its own salt, so two runs never print the same tag.
     assert set(first).isdisjoint(second), (first, second)
+
+
 # --- the shared list's canary line is not a name (shared secret, 2026-10-14) ------
 # The same LEAK_DENYLIST value feeds isolation-layer's public surface scan, which
 # needs the fixed canary "zqxwvk" to prove the list matches. Here that line is
