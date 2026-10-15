@@ -188,7 +188,12 @@ an alias the lint cannot resolve (a gate stored in a container and patched
 from there) is not caught. Review findings N7 to N14 belong to other pull
 requests (the leak scan, the wiring check, the hook, the kill switch and the
 path matcher), not to this lint; H5d to H5n could not be identified from the
-review record.
+review record. The floor's KAT lint job does not pass ``--require-kats`` yet;
+wiring it into floor.yml is #84's change. A test that is truthy by
+construction is caught only in the listed shapes, and a display with a
+starred part of unknown contents is not one of them (it may be empty). A
+helper folds only when its one ``return`` reads none of its parameters or
+returns one unchanged; anything it computes from its arguments does not.
 
 Every file is read as Python reads it: a coding cookie other than UTF-8 (any
 alias of UTF-8, such as ``utf8`` or ``U8``, is UTF-8), or bytes that are not
