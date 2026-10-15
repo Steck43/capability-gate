@@ -119,10 +119,18 @@ def load_denylist() -> list[re.Pattern[str]] | None:
     return pats or None
 
 
+def _lines(text: str) -> list[str]:
+    """Lines as git and editors count them: split on a line feed only, with one
+    trailing carriage return dropped. str.splitlines() also breaks on U+0085,
+    U+2028, U+2029, form feed and the separator controls, so a line holding one
+    could fake a diff header."""
+    return [ln.removesuffix("\r") for ln in text.split("\n")]
+
+
 def scan_text(text: str, names: list[re.Pattern[str]]) -> list[tuple[int, str]]:
     """(line number, rule label) per hit. Labels never contain the matched text."""
     hits: list[tuple[int, str]] = []
-    for n, line in enumerate(text.splitlines(), 1):
+    for n, line in enumerate(_lines(text), 1):
         for label, pat in BUILTIN:
             if pat.search(line):
                 hits.append((n, label))
@@ -234,7 +242,7 @@ def _added_lines(*diff_args: str) -> list[tuple[str, str]]:
     # A file header is only the block between "diff --git" and the first "@@".
     # After that every "+" line is content, even one whose text starts "++ b/".
     in_header = False
-    for line in diff.splitlines():
+    for line in _lines(diff):
         if line.startswith("diff --git "):
             in_header, current = True, None
         elif in_header and line.startswith("+++ "):
