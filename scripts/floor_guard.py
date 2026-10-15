@@ -22,10 +22,15 @@ Two layers.
    write into the temp directory except from git, add pytest options, install
    anything but the hash-locked lock file, or make a lint step non-failing.
    A protected-jobs table fixes each job's key, check names and required
-   commands, which must run as parsed commands; a per-job table fixes the
-   exact shape of every simple command a job may run, and python must run
-   isolated (-I) so no checkout file is importable. Functions, loops,
-   subshells and groups are refused, and no no-op may name a guarded tool.
+   actions (matched against uses, never run text), and every required
+   command must run as a parsed command; a per-job table fixes the exact
+   shape of every simple command a job may run, compared as written with
+   quotes and backslashes kept, and python must run isolated (-I) so no
+   checkout file is importable. A $ the shell does not expand, an
+   assignment-only command and a path holding $, a backtick or a backslash
+   are refused. Functions, loops, subshells and groups are refused, and no
+   no-op may name a guarded tool. The lint config must be the pinned one,
+   and the floor's conftest must hold its pinned content.
    Job and step conditions, environment, runner, timeout, matrix, workflow
    defaults and every workflow's triggers and write permissions are
    allowlisted. Workflows and the pin file load strictly (no repeated key, no
@@ -37,7 +42,9 @@ Where it loads from: in CI the guard script, its pins and its lock come from
 the pull request's base (see floor.yml); for a stacked pull request that base
 is another feature branch, not main. The floor-guard job definition itself
 comes from the pull request, so a repository ruleset or required workflow is
-the structural fix; that is a settings action for the maintainer.
+the structural fix; that is a settings action for the maintainer. Until this
+version of the guard is on the base, the base copy that judges a pull request
+lacks the rules this version adds.
 
 Usage: python scripts/floor_guard.py [--root DIR] [--update-pins] [--pins FILE]
 """
@@ -45,6 +52,7 @@ Usage: python scripts/floor_guard.py [--root DIR] [--update-pins] [--pins FILE]
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import itertools
 import json
@@ -74,8 +82,10 @@ GUARD_FILES = (
     "scripts/leak_denylist_scan.py",
     "scripts/gh_pr.py",
     "scripts/no_ai_trailers.py",
+    "scripts/run_record_check.py",
     "tests/test_floor_config.py",
     LOCK,
+    "ruff.toml",
     ".pre-commit-config.yaml",
     ".gitleaks.toml",
     ".gitleaksignore",
@@ -85,7 +95,10 @@ GUARD_GLOBS = (
     "craft/**/*.py",
     "**/conftest.py",
     "pytest.ini",
-    "pyproject.toml",
+    "**/pyproject.toml",
+    "**/ruff.toml",
+    "**/.ruff.toml",
+    "**/.ignore",
     "tox.ini",
     "setup.cfg",
     ".github/workflows/*.yml",
@@ -96,6 +109,13 @@ GUARD_GLOBS = (
     "**/usercustomize.py",
     "**/*.pth",
     "**/.pytest.ini",
+)
+
+# The floor's conftest (see its docstring), by exact content: it refuses a
+# plugin that registers during collection and writes the run record. Changing
+# it is a change to this file, which base pins catch.
+FLOOR_CONFTEST_SHA256 = (
+    "6d036426d4c7950862c98c151f6c5a72020ebae44e15749f803acf04fd94c060"
 )
 
 ALLOWED_COMMANDS = frozenset(
@@ -256,180 +276,133 @@ ALLOWED_ACTIONS = frozenset(
 # these tables are the only reviewer of that change. --update-pins never writes
 # them; changing one is a change to this file, which base pins catch.
 
-# Every job in the floor workflow, the check names it must produce, and text
-# each of its steps must still contain. A job renamed away, a decoy that takes
-# a protected check name, or a protected key reused for a trivial step all fail.
+# Every job in the floor workflow, the check names it must produce, and the
+# pinned actions it must use (matched against each step's uses value, never
+# against run text, so a comment or a string cannot stand in). A job renamed
+# away, a decoy that takes a protected check name, or a protected key reused
+# for a trivial step all fail; REQUIRED_COMMANDS below holds the run side.
 PROTECTED_JOBS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "secrets": (("secrets (gitleaks)",), ("gitleaks/gitleaks-action@",)),
-    "leak-denylist": (
-        ("secrets (names and personal paths)",),
-        ('"$RUNNER_TEMP/leak_scan.py" --ci', "--text"),
-    ),
-    "kat-lint": (("tests (known-answer tests call the gate)",), ("kat_lint.py",)),
-    "authorship": (
-        ("authorship (no AI trailers)",),
-        ("git log --all --format=%B", "scripts/no_ai_trailers.py"),
-    ),
-    "tests": (("tests (3.11)", "tests (3.12)"), ("pytest -q",)),
-    "lint": (("lint (ruff)",), ("ruff check .", "ruff format --check .")),
-    "craft-voice": (
-        ("craft (voice)",),
-        (".floor/craft/voice_lint.py --commits",),
-    ),
-    "craft-changelog": (
-        ("craft (changelog)",),
-        (".floor/craft/changelog_gate.py --base",),
-    ),
-    "craft-comments": (
-        ("craft (comments)",),
-        (".floor/craft/comment_craft.py --base",),
-    ),
-    "craft-empty-diff": (
-        ("craft (empty-diff)",),
-        (".floor/craft/empty_diff_gate.py --base",),
-    ),
-    "floor-guard": (
-        ("floor (guard from base)",),
-        ('"$RUNNER_TEMP/floor/floor_guard.py" --root . --pins',),
-    ),
+    "leak-denylist": (("secrets (names and personal paths)",), ()),
+    "kat-lint": (("tests (known-answer tests call the gate)",), ()),
+    "authorship": (("authorship (no AI trailers)",), ()),
+    "tests": (("tests (3.11)", "tests (3.12)"), ()),
+    "lint": (("lint (ruff)",), ()),
+    "craft-voice": (("craft (voice)",), ()),
+    "craft-changelog": (("craft (changelog)",), ()),
+    "craft-comments": (("craft (comments)",), ()),
+    "craft-empty-diff": (("craft (empty-diff)",), ()),
+    "floor-guard": (("floor (guard from base)",), ()),
     "workflow-lint": (
         ("workflow (zizmor + actionlint)",),
-        ("zizmorcore/zizmor-action@", "/tmp/actionlint"),
+        ("zizmorcore/zizmor-action@",),
     ),
 }
 
-# Every simple command each job may run, exactly as the shell parser reads it
-# (words with quotes removed, then each redirect). A command outside its job's
-# set fails, so each allowed command has one exact argument shape: git gets no
-# upload-pack, output, external diff, textconv, no-index, refspec or URL, tar
-# runs only in workflow-lint with its pinned arguments, and no cp, mkdir or
-# redirect can create a file pytest would load. The only temp writes are the
-# listed git show and git log lines, the actionlint download and its tar.
+# Every simple command each job may run, written exactly as the run text holds
+# it: each word with its quotes and backslashes kept, then each redirect. A
+# word the shell would not expand ('$X', \$X) therefore never matches a shape
+# that expects the variable, and a command outside its job's set fails, so
+# each allowed command has one exact argument shape: git gets no upload-pack,
+# output, external diff, textconv, no-index, refspec or URL, tar runs only in
+# workflow-lint with its pinned arguments, and no cp, mkdir or redirect can
+# create a file pytest would load. The only temp writes are the listed git
+# show and git log lines, the actionlint download and its tar.
 _PIP = "python -I -m pip install --require-hashes --no-deps -r"
 _CRAFT_RANGE = (
-    "python -I .floor/craft/empty_range.py --base $CRAFT_BASE --head $CRAFT_HEAD "
-    "--event $EVENT_NAME"
+    'python -I .floor/craft/empty_range.py --base "$CRAFT_BASE" '
+    '--head "$CRAFT_HEAD" --event "$EVENT_NAME"'
 )
-_REV = "git rev-parse --verify ${}^{{commit}}"
+_REV = 'git rev-parse --verify "${}^{{commit}}"'
+_LEAK_CI = 'python -I "$RUNNER_TEMP/leak_scan.py" --ci --base "$SCAN_BASE" --head HEAD'
+_LEAK_TEXT = (
+    'python -I "$RUNNER_TEMP/leak_scan.py" --text "pull request title and body"'
+)
+_HISTORY = 'git log --all --format=%B > "$RUNNER_TEMP/history.txt"'
+_TRAILERS = 'python -I scripts/no_ai_trailers.py "$RUNNER_TEMP/history.txt"'
+_RUN_CHECK = 'python -I scripts/run_record_check.py "$FLOOR_RUN_RECORD"'
+_VOICE = (
+    'python -I .floor/craft/voice_lint.py --commits --base "$CRAFT_BASE" '
+    "--head HEAD --prose --fail-on-warn"
+)
+_CHANGELOG = 'python -I .floor/craft/changelog_gate.py --base "$CRAFT_BASE" --head HEAD'
+_COMMENTS = 'python -I .floor/craft/comment_craft.py --base "$CRAFT_BASE" --head HEAD'
+_EMPTY_DIFF = 'python -I .floor/craft/empty_diff_gate.py --base "$PR_BASE" --head HEAD'
+_GUARD = (
+    'python -I "$RUNNER_TEMP/floor/floor_guard.py" --root . '
+    '--pins "$RUNNER_TEMP/floor/floor-pins.json"'
+)
+_TAR = "tar -C /tmp -xzf /tmp/actionlint.tgz actionlint"
+_ACTIONLINT = "/tmp/actionlint -color"
 JOB_COMMANDS: dict[str, frozenset[str]] = {
     "secrets": frozenset(),
     "leak-denylist": frozenset(
         {
             "git cat-file -e origin/main:scripts/leak_denylist_scan.py",
-            "git show origin/main:scripts/leak_denylist_scan.py > $RUNNER_TEMP/leak_scan.py",
+            "git show origin/main:scripts/leak_denylist_scan.py"
+            ' > "$RUNNER_TEMP/leak_scan.py"',
             _REV.format("SCAN_BASE"),
-            "python -I $RUNNER_TEMP/leak_scan.py --ci --base $SCAN_BASE --head HEAD",
-            "printf %s\\n\\n%s\\n $PR_TITLE $PR_BODY",
-            "python -I $RUNNER_TEMP/leak_scan.py --text pull request title and body",
+            _LEAK_CI,
+            'printf \'%s\\n\\n%s\\n\' "$PR_TITLE" "$PR_BODY"',
+            _LEAK_TEXT,
         }
     ),
     "kat-lint": frozenset({"python -I scripts/kat_lint.py"}),
-    "authorship": frozenset(
-        {
-            "git log --all --format=%B > $RUNNER_TEMP/history.txt",
-            "python -I scripts/no_ai_trailers.py $RUNNER_TEMP/history.txt",
-        }
-    ),
-    "tests": frozenset({f"{_PIP} {LOCK}", "pytest -q"}),
+    "authorship": frozenset({_HISTORY, _TRAILERS}),
+    "tests": frozenset({f"{_PIP} {LOCK}", "pytest -q", _RUN_CHECK}),
     "lint": frozenset({f"{_PIP} {LOCK}", "ruff check .", "ruff format --check ."}),
-    "craft-voice": frozenset(
-        {
-            _REV.format("CRAFT_BASE"),
-            _CRAFT_RANGE,
-            "python -I .floor/craft/voice_lint.py --commits --base $CRAFT_BASE "
-            "--head HEAD --prose --fail-on-warn",
-        }
-    ),
-    "craft-changelog": frozenset(
-        {
-            _REV.format("CRAFT_BASE"),
-            _CRAFT_RANGE,
-            "python -I .floor/craft/changelog_gate.py --base $CRAFT_BASE --head HEAD",
-        }
-    ),
-    "craft-comments": frozenset(
-        {
-            _REV.format("CRAFT_BASE"),
-            _CRAFT_RANGE,
-            "python -I .floor/craft/comment_craft.py --base $CRAFT_BASE --head HEAD",
-        }
-    ),
-    "craft-empty-diff": frozenset(
-        {
-            _REV.format("PR_BASE"),
-            "python -I .floor/craft/empty_diff_gate.py --base $PR_BASE --head HEAD",
-        }
-    ),
+    "craft-voice": frozenset({_REV.format("CRAFT_BASE"), _CRAFT_RANGE, _VOICE}),
+    "craft-changelog": frozenset({_REV.format("CRAFT_BASE"), _CRAFT_RANGE, _CHANGELOG}),
+    "craft-comments": frozenset({_REV.format("CRAFT_BASE"), _CRAFT_RANGE, _COMMENTS}),
+    "craft-empty-diff": frozenset({_REV.format("PR_BASE"), _EMPTY_DIFF}),
     "floor-guard": frozenset(
         {
             _REV.format("GUARD_BASE"),
-            "mkdir -p $RUNNER_TEMP/floor",
+            'mkdir -p "$RUNNER_TEMP/floor"',
             *(
-                f"git cat-file -e $GUARD_BASE:{src}"
+                f'git cat-file -e "$GUARD_BASE:{src}"'
                 for src in ("scripts/floor_guard.py", ".github/floor-pins.json", LOCK)
             ),
             *(
-                f"git show $GUARD_BASE:{src} > $RUNNER_TEMP/floor/{dest}"
+                f'git show "$GUARD_BASE:{src}" > "$RUNNER_TEMP/floor/{dest}"'
                 for src, dest in (
                     ("scripts/floor_guard.py", "floor_guard.py"),
                     (".github/floor-pins.json", "floor-pins.json"),
                     (LOCK, LOCK),
                 )
             ),
-            "echo guard from base $GUARD_BASE",
-            f"{_PIP} $RUNNER_TEMP/floor/{LOCK}",
-            "python -I $RUNNER_TEMP/floor/floor_guard.py --root . "
-            "--pins $RUNNER_TEMP/floor/floor-pins.json",
+            'echo "guard from base $GUARD_BASE"',
+            f'{_PIP} "$RUNNER_TEMP/floor/{LOCK}"',
+            _GUARD,
         }
     ),
     "workflow-lint": frozenset(
         {
-            "curl -sSL https://github.com/rhysd/actionlint/releases/download/"
+            'curl -sSL "https://github.com/rhysd/actionlint/releases/download/'
             "v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-            " -o /tmp/actionlint.tgz",
-            "echo ${ACTIONLINT_SHA256}  /tmp/actionlint.tgz",
+            '" -o /tmp/actionlint.tgz',
+            'echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz"',
             "sha256sum -c -",
-            "tar -C /tmp -xzf /tmp/actionlint.tgz actionlint",
-            "/tmp/actionlint -color",
+            _TAR,
+            _ACTIONLINT,
         }
     ),
 }
-# Each job's required commands: at least one of its exact shapes per line here
-# must run as a parsed command, so an echo or printf of the text never counts.
+# Each job's required commands: each line here must run as a parsed command,
+# written exactly so, so an echo, a printf, a comment or an unexpanded copy of
+# the text never counts.
 REQUIRED_COMMANDS: dict[str, tuple[str, ...]] = {
-    "leak-denylist": (
-        "python -I $RUNNER_TEMP/leak_scan.py --ci --base $SCAN_BASE --head HEAD",
-        "python -I $RUNNER_TEMP/leak_scan.py --text pull request title and body",
-    ),
+    "leak-denylist": (_LEAK_CI, _LEAK_TEXT),
     "kat-lint": ("python -I scripts/kat_lint.py",),
-    "authorship": (
-        "git log --all --format=%B > $RUNNER_TEMP/history.txt",
-        "python -I scripts/no_ai_trailers.py $RUNNER_TEMP/history.txt",
-    ),
-    "tests": ("pytest -q",),
+    "authorship": (_HISTORY, _TRAILERS),
+    "tests": ("pytest -q", _RUN_CHECK),
     "lint": ("ruff check .", "ruff format --check ."),
-    "craft-voice": (
-        "python -I .floor/craft/voice_lint.py --commits --base $CRAFT_BASE "
-        "--head HEAD --prose --fail-on-warn",
-    ),
-    "craft-changelog": (
-        "python -I .floor/craft/changelog_gate.py --base $CRAFT_BASE --head HEAD",
-    ),
-    "craft-comments": (
-        "python -I .floor/craft/comment_craft.py --base $CRAFT_BASE --head HEAD",
-    ),
-    "craft-empty-diff": (
-        "python -I .floor/craft/empty_diff_gate.py --base $PR_BASE --head HEAD",
-    ),
-    "floor-guard": (
-        "python -I $RUNNER_TEMP/floor/floor_guard.py --root . "
-        "--pins $RUNNER_TEMP/floor/floor-pins.json",
-    ),
-    "workflow-lint": (
-        "sha256sum -c -",
-        "tar -C /tmp -xzf /tmp/actionlint.tgz actionlint",
-        "/tmp/actionlint -color",
-    ),
+    "craft-voice": (_VOICE,),
+    "craft-changelog": (_CHANGELOG,),
+    "craft-comments": (_COMMENTS,),
+    "craft-empty-diff": (_EMPTY_DIFF,),
+    "floor-guard": (_GUARD,),
+    "workflow-lint": ("sha256sum -c -", _TAR, _ACTIONLINT),
 }
 # Commands that do nothing with their arguments. Naming a guarded tool to one of
 # them is how a step can look as if it runs that tool.
@@ -453,6 +426,7 @@ TOOL_NAMES = frozenset(
         "changelog_gate",
         "comment_craft",
         "empty_diff_gate",
+        "run_record_check",
         "empty_range",
         "floor_guard",
         "leak_scan",
@@ -513,6 +487,7 @@ STEP_ENV = {
     "PR_BODY": "${{ github.event.pull_request.body }}",
     "AEGIS_ATOMS_ROOT": "${{ github.workspace }}/aegis-atoms",
     "ISOLATION_LAYER_ROOT": "${{ github.workspace }}/isolation-layer",
+    "FLOOR_RUN_RECORD": "${{ runner.temp }}/pytest-run.json",
     "ACTIONLINT_VERSION": "1.7.12",
     "ACTIONLINT_SHA256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
 }
@@ -522,6 +497,7 @@ PY_SCRIPTS = frozenset(
     {
         "scripts/kat_lint.py",
         "scripts/no_ai_trailers.py",
+        "scripts/run_record_check.py",
         ".floor/craft/empty_range.py",
         ".floor/craft/voice_lint.py",
         ".floor/craft/changelog_gate.py",
@@ -536,6 +512,7 @@ PY_SCRIPTS = frozenset(
 SCRIPT_ARGS: dict[str, frozenset[tuple[str, ...]]] = {
     "scripts/kat_lint.py": frozenset({()}),
     "scripts/no_ai_trailers.py": frozenset({("$RUNNER_TEMP/history.txt",)}),
+    "scripts/run_record_check.py": frozenset({("$FLOOR_RUN_RECORD",)}),
     ".floor/craft/empty_range.py": frozenset(
         {("--base", "$CRAFT_BASE", "--head", "$CRAFT_HEAD", "--event", "$EVENT_NAME")}
     ),
@@ -817,15 +794,23 @@ def _word_is_literal(word: str) -> bool:
     return not re.search(r"[$`\\\"'*?\[\]{}~]", word)
 
 
-def _render(node) -> str:
-    """One simple command as the shell parser reads it: assignments, words, redirects."""
+def _as_written(node, src: str) -> str:
+    """A word as the run text holds it: quotes and backslashes kept."""
+    pos = getattr(node, "pos", None)
+    return src[pos[0] : pos[1]] if pos else str(getattr(node, "word", node))
+
+
+def _render(node, src: str) -> str:
+    """One simple command as written: assignments, words, then redirects."""
     out = []
     for part in node.parts:
         if part.kind in {"assignment", "word"}:
-            out.append(part.word)
+            out.append(_as_written(part, src))
         elif part.kind == "redirect":
             target = getattr(part, "output", None)
-            target = target.word if hasattr(target, "word") else str(target)
+            target = (
+                _as_written(target, src) if hasattr(target, "kind") else str(target)
+            )
             source = "" if getattr(part, "input", None) is None else str(part.input)
             out.append(f"{source}{part.type} {target}")
         else:
@@ -833,8 +818,37 @@ def _render(node) -> str:
     return " ".join(out)
 
 
+def _unexpanded_dollar(word: str) -> bool:
+    """A $ the shell keeps literal: inside single quotes, after a backslash, or
+    opening $'...' quoting. Such a word reads like a variable and is not one."""
+    quote = None
+    i = 0
+    while i < len(word):
+        c = word[i]
+        if quote == "'":
+            if c == "'":
+                quote = None
+            elif c == "$":
+                return True
+        elif c == "\\":
+            if word[i + 1 : i + 2] == "$":
+                return True
+            i += 2
+            continue
+        elif c == "'" and quote is None:
+            quote = "'"
+        elif c == '"':
+            quote = None if quote == '"' else '"'
+        elif c == "$" and quote is None and word[i + 1 : i + 2] == "'":
+            return True
+        i += 1
+    return False
+
+
 class _Collector:
-    def __init__(self) -> None:
+    def __init__(self, src: str = "") -> None:
+        self.src = src
+        self.written: list[str] = []
         self.rendered: list[tuple[list[str], str]] = []
         self.shaping: set[str] = set()
         self.commands: list[list] = []
@@ -928,15 +942,18 @@ class _Collector:
             parts = getattr(node, "parts", [])
             words = [p for p in parts if p.kind == "word"]
             for p in parts:
+                if p.kind in {"assignment", "word"}:
+                    self.written.append(_as_written(p, self.src))
                 if p.kind == "assignment":
                     self.assignments.append(p.word)
                 if p.kind == "redirect":
                     target = getattr(p, "output", None)
                     if target is not None and getattr(target, "kind", None) == "word":
+                        self.written.append(_as_written(target, self.src))
                         self.redirects.append(target.word)
                         self.writes.append(([w.word for w in words], target.word))
             self.commands.append([w.word for w in words])
-            self.rendered.append(([w.word for w in words], _render(node)))
+            self.rendered.append(([w.word for w in words], _render(node, self.src)))
         for attr in ("parts", "list"):
             for child in getattr(node, attr, None) or []:
                 if hasattr(child, "kind"):
@@ -948,7 +965,8 @@ class _Collector:
 
 
 def parsed_commands(run: str) -> list[str]:
-    """Every simple command in run text, rendered; empty if it does not parse."""
+    """Every simple command in run text, as written; empty if it does not parse.
+    Comments are not commands, so text in a comment never appears here."""
     import bashlex
 
     run = re.sub(r"\$\{\{.*?\}\}", "X", run, flags=re.S)
@@ -956,26 +974,29 @@ def parsed_commands(run: str) -> list[str]:
         trees = bashlex.parse(run)
     except Exception:  # judged as a violation by run_violations
         return []
-    col = _Collector()
+    col = _Collector(run)
     for tree in trees:
         col.walk(tree)
     return [text for _words, text in col.rendered]
 
 
 def _shape_violations(col: _Collector, where: str, job: str) -> list[str]:
+    # An assignment-only command has no words but is still a command: it is
+    # judged against the table like any other, so none is allowed.
     found: list[str] = []
     allowed = JOB_COMMANDS.get(job, frozenset())
     for words, text in col.rendered:
-        if not words or text in allowed:
+        if text in allowed:
             continue
         found.append(
             f"{where}: `{text}` is not an allowlisted command shape for job {job}"
         )
-        if words[0] == "git":
+        head = words[0] if words else ""
+        if head == "git":
             found.append(
                 f"{where}: git arguments are not an allowlisted shape for job {job}"
             )
-        if words[0] == "tar":
+        if head == "tar":
             if job != "workflow-lint":
                 found.append(f"{where}: tar is allowed only in the workflow-lint job")
             else:
@@ -1005,11 +1026,15 @@ def run_violations(run: str, where: str, job: str | None = None) -> list[str]:
         trees = bashlex.parse(run)
     except Exception as exc:  # unparseable is a violation, not a skip
         return found + [f"{where}: shell text does not parse ({type(exc).__name__})"]
-    col = _Collector()
+    col = _Collector(run)
     for tree in trees:
         col.walk(tree)
     if not col.commands and run.strip():
         found.append(f"{where}: no command found")
+    if any(_unexpanded_dollar(word) for word in col.written):
+        found.append(
+            f"{where}: a $ the shell does not expand (single quotes or a backslash)"
+        )
     for masked in col.masked:
         found.append(f"{where}: failure masked by || {masked}")
     for op, words in col.chains:
@@ -1398,21 +1423,21 @@ def protected_job_violations(wf: dict) -> list[str]:
     jobs = wf.get("jobs") or {}
     for key in sorted(set(jobs) - set(PROTECTED_JOBS)):
         found.append(f"job {key}: not in the protected jobs table")
-    for key, (names, needles) in PROTECTED_JOBS.items():
+    for key, (names, actions) in PROTECTED_JOBS.items():
         job = jobs.get(key)
         if not isinstance(job, dict):
             found.append(f"job {key}: protected job is missing")
             continue
         if sorted(check_names(key, job)) != sorted(n.casefold() for n in names):
             found.append(f"job {key}: check names are not {list(names)}")
-        text = "\n".join(
-            f"{s.get('run', '')}\n{s.get('uses', '')}"
+        uses = [
+            str(s["uses"])
             for s in job.get("steps") or []
-            if isinstance(s, dict)
-        )
-        for needle in needles:
-            if needle not in text:
-                found.append(f"job {key}: required step text {needle!r} is missing")
+            if isinstance(s, dict) and "uses" in s
+        ]
+        for action in actions:
+            if not any(u.startswith(action) and u in ALLOWED_ACTIONS for u in uses):
+                found.append(f"job {key}: required action {action!r} is missing")
         ran = {
             command
             for s in job.get("steps") or []
@@ -1448,9 +1473,10 @@ def _test_modules(root: Path) -> list[Path]:
 def plugin_violations(root: Path) -> list[str]:
     """No test module names pytest_plugins: the list loads plugin modules, and a
     plugin's hooks can rewrite every result. Any use of the name counts: an
-    assignment, an annotation, an attribute, or the name as a string."""
-    import ast
-
+    assignment, an annotation, an attribute, the name as a string or a sum of
+    strings, or a module __getattr__ that could return it. A name built any
+    other way is refused at run time by the floor's conftest, which fails the
+    run when a plugin registers once collection starts."""
     found = []
     for path in _test_modules(root):
         rel = path.relative_to(root).as_posix()
@@ -1463,11 +1489,32 @@ def plugin_violations(root: Path) -> list[str]:
             if (
                 (isinstance(node, ast.Name) and node.id == "pytest_plugins")
                 or (isinstance(node, ast.Attribute) and node.attr == "pytest_plugins")
-                or (isinstance(node, ast.Constant) and node.value == "pytest_plugins")
+                or _folded_str(node) == "pytest_plugins"
             ):
                 found.append(f"{rel}: declares pytest_plugins")
                 break
+        else:
+            if any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "__getattr__"
+                for node in tree.body
+            ):
+                found.append(
+                    f"{rel}: declares pytest_plugins (a module __getattr__ can supply it)"
+                )
     return found
+
+
+def _folded_str(node) -> str | None:
+    """A string constant, or a + of string constants, folded to its value. Names
+    built any other way are caught at run time by the floor's conftest."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _folded_str(node.left), _folded_str(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
 
 
 def _triggers(doc: dict) -> object:
@@ -1600,9 +1647,14 @@ def pytest_config_violations(root: Path) -> list[str]:
             header, path.read_text(encoding="utf-8", errors="replace")
         ):
             found.append(f"pytest config: {rel} configures pytest")
+    conftest = root / "conftest.py"
+    if not conftest.is_file():
+        found.append("pytest config: conftest.py, the floor's conftest, is missing")
+    elif sha(conftest.read_bytes().replace(b"\r\n", b"\n")) != FLOOR_CONFTEST_SHA256:
+        found.append("pytest config: conftest.py is not the floor's conftest")
     for rel in guard_files(root):
         name = rel.rsplit("/", 1)[-1]
-        if name == "conftest.py":
+        if name == "conftest.py" and rel != "conftest.py":
             found.append(f"pytest config: {rel} is not allowed")
         if name == ".pytest.ini":
             found.append(f"pytest config: {rel} configures pytest")
@@ -1611,6 +1663,168 @@ def pytest_config_violations(root: Path) -> list[str]:
         if name in {"sitecustomize.py", "usercustomize.py"} or name.endswith(".pth"):
             found.append(f"{rel}: interpreter startup file")
     return sorted(set(found), key=found.index)
+
+
+def _repo_files(root: Path) -> tuple[list[str], list[str]]:
+    """Every path a pull request can supply, and any problem listing them.
+
+    In a git checkout: every tracked path (from the index, so a name the
+    platform cannot create on disk still counts) and every untracked,
+    unignored file. Outside a checkout: every file on disk outside the skipped
+    directories."""
+    import os
+    import subprocess
+
+    if (root / ".git").exists():
+        names: set[str] = set()
+        problems: list[str] = []
+        for args in (
+            ["ls-files", "-z"],
+            ["ls-files", "-o", "--exclude-standard", "-z"],
+        ):
+            listed = subprocess.run(
+                ["git", *args], cwd=root, capture_output=True, check=False
+            )
+            if listed.returncode != 0:
+                problems.append("git ls-files failed; paths cannot be judged")
+                continue
+            listed_names = {
+                n for n in listed.stdout.decode("utf-8", "replace").split("\0") if n
+            }
+            if "-o" in args:
+                # Local only: a pull request cannot add an untracked file.
+                listed_names = {
+                    n for n in listed_names if not n.startswith(GUARD_SKIP_DIRS)
+                }
+            names |= listed_names
+        return sorted(names), problems
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        rel_dir = Path(dirpath).relative_to(root).as_posix()
+        prefix = "" if rel_dir == "." else rel_dir + "/"
+        dirnames[:] = [
+            d for d in dirnames if not (prefix + d + "/").startswith(GUARD_SKIP_DIRS)
+        ]
+        out += [prefix + n for n in filenames]
+    return sorted(out), []
+
+
+# A $, backtick or backslash in a path is shell syntax: a run line that names
+# the path literally can be made to read like a variable or a substitution.
+_SHELL_SYNTAX_PATH = re.compile(r"[$`\\]")
+
+
+def path_violations(root: Path) -> list[str]:
+    files, found = _repo_files(root)
+    for rel in files:
+        if _SHELL_SYNTAX_PATH.search(rel):
+            found.append(f"path {rel!r}: holds $, a backtick or a backslash")
+    return found
+
+
+# The lint configuration, exactly: ruff.toml must parse to this. Loosening it
+# (an ignore, an exclude, a narrower select or include, an extend) is a change
+# to this file, which base pins catch. ruff reads its configuration from the
+# nearest ruff.toml, .ruff.toml or pyproject.toml with a [tool.ruff] table, and
+# skips files git or an .ignore file excludes, so each of those is judged too.
+RUFF_CONFIG = {
+    "lint": {
+        "ignore": [
+            "N999",
+            "BLE001",
+            "S102",
+            "TRY203",
+            "SIM102",
+            "SIM118",
+            "F402",
+            "EXE001",
+            "EXE002",
+            "FURB167",
+        ]
+    }
+}
+_FILE_EXEMPTION = re.compile(r"(?i)^#\s*(?:ruff|flake8)\s*:\s*noqa\b")
+
+
+def _strings(obj) -> list[str]:
+    if isinstance(obj, str):
+        return [obj]
+    if isinstance(obj, dict):
+        return [s for k, v in obj.items() for s in (*_strings(k), *_strings(v))]
+    if isinstance(obj, list):
+        return [s for v in obj for s in _strings(v)]
+    return []
+
+
+def _file_exemption(text: str) -> bool:
+    import io
+    import tokenize
+
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    except (tokenize.TokenError, SyntaxError):
+        return bool(re.search(r"(?im)^\s*#\s*(?:ruff|flake8)\s*:\s*noqa\b", text))
+    return any(
+        t.type == tokenize.COMMENT and _FILE_EXEMPTION.match(t.string) for t in tokens
+    )
+
+
+def lint_config_violations(root: Path) -> list[str]:
+    import subprocess
+    import tomllib
+
+    found: list[str] = []
+    try:
+        cfg = tomllib.loads((root / "ruff.toml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        found.append("lint config: ruff.toml is missing or does not parse")
+        cfg = None
+    if cfg is not None and cfg != RUFF_CONFIG:
+        found.append("lint config: ruff.toml is not the floor's ruff config")
+        if any(s == "ALL" or "*" in s for s in _strings(cfg)):
+            found.append("lint config: ruff.toml skips everything (ALL or *)")
+        lint = cfg.get("lint") if isinstance(cfg.get("lint"), dict) else {}
+        if "select" in cfg or "select" in lint:
+            found.append("lint config: ruff.toml sets select, which can narrow it")
+    files, problems = _repo_files(root)
+    found += [f"lint config: {p}" for p in problems]
+    for rel in files:
+        name = rel.rsplit("/", 1)[-1]
+        if name == ".ruff.toml" or (name == "ruff.toml" and rel != "ruff.toml"):
+            found.append(f"lint config: {rel} is a ruff config the floor does not pin")
+        elif name == ".ignore":
+            found.append(f"lint config: {rel} hides files from ruff")
+        elif name == "pyproject.toml":
+            try:
+                tool = tomllib.loads((root / rel).read_text(encoding="utf-8")).get(
+                    "tool"
+                )
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+                found.append(f"lint config: {rel} does not parse")
+            else:
+                if isinstance(tool, dict) and "ruff" in tool:
+                    found.append(f"lint config: {rel} configures ruff")
+        elif name.endswith((".py", ".pyi")):
+            try:
+                text = (root / rel).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if _file_exemption(text):
+                found.append(f"{rel}: file-level lint exemption")
+    if (root / ".git").exists():
+        ignored = subprocess.run(
+            ["git", "ls-files", "-ci", "--exclude-standard", "-z"],
+            cwd=root,
+            capture_output=True,
+            check=False,
+        )
+        if ignored.returncode != 0:
+            found.append("lint config: git ls-files failed; ignored files unknown")
+        elif ignored.stdout.strip(b"\0"):
+            found.append(
+                "lint config: a tracked file is ignored by git, so ruff skips it"
+            )
+    return found
 
 
 def _checkout_violations(inputs: dict, where: str) -> list[str]:
@@ -1690,6 +1904,8 @@ def violations(root: Path, pins_path: Path | None = None) -> list[str]:
         + lock_violations(root)
         + pytest_config_violations(root)
         + plugin_violations(root)
+        + path_violations(root)
+        + lint_config_violations(root)
     )
 
 

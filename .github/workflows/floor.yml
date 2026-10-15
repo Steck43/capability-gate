@@ -176,7 +176,16 @@ jobs:
         env:
           AEGIS_ATOMS_ROOT: ${{ github.workspace }}/aegis-atoms
           ISOLATION_LAYER_ROOT: ${{ github.workspace }}/isolation-layer
+          FLOOR_RUN_RECORD: ${{ runner.temp }}/pytest-run.json
         run: pytest -q
+      # pytest exits 0 when a test module ends the process early (os._exit),
+      # so the job also needs the run record that only a finished session
+      # writes, covering every test module (see conftest.py).
+      - name: every test module ran
+        working-directory: capability-gate
+        env:
+          FLOOR_RUN_RECORD: ${{ runner.temp }}/pytest-run.json
+        run: python -I scripts/run_record_check.py "$FLOOR_RUN_RECORD"
 
   lint:
     name: lint (ruff)

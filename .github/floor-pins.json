@@ -26,7 +26,7 @@
     },
     {
       "path": ".github/workflows/floor.yml",
-      "sha256": "35de3448d9e7c3f9fed1a76a988d326ca1fc53e3b6697f4bf32842d7a3792566"
+      "sha256": "00ac5b1dae0f2c0beaf9d1c7e4e5d4a18a1be770b278ad7f822157373223cfa3"
     },
     {
       "path": ".github/workflows/plugin-bundle.yml",
@@ -49,6 +49,10 @@
       "sha256": "6e2a4c6e7857ff3931fdb42d383d21df199c938cc788306355f4e2b99df895b5"
     },
     {
+      "path": "conftest.py",
+      "sha256": "6d036426d4c7950862c98c151f6c5a72020ebae44e15749f803acf04fd94c060"
+    },
+    {
       "path": "pytest.ini",
       "sha256": "f26f5057babf7775f4a689365a0d82344e44417313f8c390c9c7a3b2a1bd5e38"
     },
@@ -57,8 +61,12 @@
       "sha256": "b0883c22e6b31cca54a2180736c25294afac5e2f119c39c6ed6a4cb6e21ee6b7"
     },
     {
+      "path": "ruff.toml",
+      "sha256": "d46146935d7e85777297a687c6fd33294758750371aeeb4aa2050cbb84f08e93"
+    },
+    {
       "path": "scripts/floor_guard.py",
-      "sha256": "b2ecf582f8e8bf370de72f444f9c4e5125ffce6595c3b995d1d62211d2061d84"
+      "sha256": "01b49aaa14c39b6a0587b8f74b905a99a1590e211644083e7ccf78ad54f8210b"
     },
     {
       "path": "scripts/kat_lint.py",
@@ -66,15 +74,19 @@
     },
     {
       "path": "scripts/leak_denylist_scan.py",
-      "sha256": "214ad45b66ad2cfc993d6e6e9756d26442164590cd5ff8d6cce4ce5053fb3cb9"
+      "sha256": "b77991acb198f386fd0bc4ef9692a454354eac2af180368c0553c9f0c8232fc1"
     },
     {
       "path": "scripts/no_ai_trailers.py",
       "sha256": "552f24eeb3a69f8234bc7a4481fc0f91cecb1b5e0b5b7aa3e5e2172aad0feeaf"
     },
     {
+      "path": "scripts/run_record_check.py",
+      "sha256": "48ea53d1885078159e7e55fc1e65a921b445f2e0f3f634282c421465234fd66b"
+    },
+    {
       "path": "tests/test_floor_config.py",
-      "sha256": "15f094ed202067ec0801e222685201fd07df2b8d5b6f25589d40563c37154859"
+      "sha256": "dce24a6334493af09309199682ed9d18c3ebb44d80205aeccf6ff246ee95115e"
     }
   ],
   "jobs": [
@@ -120,7 +132,7 @@
     },
     {
       "job": "tests",
-      "sha256": "782546b7538e39362f89de89449790666eb4ab9ea1d5d35a56b080ba62433d3d"
+      "sha256": "996ab3ea33ca0a41dcdef73812e49b501df91ef6d19b0ee99f14cfb6c3d96722"
     },
     {
       "job": "workflow-lint",

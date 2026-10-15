@@ -27,8 +27,9 @@ Modes:
 
 Output names file and line only. The matched text is never printed, so a CI log
 cannot republish what the scan exists to stop. File names are scanned too, and a
-path that matches any rule is shown only as "file #" and a hash of the path;
-git's own error text (which can quote a path) is never printed.
+path that matches any rule is shown only as "file #" and a tag keyed with a
+fresh random key each run, so a list of candidate names cannot confirm a tag
+offline; git's own error text (which can quote a path) is never printed.
 
 Exit 0 = clean. Exit 1 = hit, or no denylist configured in --ci mode (fail
 closed: a scan with no list would pass everything). Exit 2 = usage or git
@@ -45,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import os
 import re
 import subprocess
@@ -123,8 +125,14 @@ def scan_text(text: str, names: list[re.Pattern[str]]) -> list[tuple[int, str]]:
     return hits
 
 
+# A fresh key each run: a printed tag names the same file within one run's
+# output, and nobody holding a list of candidate names can recompute it.
+_RUN_KEY = os.urandom(16)
+
+
 def _digest(text: str) -> str:
-    return "#" + hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
+    data = text.encode("utf-8", "replace")
+    return "#" + hmac.new(_RUN_KEY, data, hashlib.sha256).hexdigest()[:12]
 
 
 def _shown(where: str, names: list[re.Pattern[str]]) -> str:

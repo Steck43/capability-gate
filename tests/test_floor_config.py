@@ -1198,7 +1198,7 @@ RULE_TAMPERS = [
     (
         "N1 protected key reused for a trivial step",
         (KAT, "      - run: echo ok\n"),
-        "required step text 'kat_lint.py' is missing",
+        "required command 'python -I scripts/kat_lint.py' is missing",
     ),
     # pytest invocation is exact
     (
@@ -1964,6 +1964,25 @@ def _set_last_run(job: str, run: str):
     return edit
 
 
+def _set_tool_run(job: str, run: str):
+    """The step that runs the job's tool: in tests the pytest step, which the
+    run record check follows; in every other job the last step."""
+
+    def edit(doc: dict) -> None:
+        steps = doc["jobs"][job]["steps"]
+        index = next(
+            (
+                i
+                for i, s in enumerate(steps)
+                if str(s.get("run", "")).strip() == "pytest -q"
+            ),
+            len(steps) - 1,
+        )
+        steps[index]["run"] = run
+
+    return edit
+
+
 def _parsed(run: str) -> list[list[str]]:
     import bashlex
 
@@ -2121,7 +2140,7 @@ def test_a_required_command_is_a_parsed_command_not_a_substring(
     tmp_path: Path, job: str, run: str, missing: str
 ) -> None:
     run = run.replace("LIVE", _last_run(job))
-    found = _plant_wf(tmp_path, _set_last_run(job, run))
+    found = _plant_wf(tmp_path, _set_tool_run(job, run))
     assert any(
         f"job {job}: required command" in f and missing in f and "is missing" in f
         for f in found
@@ -2551,7 +2570,17 @@ def test_a_tracked_path_holding_dollar_backtick_or_backslash_is_a_violation(
         text=True,
         check=True,
     ).stdout.strip()
-    _git(root, "update-index", "--add", "--cacheinfo", f"100644,{blob},{name}")
+    # git refuses a backslash in an index path unless NTFS protection is off;
+    # the guard judges the name whatever the writer's setting was.
+    _git(
+        root,
+        "-c",
+        "core.protectNTFS=false",
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"100644,{blob},{name}",
+    )
     found = guard.violations(root)
     assert any("holds $, a backtick or a backslash" in f for f in found), found
 
@@ -2711,7 +2740,7 @@ def test_a_gitignored_tracked_file_is_a_rules_violation(tmp_path: Path) -> None:
 # P3: a plugin declared in any form never loads, and P4: a run that ends early
 # never passes. Both run the real pytest on a copy holding the floor's conftest.
 
-RUN_CHECK = ROOT / "scripts" / "pytest_run_check.py"
+RUN_CHECK = ROOT / "scripts" / "run_record_check.py"
 
 
 def _pytest_tree(tmp_path: Path, modules: dict[str, str]) -> Path:
@@ -2900,11 +2929,11 @@ def test_the_tests_job_checks_its_run_record() -> None:
     job = _workflow()["jobs"]["tests"]
     runs = [s for s in job["steps"] if s.get("run")]
     pytest_step = next(s for s in runs if s["run"].strip() == "pytest -q")
-    check_step = next(s for s in runs if "pytest_run_check.py" in s["run"])
+    check_step = next(s for s in runs if "run_record_check.py" in s["run"])
     assert runs.index(check_step) > runs.index(pytest_step)
     for step in (pytest_step, check_step):
         assert step["env"]["FLOOR_RUN_RECORD"] == guard.STEP_ENV["FLOOR_RUN_RECORD"]
     assert (
-        'python -I scripts/pytest_run_check.py "$FLOOR_RUN_RECORD"'
+        'python -I scripts/run_record_check.py "$FLOOR_RUN_RECORD"'
         in (guard.REQUIRED_COMMANDS["tests"])
     )
