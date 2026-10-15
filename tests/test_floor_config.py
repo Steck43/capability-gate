@@ -3184,3 +3184,95 @@ def test_a_module_of_expected_failures_still_ran(tmp_path: Path) -> None:
     assert _run_pytest(root, record).returncode == 0
     check = _run_check(root, record)
     assert check.returncode == 0, check.stdout + check.stderr
+
+
+# --- N4: a test that skips itself in its body did not run -----------------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param("    pytest.skip('x')\n", id="skip-call"),
+        pytest.param("    raise pytest.skip.Exception('x')\n", id="skip-exception"),
+        pytest.param(
+            "    import unittest\n    raise unittest.SkipTest('x')\n",
+            id="unittest-skip",
+        ),
+    ],
+)
+def test_a_module_whose_tests_skip_in_their_body_is_not_a_run(
+    tmp_path: Path, body: str
+) -> None:
+    module = "import pytest\n\ndef test_zqxwvk():\n" + body
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": module}
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert "tests/test_b.py: no test in it ran" in check.stdout, check.stdout
+
+
+def test_a_module_with_one_real_run_beside_a_body_skip_ran(tmp_path: Path) -> None:
+    module = "import pytest\n\ndef test_skips():\n    pytest.skip('x')\n\n" + _PASSING
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": module}
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 0, check.stdout + check.stderr
+
+
+# --- K1: a KAT lint exemption covers discovery by name or receipts path only --------
+
+
+def _kat_lint():
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import kat_lint
+
+    return kat_lint
+
+
+def test_every_kat_lint_exempt_file_is_a_pinned_guard_file() -> None:
+    exempt = set(_kat_lint().EXEMPT)
+    assert exempt, "the exemption list is empty"
+    assert exempt <= set(guard.GUARD_FILES), sorted(exempt - set(guard.GUARD_FILES))
+
+
+@pytest.mark.parametrize(
+    "rel", ["tests/test_kat_lint.py", "tests/test_public_text_paths.py"]
+)
+def test_a_kat_marker_in_an_exempt_file_is_still_linted(
+    tmp_path: Path, rel: str
+) -> None:
+    assert rel in _kat_lint().EXEMPT
+    (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / rel).write_text(
+        "# KAT\n\ndef test_zqxwvk():\n    assert True\n", encoding="utf-8"
+    )
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(ROOT / "scripts" / "kat_lint.py"),
+            "--root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "never reaches the gate" in r.stdout, r.stdout
+
+
+def test_an_exempt_file_without_a_marker_is_not_a_kat(tmp_path: Path) -> None:
+    rel = "tests/test_public_text_paths.py"
+    (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / rel).write_text(
+        "def test_zqxwvk():\n    assert 'receipts/x' != 'y'\n", encoding="utf-8"
+    )
+    found = _kat_lint().discover(tmp_path)
+    assert found == [], found

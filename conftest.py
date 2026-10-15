@@ -56,9 +56,12 @@ def pytest_collectreport(report) -> None:
 
 def pytest_runtest_logreport(report) -> None:
     _STATE["reported"].add(report.nodeid)
-    # A test ran when its call phase ran; an expected failure counts, a test
-    # skipped before its call (by a mark or at setup) does not.
-    if report.when == "call":
+    # A test ran when its call phase ran and did not end in a skip; an expected
+    # failure counts (pytest reports it as skipped with wasxfail set), a test
+    # skipped by a mark, at setup or from inside its own body does not.
+    if report.when == "call" and (
+        report.outcome != "skipped" or hasattr(report, "wasxfail")
+    ):
         _STATE["called_modules"].add(report.nodeid.split("::", 1)[0])
 
 

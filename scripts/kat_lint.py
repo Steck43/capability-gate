@@ -187,9 +187,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # The linter's own tests build rejected KATs as fixtures; they test the linter,
 # not the gate, and only match the KAT patterns by name and content.
-# Test files that name a receipts/ path without being known-answer tests: the
-# lint's own tests, and the check that public text cites no path into
-# another repository's receipt tree (it reads text and calls no gate).
+# Test files that match the name or receipts/ heuristics without being
+# known-answer tests: the lint's own tests, and the check that public text cites
+# no path into another repository's receipt tree (it reads text and calls no
+# gate). The exemption covers those two heuristics only: a "# KAT" marker still
+# makes either file a KAT. Each one is a pinned floor guard file.
 EXEMPT = {"tests/test_kat_lint.py", "tests/test_public_text_paths.py"}
 _MARKER = re.compile(r"^#\s*KAT\b")
 _NAME = re.compile(r"^test_k.*\.py$|kat", re.I)
@@ -453,14 +455,20 @@ def test_files(root: Path) -> list[Path]:
         for p in (*root.joinpath("tests").rglob("*.py"), *root.glob("*.py"))
         if p.name.lower().startswith("test") and p.is_file()
     } | {p for p in _pytest_collects(root) if p.suffix == ".py" and p.is_file()}
-    return sorted(p for p in found if p.relative_to(root).as_posix() not in EXEMPT)
+    return sorted(found)
 
 
 def discover(root: Path) -> list[Path]:
     found = []
     for p in test_files(root):
         src = p.read_bytes().decode("utf-8", errors="replace")
-        if _NAME.search(p.name) or _has_marker(src) or _names_receipts(src):
+        # EXEMPT covers the name and receipts heuristics only: a KAT marker
+        # still makes an exempt file a KAT.
+        if _has_marker(src):
+            found.append(p)
+        elif p.relative_to(root).as_posix() in EXEMPT:
+            continue
+        elif _NAME.search(p.name) or _names_receipts(src):
             found.append(p)
     return sorted(found)
 

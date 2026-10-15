@@ -50,7 +50,7 @@
     },
     {
       "path": "conftest.py",
-      "sha256": "26220881e6f04a099bf52d284ec680dd8a7bc5232421350856537ac4799d324d"
+      "sha256": "28046ef6486a5c2bc50146bcafab84885d9cf159588eb32422b9d3d519a64f8c"
     },
     {
       "path": "pytest.ini",
@@ -66,15 +66,15 @@
     },
     {
       "path": "scripts/floor_guard.py",
-      "sha256": "f031bdbd6662a890341edf8c31ff15a94bef8f26cf393c87cbad593c51a07dba"
+      "sha256": "6081e69c217f86700c7a1777163c1efc118cc8ea2a61a0ec905d99d803761ee3"
     },
     {
       "path": "scripts/kat_lint.py",
-      "sha256": "f2879394f922fe27462604aec1efe36123b6ccda855c890fe4ca053f00f5224f"
+      "sha256": "25595211f2d8b794f4591d629a8e79fe943e2c580025a069120785813ad2f9d4"
     },
     {
       "path": "scripts/leak_denylist_scan.py",
-      "sha256": "392ba61812a9c209528b834ef6c40bd61ede89d84b7e93e8cd5df6307254e05e"
+      "sha256": "3ffa18c8c70990423b27553e1c20c2230a0545a7a117f33831d840e6620a0744"
     },
     {
       "path": "scripts/no_ai_trailers.py",
@@ -86,7 +86,15 @@
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "5a6a42e53ef2d95284fc50eeef78a4273e86e2f1208e8452155f6f358c3639ff"
+      "sha256": "433d7fbdbe1ce95909e22eb2c0e717c143728e23e98f0665a56d8091338040dd"
+    },
+    {
+      "path": "tests/test_kat_lint.py",
+      "sha256": "b5c34f3e46543fd2ee7e4a1c08bade83a60fd7d6e4879812eb0d018e312f82a1"
+    },
+    {
+      "path": "tests/test_public_text_paths.py",
+      "sha256": "b12101f57a6f292b47526b2d589ac2f941c7d35d8edf852d1f359e3b9fa81efc"
     }
   ],
   "jobs": [
