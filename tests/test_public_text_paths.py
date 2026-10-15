@@ -600,3 +600,33 @@ def test_a_self_hosted_forge_url_points_into_another_repository(line: str) -> No
 )
 def test_a_web_url_without_a_forge_shape_stays_clean(line: str) -> None:
     assert not _foreign(line)
+
+
+# --- a scheme right before the folder name is never this checkout -------------------
+
+_SCHEME_FORMS = [
+    pytest.param(f"file:{_R}/y.md", id="file-no-slashes"),
+    pytest.param(f"file:./{_R}/y.md", id="file-dot-slash"),
+    pytest.param(f"vscode://{_R}/y.md", id="vscode-folder-first"),
+    pytest.param(f"file://{_R}/y.md", id="file-folder-as-host"),
+    pytest.param(f"vscode:{_R}/y.md", id="vscode-no-slashes"),
+    pytest.param(f"C:{_R}/y.md", id="drive-relative"),
+]
+
+
+@pytest.mark.parametrize("line", _SCHEME_FORMS)
+def test_a_scheme_right_before_the_folder_name_is_foreign(line: str) -> None:
+    assert _foreign(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(
+            f"note: {_R}/A1-KILL-SWITCH-2026-10-09.md", id="label-colon-space"
+        ),
+        pytest.param(f"https://example.invalid/{_R}/x", id="web-url"),
+    ],
+)
+def test_a_colon_label_before_this_checkouts_folder_stays_clean(line: str) -> None:
+    assert not _foreign(line)
