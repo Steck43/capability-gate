@@ -21,8 +21,15 @@ Fiat outcomes, anywhere in the file (tests, helpers, nested functions, module):
   a dynamic attribute; ``__import__`` or ``import_module`` with a name it
   cannot fold is a dynamic import;
 * raising ``AssertionError``, ``SystemExit``, ``KeyboardInterrupt``, a pytest
-  outcome exception or ``unittest.SkipTest``;
+  outcome exception or ``unittest.SkipTest``, or a class defined in the file
+  that inherits from one of them (through any depth of same-file classes),
+  and throwing one into a generator with ``.throw``;
 * an ``assert`` whose test folds to a constant, or always raises;
+* a tautological ``assert``: a comparison of an expression with itself
+  (``==``, ``!=``, ``is``, ``is not``, ordering), its negation,
+  ``isinstance(x, object)``, a constant element of a literal tuple or list
+  picked by a constant index, or membership in a literal container that names
+  every ``Verdict`` member;
 * a statement, return value, or assigned value that always raises;
 * in a test function, a ``raise`` that runs on every path and nothing catches.
 
@@ -56,7 +63,12 @@ Skip and xfail forms:
 
 A platform check is built only from ``sys.platform``, ``os.name``,
 ``platform.system()`` and the other ``platform`` calls, ``sys.version_info``,
-names assigned once from those, and constants.
+names assigned once from those, and constants. A platform check is evaluated
+on Linux, Windows and macOS: an imperative skip whose guard runs it on all
+three (``sys.platform != "none"``, ``os.name == os.name``, every system
+listed, two inequalities joined by ``or``), and a ``skipif`` true on all
+three, never run the check and are rejected. A guard false on all three never
+fires its skip, so the test runs and that stays clean.
 
 Reaching the real gate. A test reaches the gate when its straight-line path
 (try, with, and for bodies count; if branches, except handlers, while loops,
@@ -78,7 +90,12 @@ test helper module, conftest, a class defined or subclassed in the file,
 ``adapters`` folder sits beside the test file, when the test, its fixtures,
 autouse fixtures, its helpers or the module patch the gate (``setattr`` or
 ``monkeypatch.setattr`` or ``mock.patch`` on a gate, the Gate class, or a gate
-function, or assignment to one of their attributes), or when the call is dead:
+function; assignment to one of their attributes or to an attribute of
+``type(gate)``; ``__setattr__`` or ``__delattr__`` called on any of them, or
+through ``object`` or ``type``; a store into, or ``update``, ``setdefault``,
+``pop`` or ``clear`` on, their ``__dict__`` or ``vars()``), when the test
+rebinds a gate fixture it takes to anything other than a real gate (plain,
+tuple-unpacking or walrus assignment), or when the call is dead:
 under a constant-false branch, in a loop over an empty constant, in a
 comprehension over one, in a generator expression nothing consumes, or inside
 ``pytest.raises``, ``contextlib.suppress`` or ``assertRaises``.
@@ -88,12 +105,20 @@ Every KAT that reaches the gate must also assert on its result: a live
 name, through a flag or counter set under a branch or handler that depends on
 one, through a list it was appended to, through a same-file fixture that
 returns one, or through a same-file helper that asserts on the argument it is
-given.
+given. An ``assert`` inside a ``try`` whose handler catches its failure
+(``AssertionError``, ``Exception``, ``BaseException``, a bare ``except`` or a
+tuple holding one) and does not raise again does not count.
+
+A name defined more than once at module level in a KAT file is rejected:
+pytest uses the last definition, so a second fixture of the same name can
+replace the real gate.
 
 KAT files are found recursively under tests/ and among top-level test files,
 case-insensitively: names like test_k*.py or containing "kat", any file with a
 "# KAT" comment, and any test file that names a receipts/ path. Files named on
-the command line are linted as KATs whatever their name.
+the command line are linted as KATs whatever their name. With
+``--require-kats`` a run that finds no KAT file fails, so a check cannot pass
+by having nothing to judge.
 
 Known gaps: the lint reads one file. A gate patched from conftest.py or another
 module, a fixture supplied by conftest.py, a module loaded by file path, and a
@@ -103,9 +128,15 @@ the gate; fault injection anywhere else (for example
 ``monkeypatch.setattr(os, "lstat", ...)``, or a private helper in the
 ``capability_gate`` module) is allowed on purpose. A ``while`` body never
 counts as reaching the gate. It proves the test asks the real gate and asserts
-on the answer; it does not prove the assertion is the right one.
+on the answer; it does not prove the assertion is the right one. Tautologies
+are recognised only in the listed shapes; an assert that is always true for a
+reason the lint cannot see (for example ``d.verdict in tuple(Verdict)``, or a
+membership in a container built at run time) is not caught. Patching through
+an alias the lint cannot resolve (a gate stored in a container and patched
+from there) is not caught.
 
-Exit 0 = clean. Exit 1 = violation. Exit 2 = a file did not parse.
+Exit 0 = clean. Exit 1 = violation, or no KAT file with ``--require-kats``.
+Exit 2 = a file did not parse.
 """
 
 from __future__ import annotations
@@ -224,6 +255,21 @@ _PLATFORM_VALUES = {
         "OpenBSD",
         "AIX",
     },
+}
+# One world per mainstream platform. A platform condition true in every world
+# (or false in every world) decides nothing about where the test runs.
+_WORLDS = (
+    {"sys.platform": "linux", "os.name": "posix", "platform.system": "Linux"},
+    {"sys.platform": "win32", "os.name": "nt", "platform.system": "Windows"},
+    {"sys.platform": "darwin", "os.name": "posix", "platform.system": "Darwin"},
+)
+_NO_VALUE = object()
+# Exceptions an assert raises when it fails; a handler for one of these that
+# does not re-raise swallows the assert.
+_ASSERT_CATCHERS = {
+    "builtins.AssertionError",
+    "builtins.Exception",
+    "builtins.BaseException",
 }
 _PURE = {
     "bool": bool,
@@ -1011,6 +1057,9 @@ class _File:
         for n in ast.walk(tree):
             if isinstance(n, _FUNCS):
                 self.funcs.setdefault(n.name, n)
+        self.classes = {
+            n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)
+        }
         self.fixtures = {
             name: fn for name, fn in self.funcs.items() if self._is_fixture(fn)
         }
@@ -1457,13 +1506,52 @@ class _File:
             n and n.split(".", 1)[0] in REAL_ROOTS for n in self.names.resolve(expr)
         )
 
+    def gate_namespace(self, expr: ast.AST, typed: set[str]) -> bool:
+        """The attribute dict of a gate, the Gate class or a gate module."""
+        if isinstance(expr, ast.Attribute) and expr.attr == "__dict__":
+            inner = expr.value
+        elif (
+            isinstance(expr, ast.Call)
+            and self.names.resolve(expr.func) == {"builtins.vars"}
+            and expr.args
+        ):
+            inner = expr.args[0]
+        else:
+            return False
+        return self.gate_target(inner, typed) or self.real_module(inner)
+
+    def gate_type(self, expr: ast.AST, typed: set[str]) -> bool:
+        """type(gate): the class a gate instance was built from."""
+        return (
+            isinstance(expr, ast.Call)
+            and self.names.resolve(expr.func) == {"builtins.type"}
+            and len(expr.args) == 1
+            and self.gate_target(expr.args[0], typed)
+        )
+
     def patch_at(self, node: ast.AST, typed: set[str]) -> bool:
         if isinstance(node, ast.Call):
             f = node.func
+            if isinstance(f, ast.Attribute):
+                if f.attr in ("__setattr__", "__delattr__") and (
+                    self.gate_target(f.value, typed) or self.gate_type(f.value, typed)
+                ):
+                    return True
+                if f.attr in (
+                    "update",
+                    "__setitem__",
+                    "__delitem__",
+                    "setdefault",
+                    "pop",
+                    "popitem",
+                    "clear",
+                ) and self.gate_namespace(f.value, typed):
+                    return True
             spelled = ast.unparse(f)
             resolved = {n or "" for n in self.names.resolve(f)}
             setter = (
-                isinstance(f, ast.Attribute) and f.attr in ("setattr", "delattr")
+                isinstance(f, ast.Attribute)
+                and f.attr in ("setattr", "delattr", "__setattr__", "__delattr__")
             ) or resolved & {"builtins.setattr", "builtins.delattr"}
             patcher = any(
                 r.endswith(("mock.patch", "mock.patch.object", "mock.patch.multiple"))
@@ -1472,6 +1560,8 @@ class _File:
             if not (setter or patcher) or not node.args:
                 return False
             target = node.args[0]
+            if self.gate_type(target, typed):
+                return True
             if isinstance(target, ast.Constant) and isinstance(target.value, str):
                 parts = target.value.split(".")
                 return parts[0] in REAL_ROOTS and bool(set(parts[1:]) & GATE_ATTRS)
@@ -1486,10 +1576,17 @@ class _File:
         if isinstance(node, (ast.Assign, ast.Delete)):
             for t in node.targets:
                 for a in ast.walk(t):
+                    if isinstance(a, ast.Subscript) and isinstance(
+                        a.ctx, (ast.Store, ast.Del)
+                    ):
+                        if self.gate_namespace(a.value, typed):
+                            return True
                     if isinstance(a, ast.Attribute) and isinstance(
                         a.ctx, (ast.Store, ast.Del)
                     ):
-                        if self.gate_target(a.value, typed):
+                        if self.gate_target(a.value, typed) or self.gate_type(
+                            a.value, typed
+                        ):
                             return True
                         if self.real_module(a.value) and a.attr in GATE_ATTRS:
                             return True
@@ -1617,6 +1714,31 @@ class _File:
                     out.add(n.id)
         return out
 
+    def catches_assert(self, handler: ast.ExceptHandler) -> bool:
+        if handler.type is None:
+            return True
+        kinds = (
+            handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+        )
+        return any(self.names.resolve(k) & _ASSERT_CATCHERS for k in kinds)
+
+    def swallowed(self, node: ast.AST, fn: ast.AST) -> bool:
+        """An assert inside a try whose handler catches its failure and does
+        not raise again: the assert can never fail the test."""
+        child = node
+        while child in self.parents and child is not fn:
+            p = self.parents[child]
+            if (isinstance(p, ast.Try) or type(p).__name__ == "TryStar") and (
+                child in p.body
+            ):
+                for h in p.handlers:
+                    if self.catches_assert(h) and not any(
+                        isinstance(x, ast.Raise) for x in ast.walk(h)
+                    ):
+                        return True
+            child = p
+        return False
+
     def asserts_result(
         self, fn, params: frozenset[str], seed: set[str], seen: frozenset[str]
     ) -> bool:
@@ -1624,7 +1746,9 @@ class _File:
         results = self.result_names(fn, typed, seed)
         for s in self.live_stmts(fn.body):
             if isinstance(s, ast.Assert):
-                if self.uses_result(s.test, typed, results):
+                if self.uses_result(s.test, typed, results) and not self.swallowed(
+                    s, fn
+                ):
                     return True
             for e in self.stmt_exprs(s):
                 for c in self.live_calls(e):
@@ -1707,6 +1831,113 @@ def _platform_kind(f: _File, node: ast.AST, depth: int = 0) -> str:
     if "mixed" in kinds:
         return "mixed"
     return "pure" if "pure" in kinds else "const"
+
+
+def _platform_eval(f: _File, node: ast.AST, world: dict, depth: int = 0):
+    """The value of a platform-only expression on one platform, or _NO_VALUE."""
+    if depth > 20:
+        return _NO_VALUE
+    d = depth + 1
+    atom = _platform_atom(f, node)
+    if atom:
+        return world.get(atom, _NO_VALUE)
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        vals = f.names.binds.get(node.id, [])
+        if len(vals) == 1 and vals[0][0] == "value":
+            return _platform_eval(f, vals[0][1], world, d)
+        return _NO_VALUE
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        out = [_platform_eval(f, e, world, d) for e in node.elts]
+        return _NO_VALUE if any(v is _NO_VALUE for v in out) else tuple(out)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        v = _platform_eval(f, node.operand, world, d)
+        return _NO_VALUE if v is _NO_VALUE else not v
+    if isinstance(node, ast.BoolOp):
+        result = None
+        for v_node in node.values:
+            v = _platform_eval(f, v_node, world, d)
+            if v is _NO_VALUE:
+                return _NO_VALUE
+            result = v
+            if bool(v) == isinstance(node.op, ast.Or):
+                return v
+        return result
+    if isinstance(node, ast.Compare):
+        left = _platform_eval(f, node.left, world, d)
+        for op, right_node in zip(node.ops, node.comparators):
+            right = _platform_eval(f, right_node, world, d)
+            if left is _NO_VALUE or right is _NO_VALUE:
+                return _NO_VALUE
+            try:
+                if isinstance(op, (ast.Eq, ast.Is)):
+                    ok = left == right
+                elif isinstance(op, (ast.NotEq, ast.IsNot)):
+                    ok = left != right
+                elif isinstance(op, ast.In):
+                    ok = left in right
+                elif isinstance(op, ast.NotIn):
+                    ok = left not in right
+                else:
+                    return _NO_VALUE
+            except TypeError:
+                return _NO_VALUE
+            if not ok:
+                return False
+            left = right
+        return True
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in ("startswith", "endswith")
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        obj = _platform_eval(f, node.func.value, world, d)
+        arg = _platform_eval(f, node.args[0], world, d)
+        if isinstance(obj, str) and (
+            isinstance(arg, str)
+            or (isinstance(arg, tuple) and all(isinstance(a, str) for a in arg))
+        ):
+            return getattr(obj, node.func.attr)(arg)
+    return _NO_VALUE
+
+
+def _platform_constant(f: _File, node: ast.AST) -> bool | None:
+    """True or False when a platform condition has that value on every
+    mainstream platform; None when it depends on the platform or is unknown."""
+    values = [_platform_eval(f, node, w) for w in _WORLDS]
+    if any(v is _NO_VALUE for v in values):
+        return None
+    truths = {bool(v) for v in values}
+    return truths.pop() if len(truths) == 1 else None
+
+
+def _platform_guard(f: _File, node: ast.AST):
+    """(the nearest enclosing if whose test is purely a platform check, and
+    whether node sits in its body) or (None, False)."""
+    child = node
+    while child in f.parents:
+        p = f.parents[child]
+        if isinstance(p, _SCOPES):
+            break
+        if isinstance(p, ast.If) and _platform_kind(f, p.test) == "pure":
+            return p, child in p.body
+        child = p
+    return None, False
+
+
+def _guard_problem(f: _File, node: ast.AST) -> str | None:
+    """Why a skip's platform guard decides nothing, or None if it is real. A
+    guard false on every platform never fires the skip, so it stays clean."""
+    guard, in_body = _platform_guard(f, node)
+    if guard is None:
+        return None
+    const = _platform_constant(f, guard.test)
+    if const is not None and const == in_body:
+        return "sits under a platform check that is true on every platform, so it always runs"
+    return None
 
 
 def _impossible_platform(f: _File, node: ast.AST) -> bool:
@@ -1799,6 +2030,14 @@ def _check_condition(
             label,
             line,
             f"{mark} compares a platform to a value no platform has",
+        )
+        return
+    if mark == "skipif" and kind == "pure" and _platform_constant(f, parsed) is True:
+        _report(
+            problems,
+            label,
+            line,
+            "skipif on a platform check that is true on every platform never runs the check",
         )
         return
     if kat and mark == "skipif" and t != "false" and kind != "pure":
@@ -1953,6 +2192,21 @@ def _uncaught_raise(f: _File, node: ast.Raise, fn) -> bool:
 
 def _fiat_raise(f: _File, node: ast.Raise) -> str | None:
     exc = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
+    return _fiat_exception(f, exc)
+
+
+def _fiat_exception(f: _File, exc: ast.AST | None, depth: int = 0) -> str | None:
+    """What an exception class decides when raised in a KAT: an assert
+    failure, a forced exit or a skip, through aliases and same-file
+    subclasses."""
+    if exc is None or depth > 10:
+        return None
+    if isinstance(exc, ast.Name) and exc.id in f.classes:
+        cls = f.classes[exc.id]
+        for base in cls.bases:
+            what = _fiat_exception(f, base, depth + 1)
+            if what:
+                return what
     for r in f.names.resolve(exc):
         if r == "builtins.AssertionError":
             return "raise AssertionError"
@@ -1961,6 +2215,105 @@ def _fiat_raise(f: _File, node: ast.Raise) -> str | None:
         skip = _skip_kind(r)
         if skip:
             return skip
+    return None
+
+
+def _verdict_members() -> set[str]:
+    """Every member of capability_gate.Verdict, read from the real source."""
+    path = ROOT / "capability_gate.py"
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return set()
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "Verdict":
+            return {
+                f"capability_gate.Verdict.{t.id}"
+                for s in node.body
+                if isinstance(s, ast.Assign)
+                for t in s.targets
+                if isinstance(t, ast.Name)
+            }
+    return set()
+
+
+_VERDICTS = _verdict_members()
+
+
+def _same(a: ast.AST, b: ast.AST) -> bool:
+    return ast.dump(a, annotate_fields=False) == ast.dump(b, annotate_fields=False)
+
+
+def _tautology(f: _File, test: ast.AST) -> bool:
+    """An assert whose outcome does not depend on the value it names."""
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return _tautology(f, test.operand)
+    if isinstance(test, ast.Compare) and len(test.ops) == 1:
+        left, right = test.left, test.comparators[0]
+        if _same(left, right) and isinstance(
+            test.ops[0],
+            (ast.Eq, ast.NotEq, ast.Is, ast.IsNot, ast.Lt, ast.LtE, ast.Gt, ast.GtE),
+        ):
+            return True
+        if (
+            isinstance(test.ops[0], (ast.In, ast.NotIn))
+            and isinstance(right, (ast.Tuple, ast.List, ast.Set))
+            and _VERDICTS
+        ):
+            named = set()
+            for e in right.elts:
+                named |= {r for r in f.names.resolve(e) if r}
+            if _VERDICTS <= named:
+                return True
+    if (
+        isinstance(test, ast.Call)
+        and f.names.resolve(test.func) == {"builtins.isinstance"}
+        and len(test.args) == 2
+    ):
+        kinds = (
+            test.args[1].elts if isinstance(test.args[1], ast.Tuple) else [test.args[1]]
+        )
+        if any(f.names.resolve(k) == {"builtins.object"} for k in kinds):
+            return True
+    if (
+        isinstance(test, ast.Subscript)
+        and isinstance(test.value, (ast.Tuple, ast.List))
+        and isinstance(test.slice, ast.Constant)
+        and isinstance(test.slice.value, int)
+        and not isinstance(test.slice.value, bool)
+    ):
+        elts = test.value.elts
+        i = test.slice.value
+        if -len(elts) <= i < len(elts):
+            kind, _v = f.fold.fold(elts[i], f.fold.at(test))
+            return kind == "value" or _tautology(f, elts[i])
+    return False
+
+
+def _rebound_gate(f: _File, fn) -> ast.AST | None:
+    """The first statement in a test that rebinds a gate fixture parameter to
+    anything that is not the real gate."""
+    params = f.auto_params(fn)
+    if not params:
+        return None
+    typed = f.typed_names(fn, params)
+    for n in _scope_nodes(fn):
+        if not (
+            isinstance(n, ast.Name)
+            and n.id in params
+            and isinstance(n.ctx, (ast.Store, ast.Del))
+        ):
+            continue
+        p = f.parents.get(n)
+        value = None
+        if isinstance(p, (ast.Assign, ast.AnnAssign)) and any(
+            t is n for t in (p.targets if isinstance(p, ast.Assign) else [p.target])
+        ):
+            value = p.value
+        elif isinstance(p, ast.NamedExpr) and p.target is n:
+            value = p.value
+        if value is None or not f.makes_gate(value, typed):
+            return n
     return None
 
 
@@ -1988,13 +2341,49 @@ def lint_source(src: str, label: str, shadowed: bool = False) -> list[str]:
                         f"unconditional {shown} in a KAT file never runs the check",
                     )
                 skip = _skip_kind(r)
-                if skip and _is_called(f, n) and not _under_platform_if(f, n):
+                if skip and _is_called(f, n):
+                    if not _under_platform_if(f, n):
+                        _report(
+                            problems,
+                            label,
+                            n.lineno,
+                            f"{skip} in a KAT file outside a platform check never runs the check",
+                        )
+                    else:
+                        why = _guard_problem(f, n)
+                        if why:
+                            _report(problems, label, n.lineno, f"{skip} {why}")
+            if (
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "throw"
+                and n.args
+                and not f.under_expected_exception(n)
+            ):
+                thrown = n.args[0]
+                what = _fiat_exception(
+                    f, thrown.func if isinstance(thrown, ast.Call) else thrown
+                )
+                if what:
                     _report(
                         problems,
                         label,
                         n.lineno,
-                        f"{skip} in a KAT file outside a platform check never runs the check",
+                        f"throw {what.removeprefix('raise ')} in a KAT file fails by fiat",
                     )
+            if (
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "skipTest"
+                and _under_platform_if(f, n)
+                and _guard_problem(f, n)
+            ):
+                _report(
+                    problems,
+                    label,
+                    n.lineno,
+                    f"self.skipTest {_guard_problem(f, n)}",
+                )
             if (
                 isinstance(n, ast.Call)
                 and isinstance(n.func, ast.Attribute)
@@ -2041,6 +2430,13 @@ def lint_source(src: str, label: str, shadowed: bool = False) -> list[str]:
                 _report(
                     problems, label, n.lineno, f"{what} in a KAT file fails by fiat"
                 )
+            elif _tautology(f, n.test):
+                _report(
+                    problems,
+                    label,
+                    n.lineno,
+                    "tautological assert in a KAT file never tests the gate's answer",
+                )
         if isinstance(n, (ast.Expr, ast.Return, ast.Assign, ast.If, ast.While)):
             value = n.test if isinstance(n, (ast.If, ast.While)) else n.value
             if (
@@ -2057,10 +2453,31 @@ def lint_source(src: str, label: str, shadowed: bool = False) -> list[str]:
                     )
     _check_marks(f, problems, label, kat=True)
 
+    # pytest keeps the last module-level definition of a name; the lint would
+    # judge the first. A second definition is refused outright.
+    seen_defs: dict[str, int] = {}
+    for s in tree.body:
+        if isinstance(s, (*_FUNCS, ast.ClassDef)):
+            if s.name in seen_defs:
+                _report(
+                    problems,
+                    label,
+                    s.lineno,
+                    f"{s.name} is defined more than once in a KAT file; pytest uses the last definition",
+                )
+            seen_defs.setdefault(s.name, s.lineno)
+
     for name, fn in f.funcs.items():
         if not name.startswith("test"):
             continue
         where = f"{label}:{fn.lineno} {name}"
+        rebound = _rebound_gate(f, fn)
+        if rebound is not None:
+            problems.append(
+                f"{where}: rebinds the gate fixture {rebound.id} at line {rebound.lineno};"
+                " the test no longer holds the real gate"
+            )
+            continue
         line = f.patched(fn)
         if line is not None:
             problems.append(
@@ -2097,9 +2514,17 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("files", nargs="*", type=Path)
     ap.add_argument("--root", type=Path, default=ROOT)
+    ap.add_argument(
+        "--require-kats",
+        action="store_true",
+        help="fail when no KAT file is found, so a run cannot pass with nothing to judge",
+    )
     a = ap.parse_args(argv)
     files = a.files or discover(a.root)
     every = a.files or test_files(a.root)
+    if a.require_kats and not files:
+        print("kat lint: no KAT file found; --require-kats needs at least one")
+        return 1
 
     problems = []
     try:

@@ -2388,10 +2388,6 @@ HOLE_PLATFORM = {
         _first("if sys.platform != 'zqxwvk':\n    pytest.skip('x')"),
         "true on every platform",
     ),
-    "eq_impossible_value": (
-        _first("if sys.platform == 'zqxwvk':\n    pytest.skip('x')"),
-        "a value no platform has",
-    ),
     "self_comparison": (
         _first("if os.name == os.name:\n    pytest.skip('x')"),
         "true on every platform",
@@ -2497,11 +2493,17 @@ HOLE_ASSERT = {
     ),
     "tuple_index_constant": (_plain("assert (d.verdict, 1)[1]"), "tautological assert"),
     "in_every_verdict": (
-        _plain("assert d.verdict in (Verdict.ALLOW, Verdict.DENY)"),
+        _plain(
+            "assert d.verdict in "
+            "(Verdict.ALLOW, Verdict.DENY, Verdict.ASK, Verdict.THROWN)"
+        ),
         "tautological assert",
     ),
     "in_every_verdict_list": (
-        _plain("assert d.verdict in [Verdict.DENY, Verdict.ALLOW]"),
+        _plain(
+            "assert d.verdict in "
+            "[Verdict.THROWN, Verdict.DENY, Verdict.ASK, Verdict.ALLOW]"
+        ),
         "tautological assert",
     ),
     "swallowed_assertion_error": (
@@ -2546,6 +2548,8 @@ def test_a_kat_decided_by_something_else_is_rejected(
 
 
 HOLE_CLEAN = {
+    # A guard false on every platform never fires the skip; the test runs.
+    "eq_impossible_value": _first("if sys.platform == 'zqxwvk':\n    pytest.skip('x')"),
     "real_platform_skip": _first(
         "if sys.platform == 'win32':\n    pytest.skip('posix only')"
     ),
@@ -2565,6 +2569,10 @@ HOLE_CLEAN = {
     ),
     "vars_of_another_object": _first("vars(tmp_path)", params="gate, tmp_path"),
     "assert_in_one_verdict": _plain("assert d.verdict in (Verdict.DENY,)"),
+    # evaluate can return ASK, so naming two verdicts still tells ASK apart.
+    "assert_in_two_verdicts": _plain(
+        "assert d.verdict in (Verdict.ALLOW, Verdict.DENY)"
+    ),
     "assert_equal_to_constant": _plain("assert d.verdict == Verdict.DENY"),
     "try_that_reraises": _plain(
         "try:\n    assert d.verdict is Verdict.DENY\nexcept AssertionError:\n    raise"
