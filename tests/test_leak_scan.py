@@ -271,6 +271,97 @@ def test_text_mode_fails_closed_without_list(repo: Path) -> None:
     assert "denylist not configured" in r.stdout
 
 
+# --- the shared list's canary line is not a name (shared secret, 2026-10-14) ------
+# The same LEAK_DENYLIST value feeds isolation-layer's public surface scan, which
+# needs the fixed canary "zqxwvk" to prove the list matches. Here that line is
+# skipped: it names nothing private, and the tests use it as a fake term.
+
+CANARY = "zqx" + "wvk"
+
+
+def _commit(repo: Path, message: str) -> str:
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", message], check=True)
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+@pytest.mark.parametrize("canary", [CANARY, CANARY.upper(), f"  {CANARY}  "])
+def test_the_canary_line_is_not_a_name(repo: Path, canary: str) -> None:
+    f = _write(repo, f"fixture {CANARY} and {CANARY.upper()}\n")
+    r = _run([str(f)], repo, denylist=f"{canary}\n{SYNTHETIC_NAME}\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_canary_line_is_not_a_name_in_ci_mode(repo: Path) -> None:
+    _write(repo, "base\n")
+    base = _commit(repo, "base")
+    _write(repo, f"fixture {CANARY}\n")
+    _commit(repo, f"add a {CANARY} fixture")
+    r = _run(["--ci", "--base", base], repo, denylist=f"{CANARY}\n{SYNTHETIC_NAME}\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_every_other_entry_still_hits_beside_the_canary(repo: Path) -> None:
+    f = _write(repo, f"notes on {SYNTHETIC_NAME}\n")
+    r = _run([str(f)], repo, denylist=f"{CANARY}\n{SYNTHETIC_NAME}\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist entry 1" in r.stdout, r.stdout
+
+
+def test_a_list_holding_only_the_canary_is_not_configured(repo: Path) -> None:
+    _write(repo, "base\n")
+    base = _commit(repo, "base")
+    r = _run(["--ci", "--base", base], repo, denylist=f"{CANARY}\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist not configured" in r.stdout, r.stdout
+
+
+# Only the exact canary line is skipped. A line that contains the canary, or
+# looks like it, is a real entry and still hits.
+
+
+@pytest.mark.parametrize(
+    ("entry", "planted"),
+    [
+        pytest.param(f"{CANARY}2", f"{CANARY}2", id="suffix"),
+        pytest.param(f"x{CANARY}", f"x{CANARY}", id="prefix"),
+        pytest.param(f"{CANARY} {CANARY}", f"{CANARY} {CANARY}", id="doubled"),
+        pytest.param(f"{CANARY}.", f"{CANARY}.", id="punctuated"),
+        pytest.param("zqx wvk", "zqx wvk", id="split"),
+        pytest.param("zqxwvк", "zqxwvк", id="look-alike-letter"),
+        pytest.param(f"re:{CANARY}", CANARY, id="regex-of-canary"),
+        pytest.param(f"re:\\b{CANARY}\\b", CANARY, id="bounded-regex-of-canary"),
+    ],
+)
+def test_a_line_that_only_resembles_the_canary_stays_a_real_entry(
+    repo: Path, entry: str, planted: str
+) -> None:
+    f = _write(repo, f"text {planted} text\n")
+    r = _run([str(f)], repo, denylist=f"{CANARY}\n{entry}\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist entry 1" in r.stdout, r.stdout
+
+
+def test_negative_control_the_scanner_finds_a_planted_canary_when_asked(
+    repo: Path,
+) -> None:
+    """The skip is not a blind spot in matching. With the canary line present
+    and the canary also listed as a pattern, a planted canary is found; with
+    only the canary line beside another name, the same text passes."""
+    f = _write(repo, f"planted {CANARY} here\n")
+    asked = _run([str(f)], repo, denylist=f"{CANARY}\nre:{CANARY}\n")
+    assert asked.returncode == 1, asked.stdout + asked.stderr
+    assert "denylist entry 1" in asked.stdout, asked.stdout
+    assert CANARY not in asked.stdout + asked.stderr
+    skipped = _run([str(f)], repo, denylist=f"{CANARY}\n{SYNTHETIC_NAME}\n")
+    assert skipped.returncode == 0, skipped.stdout + skipped.stderr
+
+
 # --- an added line that reads like a file header is still scanned ------------------
 # git prefixes every added line with "+", so a line whose own text starts with
 # "++ b/" shows as "+++ b/..." in the diff. Only the header block between

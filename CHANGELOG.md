@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `scripts/leak_denylist_scan.py` skips the line `zqxwvk` in the list, in any case. The same `LEAK_DENYLIST` value feeds isolation-layer's public surface scan, which needs that fixed canary; here it would have flagged every test fixture that uses the fake term. A list holding only the canary counts as not configured, so CI still fails closed.
 - The known-answer test linter exempts `tests/test_public_text_paths.py` by name. It names `receipts/` paths, so discovery took it for a known-answer test, but it reads tracked text and never calls the gate.
 - The names-and-paths scan reads a file header only between `diff --git` and the first hunk. An added line whose own text starts with `++ b/` or `++ /dev/null` appears in the diff as `+++ ...`; it was taken for a header, so that line, and after a `/dev/null` form every later line of the file, went unscanned.
 - `REPRODUCE-PAPER.md` no longer cites the raw prove artifact by its path in a private repository; it names the artifact as private and keeps its sha256, so the digest can still be checked by anyone holding the file.
