@@ -3213,3 +3213,45 @@ def test_an_assert_whose_truth_depends_on_the_answer_stays_clean(
 ) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", _plain(ALWAYS_TRUTHY_CLEAN[shape])))
     assert r.returncode == 0, r.stdout
+
+
+# --- always-pass review round: an expression compared with itself in disguise -------
+# A walrus target is the value it names, the element of a one-off display picked
+# by a constant index is that element, and membership in a display holding the
+# expression itself always holds. A display's length is known from its shape.
+
+SELF_IN_DISGUISE = {
+    "walrus-is-self": "assert (y := d) is y",
+    "walrus-eq-self": "assert (y := d.verdict) == y",
+    "walrus-value-is-self": "assert (y := d) is d",
+    "in-own-tuple": "assert d in (d,)",
+    "in-own-list": "assert d.verdict in [d.verdict]",
+    "in-own-set-among-others": "assert d.verdict in {Verdict.ASK, d.verdict}",
+    "len-set-of-id": "assert len({id(d)}) == 1",
+    "len-dict-one": "assert len({1: d}) == 1",
+    "first-of-own-list-is": "assert [d][0] is d",
+    "first-of-own-tuple-eq": "assert (d.verdict,)[0] == d.verdict",
+}
+
+SELF_IN_DISGUISE_CLEAN = {
+    "walrus-then-real-compare": "assert (y := d.verdict) is Verdict.DENY",
+    "in-other-values": "assert d.verdict in (Verdict.DENY, Verdict.ASK)",
+    "len-of-a-real-list": "assert len(d.reason) == 1",
+    "len-of-starred-set": "assert len({*d.reason}) == 1",
+    "element-compared-with-answer": "assert [d.verdict][0] is Verdict.DENY",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(SELF_IN_DISGUISE))
+def test_an_expression_compared_with_itself_in_disguise_is_rejected(
+    tmp_path: Path, shape: str
+) -> None:
+    _expect(tmp_path, _plain(SELF_IN_DISGUISE[shape]), "assert in a KAT file")
+
+
+@pytest.mark.parametrize("shape", sorted(SELF_IN_DISGUISE_CLEAN))
+def test_a_compare_that_reads_the_answer_stays_clean(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", _plain(SELF_IN_DISGUISE_CLEAN[shape])))
+    assert r.returncode == 0, r.stdout
