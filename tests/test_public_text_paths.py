@@ -16,8 +16,8 @@ trailing slash) is judged by the whole path before it:
 - nothing before it, or a folder path that exists inside this checkout: home;
 - a leading slash, a drive letter, or any ".." step: another tree, even when
   it would land on this checkout's own receipts folder;
-- a URL with any scheme but http or https (file, vscode, ssh, ...): a path
-  outside the checkout;
+- a URL with any scheme but http or https (file, vscode, ssh, ...), with or
+  without slashes, and a drive-relative path: a path outside the checkout;
 - a GitHub blob, tree or raw URL: home only when it points into this
   repository, judged by the path after the ref; any other code forge, known by
   its host or by its URL shape on any host: another repository;
@@ -185,8 +185,8 @@ _FORGE_SHAPE = re.compile(
 def _foreign_url(prefix: str) -> bool | str:
     """True or False for a URL; the repository path after the ref for a URL
     into this repository on GitHub, to be judged like any other path."""
-    scheme, _, rest = prefix.partition("://")
-    if not rest:
+    scheme, sep, rest = prefix.partition("://")
+    if not sep:
         scheme, rest = "https", prefix
     if scheme.lower() not in ("http", "https"):
         return True  # file, vscode, ssh and the rest: a path outside the checkout
@@ -204,7 +204,13 @@ def _foreign_url(prefix: str) -> bool | str:
     return False  # another web site: not a repository path
 
 
+# A URL scheme or a drive letter with its colon, at the start of the prefix.
+_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
 def _foreign_prefix(prefix: str) -> bool:
+    if "://" not in prefix and _SCHEME.match(prefix):
+        return True  # file:, vscode:, a drive-relative C: and the like
     if "://" in prefix or prefix.lower().startswith(("github.com/", "www.github")):
         verdict = _foreign_url(prefix)
         if isinstance(verdict, bool):

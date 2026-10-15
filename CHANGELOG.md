@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The private path test reads a scheme with no slashes (`file:`, `vscode:`), a scheme whose slashes run straight into the receipts folder (`vscode://`, `file://`), and a drive-relative path (`C:` with no slash) as a path outside the checkout; they had read as this checkout's own folder.
 - The private path test knows a self-hosted code forge by its URL shape on any host (GitLab `/-/blob/`, `/-/tree/` and `/-/raw/`; Gitea and Forgejo `/src/branch/`, `/src/commit/` and `/src/tag/`; Bitbucket `/src/` or `/raw/` before a commit) and reads such a URL that reaches a receipts folder as another repository.
 - The private path test reads a receipts folder joined onto a runtime value (a name, attribute or call before it in `os.path.join`, `.joinpath`, a Path `/` or a `+`) as a path outside the checkout. It used to drop the runtime value and read the rest as this checkout's own folder.
 - The private path test drops default-ignorable code points (the combining grapheme joiner, Hangul fillers, variation and tag selectors) and combining marks along with format characters before matching, so none of them inside the receipts folder name hides it.
