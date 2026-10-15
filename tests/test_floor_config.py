@@ -3184,3 +3184,42 @@ def test_a_module_of_expected_failures_still_ran(tmp_path: Path) -> None:
     assert _run_pytest(root, record).returncode == 0
     check = _run_check(root, record)
     assert check.returncode == 0, check.stdout + check.stderr
+
+
+# --- N4: a test that skips itself in its body did not run -----------------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param("    pytest.skip('x')\n", id="skip-call"),
+        pytest.param("    raise pytest.skip.Exception('x')\n", id="skip-exception"),
+        pytest.param(
+            "    import unittest\n    raise unittest.SkipTest('x')\n",
+            id="unittest-skip",
+        ),
+    ],
+)
+def test_a_module_whose_tests_skip_in_their_body_is_not_a_run(
+    tmp_path: Path, body: str
+) -> None:
+    module = "import pytest\n\ndef test_zqxwvk():\n" + body
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": module}
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert "tests/test_b.py: no test in it ran" in check.stdout, check.stdout
+
+
+def test_a_module_with_one_real_run_beside_a_body_skip_ran(tmp_path: Path) -> None:
+    module = "import pytest\n\ndef test_skips():\n    pytest.skip('x')\n\n" + _PASSING
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": module}
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 0, check.stdout + check.stderr
