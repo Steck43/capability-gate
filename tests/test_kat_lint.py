@@ -3158,3 +3158,57 @@ def test_sides_that_are_not_negations_stay_clean(tmp_path: Path, shape: str) -> 
         _write(tmp_path, "test_k_case.py", _plain(ALWAYS_PASS_PAIRS_CLEAN[shape]))
     )
     assert r.returncode == 0, r.stdout
+
+
+# --- always-pass review round: a test that is truthy by construction --------------
+# A display, a generator, an f-string, repr/str/format/hasattr of anything,
+# any() with a constant-true element and len(...) >= 0 hold whatever the gate
+# answered. Non-empty displays and all() of an empty display were already caught
+# as constants; they stay here as regressions.
+
+ALWAYS_TRUTHY = {
+    "tuple-display": "assert (d.verdict is Verdict.DENY,)",
+    "starred-display": "assert (*[d],)",
+    "starred-list-display": "assert [*[d]]",
+    "list-display": "assert [d.verdict]",
+    "set-display": "assert {d.verdict}",
+    "dict-display": "assert {1: d.verdict}",
+    "generator": "assert (v for v in [d.verdict])",
+    "f-string": 'assert f"{d.verdict}"',
+    "repr-call": "assert repr(d)",
+    "str-call": "assert str(d.verdict)",
+    "format-call": "assert format(d.verdict)",
+    "hasattr-call": "assert hasattr(d, 'verdict')",
+    "any-with-true": "assert any([True, d.verdict is Verdict.DENY])",
+    "any-with-truthy-constant": "assert any((d.verdict is Verdict.DENY, 'x'))",
+    "all-of-empty-or": "assert all(()) or d.verdict is Verdict.DENY",
+    "all-of-empty-list-or": "assert all([]) or d.verdict is Verdict.DENY",
+    "len-ge-zero": "assert len(d.reason) >= 0",
+    "zero-le-len": "assert 0 <= len(d.reason)",
+    "len-gt-minus-one": "assert len(d.reason) > -1",
+}
+
+ALWAYS_TRUTHY_CLEAN = {
+    "len-gt-zero": "assert len(d.reason) > 0",
+    "any-of-real-tests": (
+        "assert any([d.verdict is Verdict.DENY, d.verdict is Verdict.ASK])"
+    ),
+    "all-of-real-tests": "assert all([d.verdict is Verdict.DENY, d.reason])",
+    "str-compared": "assert str(d.verdict) == 'Verdict.DENY'",
+    "list-comprehension": "assert [v for v in d.reason if v]",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(ALWAYS_TRUTHY))
+def test_an_assert_that_is_truthy_by_construction_is_rejected(
+    tmp_path: Path, shape: str
+) -> None:
+    _expect(tmp_path, _plain(ALWAYS_TRUTHY[shape]), "assert in a KAT file")
+
+
+@pytest.mark.parametrize("shape", sorted(ALWAYS_TRUTHY_CLEAN))
+def test_an_assert_whose_truth_depends_on_the_answer_stays_clean(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", _plain(ALWAYS_TRUTHY_CLEAN[shape])))
+    assert r.returncode == 0, r.stdout
