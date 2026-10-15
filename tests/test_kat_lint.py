@@ -2740,3 +2740,130 @@ def test_the_honest_guard_raise_hook_or_module_form_stays_clean(
 ) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", GROUP_A_CLEAN[shape]))
     assert r.returncode == 0, r.stdout
+
+
+# --- review round on #101, group B: dead asserts after a jump, and constants
+# routed through a function, lambda, class attribute, dict, partial, getattr or
+# staticmethod.
+
+_VERDICT_ASSERT = "assert d.verdict is Verdict.DENY"
+_NEVER = "never asserts on the gate's result"
+
+GROUP_B = {
+    "return-in-constant-loop-before-assert": (
+        _plain(f"for _ in [1]:\n    return\n{_VERDICT_ASSERT}"),
+        _NEVER,
+    ),
+    "return-in-true-branch-before-assert": (
+        _plain(f"if True:\n    return\n{_VERDICT_ASSERT}"),
+        _NEVER,
+    ),
+    "return-in-with-before-assert": (
+        _plain(f"with contextlib.nullcontext():\n    return\n{_VERDICT_ASSERT}"),
+        _NEVER,
+    ),
+    "return-in-try-before-assert": (
+        _plain(f"try:\n    return\nfinally:\n    pass\n{_VERDICT_ASSERT}"),
+        _NEVER,
+    ),
+    "assert-after-break": (
+        _plain(f"for _ in [1]:\n    break\n    {_VERDICT_ASSERT}"),
+        _NEVER,
+    ),
+    "assert-after-continue": (
+        _plain(f"for _ in [1]:\n    continue\n    {_VERDICT_ASSERT}"),
+        _NEVER,
+    ),
+    "assert-under-finally-return": (
+        _plain(f"try:\n    {_VERDICT_ASSERT}\nfinally:\n    return"),
+        _NEVER,
+    ),
+    "assert-under-finally-break": (
+        _plain(
+            f"for _ in [1]:\n    try:\n        {_VERDICT_ASSERT}\n    finally:\n        break"
+        ),
+        _NEVER,
+    ),
+    "constant-through-function": (
+        _kat("assert _no()", "def _no():\n    return False"),
+        "assert False in a KAT file fails by fiat",
+    ),
+    "constant-through-lambda": (
+        _kat("assert NO()", "NO = lambda: False"),
+        "assert False in a KAT file fails by fiat",
+    ),
+    "constant-through-class-attribute": (
+        _kat("assert C.NO", "class C:\n    NO = False"),
+        "assert False in a KAT file fails by fiat",
+    ),
+    "constant-through-dict": (
+        _kat("assert D['no']", "D = {'no': False}"),
+        "assert False in a KAT file fails by fiat",
+    ),
+    "constant-through-partial": (
+        _kat("assert NO()", "import functools\n\nNO = functools.partial(bool, 0)"),
+        "assert False in a KAT file fails by fiat",
+    ),
+    "constant-through-getattr": (
+        _kat("assert getattr(C, 'NO')", "class C:\n    NO = False"),
+        "assert False in a KAT file fails by fiat",
+    ),
+    "constant-through-staticmethod": (
+        _kat(
+            "assert C.no()",
+            "class C:\n    @staticmethod\n    def no():\n        return False",
+        ),
+        "assert False in a KAT file fails by fiat",
+    ),
+    "skipif-through-function": (
+        KAT_HEAD
+        + "def _yes():\n    return True\n\n\n"
+        + "@pytest.mark.skipif(_yes(), reason='x')\n"
+        + f"def test_k_case(gate):\n    {_EVAL}\n    {_VERDICT_ASSERT}\n",
+        "skipif",
+    ),
+}
+
+GROUP_B_CLEAN = {
+    "return-under-unknown-branch": _plain(
+        f"if d.reason:\n    return\n{_VERDICT_ASSERT}"
+    ),
+    "assert-after-loop-with-break": _plain(
+        f"for _ in [1]:\n    break\n{_VERDICT_ASSERT}"
+    ),
+    "assert-under-finally-pass": _plain(
+        f"try:\n    {_VERDICT_ASSERT}\nfinally:\n    pass"
+    ),
+    "function-of-the-result": _plain(
+        "assert _denied(d)",
+        "def _denied(x):\n    return x.verdict is Verdict.DENY",
+    ),
+    "class-attribute-compared-with-result": _plain(
+        "assert d.verdict is C.WANT", "class C:\n    WANT = Verdict.DENY"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(GROUP_B))
+def test_a_dead_assert_or_routed_constant_from_review_is_rejected(
+    tmp_path: Path, shape: str
+) -> None:
+    src, reason = GROUP_B[shape]
+    _expect(tmp_path, src, reason)
+
+
+@pytest.mark.parametrize("shape", sorted(GROUP_B_CLEAN))
+def test_a_live_assert_or_a_result_routed_through_a_helper_stays_clean(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", GROUP_B_CLEAN[shape]))
+    assert r.returncode == 0, r.stdout
+
+
+def test_require_kats_is_a_documented_flag() -> None:
+    """CI wiring of the flag follows in the leak scan pull request's floor job."""
+    r = _lint("--help")
+    assert r.returncode == 0, r.stderr
+    assert "--require-kats" in r.stdout
+    doc = ast.get_docstring(ast.parse(SCRIPT.read_text(encoding="utf-8")))
+    assert "--require-kats" in (doc or "")
