@@ -2175,7 +2175,8 @@ def test_each_rule_rejects_its_form_2(tmp_path: Path, shape: str) -> None:
 CLEAN_2 = {
     "parameter_shadows_module": ("assert X", "X = 0", "gate, X"),
     "walrus_statement_rebinds": ("(X := d)\nassert X", "X = 0"),
-    "assigned_builtin": ("assert bool(0)", "bool = str"),
+    # Rebound to int: str of anything is rejected as never testing the answer.
+    "assigned_builtin": ("assert bool(0)", "bool = int"),
     "imported_builtin_name": ("assert bool(0)", "from os.path import exists as bool"),
     "builtin_named_parameter": ("assert bool(0)", "", "gate, bool"),
     "starred_list_may_be_empty": ("assert [*d.reason]", ""),

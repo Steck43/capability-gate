@@ -36,6 +36,12 @@ Fiat outcomes, anywhere in the file (tests, helpers, nested functions, module):
   ``bool(x)`` is read as ``x``, ``!=``, ``is not`` and ``not in`` are read as
   negated ``==``, ``is`` and ``in``, and ``==`` and ``is`` operands are put in
   a fixed order;
+* an ``assert`` whose test is truthy by construction: a display (tuple,
+  list, set or dict) with a plain element or a starred non-empty display
+  (``(*[d],)``), a generator expression, an f-string or a lambda; ``repr``, ``str``, ``format`` or ``hasattr`` of
+  anything; ``any`` over a display with an element that folds true; and a
+  length compared so that no length can fail it (``len(x) >= 0``,
+  ``0 <= len(x)``, ``len(x) > -1``);
 * a statement, return value, or assigned value that always raises;
 * in a test function, a ``raise`` that runs on every path and nothing catches.
   A loop over a non-empty constant, ``while True`` and the first case of a
@@ -2735,10 +2741,85 @@ def _same(a: ast.AST, b: ast.AST) -> bool:
     return ast.dump(a, annotate_fields=False) == ast.dump(b, annotate_fields=False)
 
 
+# Calls whose result says nothing about the answer as an assert test.
+_NOT_A_CHECK = {"builtins.repr", "builtins.str", "builtins.format", "builtins.hasattr"}
+
+
+def _len_bound(f: _File, test: ast.Compare) -> bool:
+    """``len(x) >= 0`` and the forms that mean it: a length is never negative."""
+    op = test.ops[0]
+    left, right = test.left, test.comparators[0]
+
+    def is_len(n: ast.AST) -> bool:
+        return isinstance(n, ast.Call) and f.names.resolve(n.func) == {"builtins.len"}
+
+    def number(n: ast.AST) -> float | None:
+        kind, v = f.fold.fold(n, f.fold.at(n))
+        if kind == "value" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            return v
+        return None
+
+    if is_len(left) and (k := number(right)) is not None:
+        return (isinstance(op, ast.GtE) and k <= 0) or (
+            isinstance(op, ast.Gt) and k < 0
+        )
+    if is_len(right) and (k := number(left)) is not None:
+        return (isinstance(op, ast.LtE) and k <= 0) or (
+            isinstance(op, ast.Lt) and k < 0
+        )
+    return False
+
+
+def _nonempty_display(node: ast.AST) -> bool:
+    """A display that has an element whatever its parts hold: a plain element,
+    or a starred or ``**`` part that is itself a non-empty display. A starred
+    part with unknown contents may be empty, so it proves nothing."""
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        return any(
+            not isinstance(e, ast.Starred) or _nonempty_display(e.value)
+            for e in node.elts
+        )
+    if isinstance(node, ast.Dict):
+        return any(
+            k is not None or _nonempty_display(v)
+            for k, v in zip(node.keys, node.values, strict=True)
+        )
+    return False
+
+
+def _truthy_by_construction(f: _File, test: ast.AST) -> bool:
+    """A test that holds whatever the gate answered: a provably non-empty
+    display, a generator, an f-string or a lambda, repr, str, format or hasattr
+    of anything, any() over a display with an element that folds true, and a
+    length compared so that no length can fail it."""
+    if isinstance(test, (ast.GeneratorExp, ast.JoinedStr, ast.Lambda)):
+        return True
+    if _nonempty_display(test):
+        return True
+    if isinstance(test, ast.Call):
+        name = f.names.resolve(test.func)
+        if name & _NOT_A_CHECK:
+            return True
+        if (
+            name == {"builtins.any"}
+            and len(test.args) == 1
+            and isinstance(test.args[0], (ast.Tuple, ast.List, ast.Set))
+        ):
+            for e in test.args[0].elts:
+                kind, v = f.fold.fold(e, f.fold.at(e))
+                if kind == "value" and v:
+                    return True
+    if isinstance(test, ast.Compare) and len(test.ops) == 1:
+        return _len_bound(f, test)
+    return False
+
+
 def _tautology(f: _File, test: ast.AST) -> bool:
     """An assert whose outcome does not depend on the value it names."""
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         return _tautology(f, test.operand)
+    if _truthy_by_construction(f, test):
+        return True
     if isinstance(test, ast.BoolOp):
         return _side_truth(f, test) is not None
     if isinstance(test, ast.Compare) and len(test.ops) == 1:
