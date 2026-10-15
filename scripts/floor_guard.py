@@ -1751,6 +1751,11 @@ _FILE_EXEMPTION = re.compile(r"(?i)^#\s*(?:ruff|flake8)\s*:\s*noqa\b")
 NOQA_INVENTORY: dict[str, int] = {
     "harness/d15_hermes_faithful.py:E402": 1,
     "scripts/floor_guard.py:S506": 1,
+    "scripts/kat_lint.py:C901": 3,
+    "scripts/kat_lint.py:E731": 1,
+    "scripts/kat_lint.py:PLR0904": 1,
+    "scripts/kat_lint.py:PLR0911": 3,
+    "scripts/kat_lint.py:PLR0912": 3,
     "test_e2_mode_staleness.py:F401": 1,
     "tests/grind01_util.py:E402": 1,
     "tests/test_alias_class.py:E402": 2,

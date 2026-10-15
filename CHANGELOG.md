@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The floor guard's per-line lint exemption inventory holds the known-answer test linter's eleven exemptions (complexity and branch counts on its folding and resolving functions, one class size, one lambda assignment), named by file and code, so they stay visible to review.
 - Every per-line lint exemption is held by inventory. The guard counts each `noqa` comment ruff would honour (with codes, blanket, or after other comment text) per file and code, and any new one, one more of an existing code, or a blanket one is a violation, so silencing ruff on a line needs a change to the guard. Notebooks are read too: a code cell's file-level or per-line exemption counts like a Python file's, and a notebook that does not parse is a violation.
 - A test module skipped as a whole is not a run. The conftest records whole-module skips separately, and `scripts/run_record_check.py` fails the tests job on any module skipped whole except the one listed module that needs a Hermes install the job leaves out. A record with no tests collected fails, and that branch is now tested.
 - `tests/test_leak_scan.py` uses a fake private name other than the shared list's canary, which the scanner now skips (#97); with the canary as the fake name, 8 of its cases failed.
