@@ -139,24 +139,48 @@ under a constant-false branch, in a loop over an empty constant, in a
 comprehension over one, in a generator expression nothing consumes, or inside
 ``pytest.raises``, ``contextlib.suppress`` or ``assertRaises``.
 
-Every KAT that reaches the gate must also assert on its result (a name that
-held the result and is rebound on the straight path to something else no
-longer holds it, by any store: a plain assignment, a name inside an
-unpacking target (``d, = (fake,)``) or a ``for`` loop's target, and ``len()`` of a list or tuple display is a constant): a
-live
-``assert`` that uses a value derived from a gate call, directly, through a
-name, through a flag or counter set under a branch or handler that depends on
-one, through a list it was appended to, through a same-file fixture that
-returns one, or through a same-file helper that asserts on the argument it is
-given. An ``assert`` inside a ``try`` whose handler catches its failure
+Every KAT that reaches the gate must also assert on the gate's answer, and
+only one form counts (an allowlist, not a list of refused shapes): a single
+``==`` or ``is`` (never ``!=`` or ``is not``, which pass on every other answer)
+between either
+
+- a verdict: ``.verdict`` read from a gate call or from a name that only ever
+  holds a gate result, or a name that only ever holds such a verdict; and a
+  ``Verdict`` member or a verdict string (``"allow"``, ``"deny"``, ``"ask"``);
+- or a gate call's own answer: the call, a name that only ever holds it, or
+  its ``returncode`` (the hook script run as a process); and a literal
+  (``None``, a bool, a number or a string).
+
+A name only ever holds a result when every store to it in the test is that
+binding; any other store anywhere in the test (a plain assignment, an
+unpacking, an augmented assignment, a loop target, a ``with`` name, a delete)
+takes it out. The assert must sit on the test's straight path: the body, the
+chosen branch of a constant ``if``, a ``try`` or ``with`` body, a ``finally``,
+and the body of a ``for`` over a non-empty constant, before any statement that
+always leaves. An assert in an ``if`` on an unknown test, a handler, a loop's
+``else``, a ``while`` body, a nested function or a helper does not satisfy the
+KAT, nor does one inside a ``try`` whose handler catches its failure
 (``AssertionError``, ``Exception``, ``BaseException``, a bare ``except`` or a
-tuple holding one) and does not raise again does not count, nor does one
-inside a ``try`` whose ``finally`` returns, breaks or continues (that discards
-the failure), nor one that follows a ``break`` or ``continue``, or follows a
-block that always returns or raises (a constant-true branch, a ``with`` or
-``try`` body, a loop over a non-empty constant, ``while True``, or a ``match``
-whose first case matches everything), nor one in the ``else`` of a ``while``
-loop whose test is always true (that ``else`` never runs).
+tuple holding one) without raising again, nor one inside a ``try`` whose
+``finally`` returns, breaks or continues.
+
+Every other assert in a KAT test that reads the gate's answer (a name derived
+from a gate result, or a gate call) is refused, unless it is one of the named
+richer forms in ``ANSWER_FORMS``. Each is accepted in exactly this shape and
+none satisfies a KAT on its own:
+
+- reason substring, ``"<text>" in <result>.reason``: a real deny names its
+  reason, and a fixed string in it is not true of every answer;
+- enforced flag, ``<result>.enforced is True`` or ``is False`` (``==`` too):
+  whether the verdict was enforced or only observed;
+- paths literal, ``<result>.paths == (<string literals>)``: the paths the gate
+  judged, written out.
+
+So boolean combinations, ``not``, displays, comprehensions, calls, formatting,
+helpers, partials, properties, subscripts, membership, chained comparisons,
+ternaries and walrus expressions that read the answer are all refused, however
+they are spelled. An assert that reads no gate answer (a file on disk, a log
+row read back, a count from a helper) is still judged by the rules above.
 
 A name defined more than once at module level in a KAT file is rejected:
 pytest uses the last definition, so a second fixture of the same name can
@@ -180,20 +204,20 @@ the gate; fault injection anywhere else (for example
 ``monkeypatch.setattr(os, "lstat", ...)``, or a private helper in the
 ``capability_gate`` module) is allowed on purpose. A ``while`` body never
 counts as reaching the gate. It proves the test asks the real gate and asserts
-on the answer; it does not prove the assertion is the right one. Tautologies
-are recognised only in the listed shapes; an assert that is always true for a
-reason the lint cannot see (for example ``d.verdict in tuple(Verdict)``, or a
-membership in a container built at run time) is not caught. Patching through
+on the answer; it does not prove the assertion is the right one (a verdict
+compared with one the gate cannot return makes a red test, not a passing
+one). For asserts that read no gate answer, tautologies are recognised only
+in the listed shapes. Patching through
 an alias the lint cannot resolve (a gate stored in a container and patched
 from there) is not caught. Review findings N7 to N14 belong to other pull
 requests (the leak scan, the wiring check, the hook, the kill switch and the
 path matcher), not to this lint; H5d to H5n could not be identified from the
 review record. The floor's KAT lint job does not pass ``--require-kats`` yet;
-wiring it into floor.yml is #84's change. A test that is truthy by
-construction is caught only in the listed shapes, and a display with a
-starred part of unknown contents is not one of them (it may be empty). A
-helper folds only when its one ``return`` reads none of its parameters or
-returns one unchanged; anything it computes from its arguments does not.
+wiring it into floor.yml is #84's change. For asserts that read no gate
+answer, a test that is truthy by construction is caught only in the listed
+shapes, and a display with a starred part of unknown contents is not one of
+them (it may be empty); a helper folds only when its one ``return`` reads
+none of its parameters or returns one unchanged.
 
 Every file is read as Python reads it: a coding cookie other than UTF-8 (any
 alias of UTF-8, such as ``utf8`` or ``U8``, is UTF-8), or bytes that are not
@@ -2272,74 +2296,232 @@ class _File:
             child = p
         return False
 
-    def asserts_result(
-        self, fn, params: frozenset[str], seed: set[str], seen: frozenset[str]
+    # --- the answer allowlist
+
+    def runs_once(self, it: ast.AST) -> bool:
+        kind, v = self.fold.fold(it, self.fold.at(it))
+        try:
+            return kind == "value" and len(v) > 0  # type: ignore[arg-type]
+        except TypeError:
+            return False
+
+    def straight_path(self, stmts: list[ast.stmt]) -> tuple[list[ast.stmt], str | None]:
+        """Statements that run on every pass through, in order: the chosen
+        branch of a constant if, try and with bodies, a finally, and the body of
+        a for over a non-empty constant. A branch on an unknown test, a handler,
+        a loop's else and a while body are not on the path. Stops at the first
+        statement that always leaves."""
+        out: list[ast.stmt] = []
+        for s in stmts:
+            out.append(s)
+            inner: list[ast.stmt] | None = None
+            if isinstance(s, ast.If):
+                truth = self.fold.truth(s.test)
+                if truth == "true":
+                    inner = s.body
+                elif truth == "false":
+                    inner = s.orelse
+            elif isinstance(s, ast.Try) or type(s).__name__ == "TryStar":
+                inner = s.body
+            elif isinstance(s, (ast.With, ast.AsyncWith)):
+                if not any(self.expected_exception(i) for i in s.items):
+                    inner = s.body
+            elif isinstance(s, (ast.For, ast.AsyncFor)) and self.runs_once(s.iter):
+                inner = s.body
+            if inner is not None:
+                sub, left = self.straight_path(inner)
+                out += sub
+                if left == "func":
+                    return out, "func"
+            if (
+                isinstance(s, ast.Try) or type(s).__name__ == "TryStar"
+            ) and s.finalbody:
+                sub, left = self.straight_path(s.finalbody)
+                out += sub
+                if left:
+                    return out, left
+            how = self.leaves(s)
+            if how:
+                return out, how
+        return out, None
+
+    @staticmethod
+    def stores(fn) -> dict[str, list[ast.AST | None]]:
+        """Every value each name in the test is set to; None where the store
+        binds something the lint does not read as a value (an unpacking, an
+        augmented assignment, a loop target, a with name, a delete)."""
+        out: dict[str, list[ast.AST | None]] = {}
+
+        def add(name: str, value: ast.AST | None) -> None:
+            out.setdefault(name, []).append(value)
+
+        def names_in(tgt: ast.AST) -> list[str]:
+            return [
+                x.id
+                for x in ast.walk(tgt)
+                if isinstance(x, ast.Name) and isinstance(x.ctx, (ast.Store, ast.Del))
+            ]
+
+        for n in _scope_nodes(fn):
+            if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                if n.value is None:
+                    continue
+                targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+                for tgt in targets:
+                    if isinstance(tgt, ast.Name):
+                        add(tgt.id, n.value)
+                    else:
+                        for name in names_in(tgt):
+                            add(name, None)
+            elif isinstance(n, (ast.AugAssign, ast.For, ast.AsyncFor)):
+                for name in names_in(n.target):
+                    add(name, None)
+            elif isinstance(n, ast.withitem) and n.optional_vars is not None:
+                for name in names_in(n.optional_vars):
+                    add(name, None)
+            elif isinstance(n, ast.Delete):
+                for tgt in n.targets:
+                    for name in names_in(tgt):
+                        add(name, None)
+        return out
+
+    def result_value(self, node: ast.AST, direct: set[str], typed: set[str]) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in direct and isinstance(node.ctx, ast.Load)
+        return isinstance(node, ast.Call) and self.call_reaches(
+            node, typed, frozenset()
+        )
+
+    def verdict_value(
+        self, node: ast.AST, direct: set[str], verdicts: set[str], typed: set[str]
     ) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in verdicts and isinstance(node.ctx, ast.Load)
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "verdict"
+            and self.result_value(node.value, direct, typed)
+        )
+
+    def verdict_token(self, node: ast.AST) -> bool:
+        if isinstance(node, ast.Constant):
+            return node.value in _VERDICT_STRINGS
+        return bool(self.names.resolve(node) & _VERDICTS)
+
+    def answer_names(
+        self, fn, typed: set[str], seed: set[str]
+    ) -> tuple[set[str], set[str]]:
+        """Names that only ever hold a gate result, and names that only ever
+        hold a result's verdict. Any other store to a name, anywhere in the
+        test, takes it out."""
+        stores = self.stores(fn)
+        direct = {n for n in seed if n not in stores} | {
+            n
+            for n, values in stores.items()
+            if values
+            and all(
+                v is not None
+                and isinstance(v, ast.Call)
+                and self.call_reaches(v, typed, frozenset())
+                for v in values
+            )
+        }
+        verdicts = {
+            n
+            for n, values in stores.items()
+            if values
+            and all(
+                v is not None and self.verdict_value(v, direct, set(), typed)
+                for v in values
+            )
+        }
+        return direct, verdicts
+
+    def core_answer(
+        self, test: ast.AST, direct: set[str], verdicts: set[str], typed: set[str]
+    ) -> bool:
+        """One == or is between a verdict and a Verdict member or string."""
+        if not (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], (ast.Eq, ast.Is))
+        ):
+            return False
+        a, b = test.left, test.comparators[0]
+        if (
+            self.verdict_value(a, direct, verdicts, typed) and self.verdict_token(b)
+        ) or (self.verdict_value(b, direct, verdicts, typed) and self.verdict_token(a)):
+            return True
+        return (self.call_answer(a, direct, typed) and _plain_literal(b)) or (
+            self.call_answer(b, direct, typed) and _plain_literal(a)
+        )
+
+    def call_answer(self, node: ast.AST, direct: set[str], typed: set[str]) -> bool:
+        """A gate call's own answer: the call, a name that only ever holds it,
+        or its returncode (the hook script run as a process)."""
+        if isinstance(node, ast.Attribute) and node.attr == "returncode":
+            node = node.value
+        return self.result_value(node, direct, typed)
+
+    def named_answer(
+        self, test: ast.AST, direct: set[str], typed: set[str]
+    ) -> str | None:
+        """The richer forms a real KAT needs, each named in ANSWER_FORMS."""
+        if not (isinstance(test, ast.Compare) and len(test.ops) == 1):
+            return None
+        op, a, b = test.ops[0], test.left, test.comparators[0]
+
+        def field(n: ast.AST, name: str) -> bool:
+            return (
+                isinstance(n, ast.Attribute)
+                and n.attr == name
+                and self.result_value(n.value, direct, typed)
+            )
+
+        def const(n: ast.AST, kind: type) -> bool:
+            return (
+                isinstance(n, ast.Constant)
+                and isinstance(n.value, kind)
+                and (kind is not int or not isinstance(n.value, bool))
+            )
+
+        if isinstance(op, ast.In) and const(a, str) and field(b, "reason"):
+            return "reason substring"
+        if isinstance(op, (ast.Is, ast.Eq)) and field(a, "enforced") and const(b, bool):
+            return "enforced flag"
+        if (
+            isinstance(op, ast.Eq)
+            and field(a, "paths")
+            and isinstance(b, (ast.Tuple, ast.List))
+            and all(const(e, str) for e in b.elts)
+        ):
+            return "paths literal"
+        return None
+
+    def answer_check(self, fn, params: frozenset[str], seed: set[str]):
+        """(an accepted answer assert on the straight path, the asserts that
+        read the answer in a refused form)."""
         typed = self.typed_names(fn, params)
         results = self.result_names(fn, typed, seed)
-        # A name that held the result on the straight path and is then rebound
-        # there to something else no longer holds it. A name first set to a
-        # placeholder (a flag or counter set later under a branch) is untouched.
-        held: set[str] = set(seed)
-        for s in self.live_stmts(fn.body):
-            # Any store counts: a plain name, a name inside an unpacking
-            # target (d, = ...), and a for loop's target.
-            source = None
-            targets: list[ast.AST] = []
+        direct, verdicts = self.answer_names(fn, typed, seed)
+        refused: list[ast.Assert] = []
+        for n in _scope_nodes(fn):
             if (
-                isinstance(s, (ast.Assign, ast.AnnAssign))
-                and self.parents.get(s) is fn
-                and s.value is not None
+                isinstance(n, ast.Assert)
+                and not self.under_expected_exception(n)
+                and self.uses_result(n.test, typed, results)
+                and not self.core_answer(n.test, direct, verdicts, typed)
+                and self.named_answer(n.test, direct, typed) is None
             ):
-                source = s.value
-                targets = s.targets if isinstance(s, ast.Assign) else [s.target]
-            elif isinstance(s, (ast.For, ast.AsyncFor)) and self.parents.get(s) is fn:
-                source, targets = s.iter, [s.target]
-            if source is not None:
-                holds = self.uses_result(source, typed, results)
-                stored = [
-                    n.id
-                    for tgt in targets
-                    for n in ast.walk(tgt)
-                    if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
-                ]
-                for name in stored:
-                    if holds:
-                        held.add(name)
-                        results.add(name)
-                    elif name in held:
-                        held.discard(name)
-                        results.discard(name)
-            if isinstance(s, ast.Assert):
-                if self.uses_result(s.test, typed, results) and not self.swallowed(
-                    s, fn
-                ):
-                    return True
-            for e in self.stmt_exprs(s):
-                for c in self.live_calls(e):
-                    if not isinstance(c.func, ast.Name) or c.func.id not in self.funcs:
-                        continue
-                    g = self.funcs[c.func.id]
-                    if g.name in seen or self.names.strictly(c.func) != {
-                        f"<local>.{g.name}"
-                    }:
-                        continue
-                    names = [a.arg for a in (*g.args.posonlyargs, *g.args.args)]
-                    passed = {
-                        names[i]
-                        for i, a in enumerate(c.args)
-                        if i < len(names)
-                        and not isinstance(a, ast.Starred)
-                        and self.uses_result(a, typed, results)
-                    } | {
-                        k.arg
-                        for k in c.keywords
-                        if k.arg and self.uses_result(k.value, typed, results)
-                    }
-                    gp = self.gate_params(g, c, typed)
-                    if self.asserts_result(g, gp, passed, seen | {g.name}):
-                        return True
-        return False
+                refused.append(n)
+        path, _left = self.straight_path(fn.body)
+        accepted = any(
+            isinstance(s, ast.Assert)
+            and self.core_answer(s.test, direct, verdicts, typed)
+            and not self.swallowed(s, fn)
+            for s in path
+        )
+        return accepted, refused
 
 
 # ------------------------------------------------------------------------- rules
@@ -2858,6 +3040,26 @@ def _verdict_members() -> set[str]:
 _VERDICTS = _verdict_members()
 
 
+# The verdict strings the gate writes, compared as a verdict member's value.
+def _plain_literal(node: ast.AST) -> bool:
+    """None, a bool, a number or a string written out: the one thing a gate
+    call's answer may be compared with."""
+    return isinstance(node, ast.Constant) and (
+        node.value is None or isinstance(node.value, (bool, int, float, str))
+    )
+
+
+_VERDICT_STRINGS = frozenset({"allow", "deny", "ask"})
+# The richer answer forms a real KAT needs beside the verdict comparison.
+# Each is accepted only in exactly this shape and never satisfies a KAT on
+# its own; the docstring says why each one is safe.
+ANSWER_FORMS = (
+    "reason substring",
+    "enforced flag",
+    "paths literal",
+)
+
+
 def _forms(node: ast.AST, depth: int = 0) -> set[str]:
     """Every spelling of one value: the node itself, a walrus as both its
     target and its value, and a one-off display picked by a constant index as
@@ -3342,8 +3544,21 @@ def lint_source(src: str, label: str, shadowed: bool = False) -> list[str]:
                 )
             continue
         seed = f.result_params(fn)
-        if not f.asserts_result(fn, f.auto_params(fn), seed, frozenset({name})):
-            problems.append(f"{where}: never asserts on the gate's result")
+        accepted, refused = f.answer_check(fn, f.auto_params(fn), seed)
+        for a in refused:
+            _report(
+                problems,
+                label,
+                a.lineno,
+                "not an accepted assert on the gate's answer: use one == or is between"
+                " the result's verdict and a Verdict member or verdict string",
+            )
+        if not accepted:
+            problems.append(
+                f"{where}: never asserts on the gate's result in the accepted form"
+                " (one == or is between its verdict and a Verdict member or verdict"
+                " string, on the test's straight path)"
+            )
     problems += [p for p in lint_hatches(src, label, f) if p not in problems]
     return problems
 

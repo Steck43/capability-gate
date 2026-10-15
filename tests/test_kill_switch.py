@@ -143,11 +143,10 @@ def test_ks_log_one_thrown_row_chain_holds_denies_logged(gate, root, log):
     assert len(thrown) == 1
     assert "kill switch" in thrown[0]["reason"]
     assert thrown[0]["paths"] == [gate.halt_path]
-    denies = [
-        gate.evaluate("writer", "write_file", [_granted(root)]),
-        gate.evaluate("writer", "read_file", [_granted(root)]),
-    ]
-    assert [d.verdict for d in denies] == [Verdict.DENY, Verdict.DENY]
+    first = gate.evaluate("writer", "write_file", [_granted(root)])
+    second = gate.evaluate("writer", "read_file", [_granted(root)])
+    assert first.verdict is Verdict.DENY
+    assert second.verdict is Verdict.DENY
     verify_hash_chain(str(log))
     after = _rows(log)[-2:]
     assert [r["verdict"] for r in after] == ["deny", "deny"]
@@ -210,7 +209,7 @@ def test_ks_paths_materialized_once_generator(gate, root):
     paths = (p for p in ["/etc/passwd"])
     d = gate.evaluate("writer", "write_file", paths)
     assert d.verdict is Verdict.DENY
-    assert "outside allowlist" in d.reason or "passwd" in d.reason
+    assert "outside allowlist" in d.reason
     assert d.paths == ("/etc/passwd",)
 
 

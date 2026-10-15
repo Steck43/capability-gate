@@ -398,7 +398,7 @@ def test_platform_conditional_skip_with_gate_call_is_accepted(tmp_path: Path) ->
 def test_k_pl(gate):
     if sys.platform == "win32":
         pytest.skip("no symlinks without privilege")
-    assert gate.evaluate("s", "read_file", ["x"]) is not None
+    assert gate.evaluate("s", "read_file", ["x"]).verdict == "deny"
 """
     r = _lint(_write(tmp_path, "test_k_platform.py", GATE_HEADER + body))
     assert r.returncode == 0, r.stdout
@@ -1137,6 +1137,69 @@ def _assert_denied(d):
 """
 
 CORPUS = {
+    "platform_only_imperative_skip": """
+def test_k(gate, tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("POSIX path shapes only")
+    assert _attempt(gate, tmp_path).verdict is Verdict.DENY
+""",
+    "platform_only_skipif": """
+@pytest.mark.skipif(not POSIX, reason="POSIX only")
+def test_k(gate, tmp_path):
+    assert _attempt(gate, tmp_path).verdict is Verdict.DENY
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="POSIX only")
+def test_k2(gate, tmp_path):
+    assert _attempt(gate, tmp_path).verdict is Verdict.DENY
+
+
+@pytest.mark.skipif("sys.platform == 'win32'", reason="POSIX only")
+def test_k3(gate, tmp_path):
+    assert _attempt(gate, tmp_path).verdict is Verdict.DENY
+""",
+    "fixture_returns_decision": """
+def test_k(decision):
+    assert decision.verdict is Verdict.DENY
+""",
+    "expected_exception_elsewhere": """
+def test_k(gate, tmp_path):
+    with pytest.raises(ValueError):
+        int("not a number")
+    assert _attempt(gate, tmp_path).verdict is Verdict.DENY
+""",
+    "try_finally": """
+def test_k(gate, tmp_path):
+    try:
+        d = _attempt(gate, tmp_path)
+    finally:
+        pass
+    assert d.verdict is Verdict.DENY
+""",
+    "strict_xfail_reaching_the_gate": """
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="pinned limit")
+def test_k(gate, tmp_path):
+    assert _attempt(gate, tmp_path).verdict is Verdict.ALLOW
+""",
+    "throw_then_evaluate": """
+def test_k(gate, tmp_path):
+    assert gate.throw("drill") is True
+    d = gate.evaluate("writer", "read_file", [str(tmp_path / "work" / "a.txt")])
+    assert d.verdict is Verdict.DENY
+""",
+    "fault_injection_outside_the_gate": """
+def test_k(gate, tmp_path, monkeypatch):
+    def boom(_path):
+        raise OSError("zqxwvk")
+
+    monkeypatch.setattr(os, "lstat", boom)
+    d = _attempt(gate, tmp_path)
+    assert d.verdict is Verdict.DENY
+""",
+}
+
+# Entries of CORPUS whose answer assert the allowlist now refuses.
+CORPUS_REFUSED_BY_ALLOWLIST = {
     "flag_set_in_handler": """
 def test_k(gate, tmp_path):
     denied = False
@@ -1170,27 +1233,6 @@ def test_k(gate, tmp_path):
         seen.append(_attempt(gate, tmp_path, name).verdict)
     assert seen == [Verdict.DENY, Verdict.DENY]
 """,
-    "platform_only_imperative_skip": """
-def test_k(gate, tmp_path):
-    if sys.platform == "win32":
-        pytest.skip("POSIX path shapes only")
-    assert _attempt(gate, tmp_path).verdict is Verdict.DENY
-""",
-    "platform_only_skipif": """
-@pytest.mark.skipif(not POSIX, reason="POSIX only")
-def test_k(gate, tmp_path):
-    assert _attempt(gate, tmp_path).verdict is Verdict.DENY
-
-
-@pytest.mark.skipif(platform.system() == "Windows", reason="POSIX only")
-def test_k2(gate, tmp_path):
-    assert _attempt(gate, tmp_path).verdict is Verdict.DENY
-
-
-@pytest.mark.skipif("sys.platform == 'win32'", reason="POSIX only")
-def test_k3(gate, tmp_path):
-    assert _attempt(gate, tmp_path).verdict is Verdict.DENY
-""",
     "helper_asserts": """
 def test_k(gate, tmp_path):
     _assert_denied(_attempt(gate, tmp_path))
@@ -1200,41 +1242,12 @@ def test_k2(gate, tmp_path):
     d = gate.evaluate("writer", "read_file", [str(tmp_path / "x")])
     _assert_denied(d)
 """,
-    "fixture_returns_decision": """
-def test_k(decision):
-    assert decision.verdict is Verdict.DENY
-""",
-    "expected_exception_elsewhere": """
-def test_k(gate, tmp_path):
-    with pytest.raises(ValueError):
-        int("not a number")
-    assert _attempt(gate, tmp_path).verdict is Verdict.DENY
-""",
     "all_over_a_generator": """
 def test_k(gate, tmp_path):
     assert all(
         gate.evaluate("writer", "read_file", [str(tmp_path / n)]).verdict is Verdict.DENY
         for n in ("a.txt", "b.txt")
     )
-""",
-    "try_finally": """
-def test_k(gate, tmp_path):
-    try:
-        d = _attempt(gate, tmp_path)
-    finally:
-        pass
-    assert d.verdict is Verdict.DENY
-""",
-    "strict_xfail_reaching_the_gate": """
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="pinned limit")
-def test_k(gate, tmp_path):
-    assert _attempt(gate, tmp_path).verdict is Verdict.ALLOW
-""",
-    "throw_then_evaluate": """
-def test_k(gate, tmp_path):
-    assert gate.throw("drill") is True
-    d = gate.evaluate("writer", "read_file", [str(tmp_path / "work" / "a.txt")])
-    assert d.verdict is Verdict.DENY
 """,
     "walrus": """
 def test_k(gate, tmp_path):
@@ -1245,15 +1258,6 @@ def test_k(gate, tmp_path):
 def test_k(gate, tmp_path):
     vs = [_attempt(gate, tmp_path, n).verdict for n in ("a.txt", "b.txt")]
     assert vs == [Verdict.DENY, Verdict.DENY]
-""",
-    "fault_injection_outside_the_gate": """
-def test_k(gate, tmp_path, monkeypatch):
-    def boom(_path):
-        raise OSError("zqxwvk")
-
-    monkeypatch.setattr(os, "lstat", boom)
-    d = _attempt(gate, tmp_path)
-    assert d.verdict is Verdict.DENY
 """,
 }
 
@@ -1279,10 +1283,32 @@ def test_t14_legitimate_deny_shapes_are_clean_and_work(
     assert run.returncode == 0, run.stdout + run.stderr
 
 
+@pytest.mark.parametrize("shape", sorted(CORPUS_REFUSED_BY_ALLOWLIST))
+def test_t14_legitimate_deny_shapes_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    path = _write(
+        tmp_path,
+        f"test_k_{shape}.py",
+        CORPUS_HEAD.format(root=str(ROOT)) + CORPUS_REFUSED_BY_ALLOWLIST[shape],
+    )
+    r = _lint(path)
+    _assert_refused(r)
+
+
 # ---------------------------------------------------------------------------
 # Removal tests: one case per rule, table entry, and branch, so deleting any
 # of them turns a test red. Rejected cases name the reason; clean cases must
 # lint clean.
+
+
+def _assert_refused(r) -> None:
+    """The answer allowlist refuses the case by one of its two messages."""
+    assert r.returncode == 1, r.stdout
+    assert (
+        "not an accepted assert on the gate's answer" in r.stdout
+        or "never asserts on the gate's result in the accepted form" in r.stdout
+    ), r.stdout
 
 
 def _clean(tmp_path: Path, src: str, name: str = "test_k_case.py") -> None:
@@ -1625,10 +1651,6 @@ CLEAN = {
         "assert len([])",
         "def len(x):\n    return x.count(1)",
     ),
-    "local_rebinding_shadows_module": (
-        "NO = d.verdict is Verdict.DENY\nassert NO",
-        "NO = False",
-    ),
     "starred_target": ("first, *REST = (1, 2)\nassert REST", "REST = 0"),
     "for_rebinds": ("for X in (1,):\n    pass\nassert X", "X = 0"),
     "with_rebinds": (
@@ -1645,7 +1667,6 @@ CLEAN = {
     "del_rebinds": ("del X\nassert X", "X = 0"),
     "global_rebinds": ("global X\nX = 1\nassert X", "X = 0"),
     "augmented_rebinds": ("X += 1\nassert X", "X = 0"),
-    "walrus_rebinds": ("assert (X := d)", "X = 0"),
     "match_rebinds": ("match d:\n    case X:\n        pass\nassert X", "X = 0"),
     "match_star_rebinds": (
         "match []:\n    case [*X]:\n        pass\nassert X",
@@ -1689,11 +1710,36 @@ CLEAN = {
     ),
 }
 
+# Entries of CLEAN whose answer assert the allowlist now refuses.
+CLEAN_REFUSED_BY_ALLOWLIST = {
+    "local_rebinding_shadows_module": (
+        "NO = d.verdict is Verdict.DENY\nassert NO",
+        "NO = False",
+    ),
+    "walrus_rebinds": ("assert (X := d)", "X = 0"),
+}
+
 
 @pytest.mark.parametrize("shape", sorted(CLEAN))
 def test_each_allowed_form_stays_clean(tmp_path: Path, shape: str) -> None:
     body, prelude, *params = CLEAN[shape]
     _clean(tmp_path, _kat(body, prelude, params=params[0] if params else "gate"))
+
+
+@pytest.mark.parametrize("shape", sorted(CLEAN_REFUSED_BY_ALLOWLIST))
+def test_each_allowed_form_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    body, prelude, *params = CLEAN_REFUSED_BY_ALLOWLIST[shape]
+    _assert_refused(
+        _lint(
+            _write(
+                tmp_path,
+                "test_k_case.py",
+                _kat(body, prelude, params=params[0] if params else "gate"),
+            )
+        )
+    )
 
 
 @pytest.mark.parametrize(
@@ -1805,7 +1851,7 @@ def test_t12_the_real_hook_script_counts(tmp_path: Path, func: str) -> None:
         "import subprocess\nimport sys\n\n\n"
         "def test_k():\n"
         f"    r = subprocess.{func}([sys.executable, 'adapters/claude_code_hook.py'])\n"
-        "    assert r\n"
+        "    assert r.returncode == 2\n"
     )
     _clean(tmp_path, src)
 
@@ -1966,6 +2012,38 @@ def test_k(gate, tmp_path):
     assert d.verdict is Verdict.DENY
     assert seen == [Verdict.DENY]
 """,
+    "class_method_helper": """
+class TestK:
+    def _try(self, gate, tmp_path):
+        return gate.evaluate("writer", "read_file", [str(tmp_path / "x")])
+
+    def test_k(self, gate, tmp_path):
+        assert self._try(gate, tmp_path).verdict is Verdict.DENY
+""",
+    "helper_builds_gate": """
+def _make(tmp_path):
+    return Gate(load_policy({"skills": {}}), log_path=str(tmp_path / "m.jsonl"))
+
+
+def test_k(tmp_path):
+    g = _make(tmp_path)
+    assert g.evaluate("s", "read_file", ["zqxwvk"]).verdict is Verdict.DENY
+""",
+    "annotated_result": """
+def test_k(gate, tmp_path):
+    d: object = _attempt(gate, tmp_path)
+    assert d.verdict is Verdict.DENY
+""",
+    "walrus_in_if": """
+def test_k(gate, tmp_path):
+    if (d := _attempt(gate, tmp_path)) is None:
+        return
+    assert d.verdict is Verdict.DENY
+""",
+}
+
+# Entries of CORPUS_MORE whose answer assert the allowlist now refuses.
+CORPUS_MORE_REFUSED_BY_ALLOWLIST = {
     "match_case": """
 def test_k(gate, tmp_path):
     denied = False
@@ -1987,27 +2065,10 @@ def test_k(gate, tmp_path):
     for v in [_attempt(gate, tmp_path).verdict]:
         assert v is Verdict.DENY
 """,
-    "class_method_helper": """
-class TestK:
-    def _try(self, gate, tmp_path):
-        return gate.evaluate("writer", "read_file", [str(tmp_path / "x")])
-
-    def test_k(self, gate, tmp_path):
-        assert self._try(gate, tmp_path).verdict is Verdict.DENY
-""",
     "keyword_arguments": """
 def test_k(gate, tmp_path):
     d = _attempt(gate=gate, tmp_path=tmp_path)
     _assert_denied(d=d)
-""",
-    "helper_builds_gate": """
-def _make(tmp_path):
-    return Gate(load_policy({"skills": {}}), log_path=str(tmp_path / "m.jsonl"))
-
-
-def test_k(tmp_path):
-    g = _make(tmp_path)
-    assert g.evaluate("s", "read_file", ["zqxwvk"]).verdict is Verdict.DENY
 """,
     "helper_calls_gate_and_asserts": """
 def _expect_deny(gate, tmp_path):
@@ -2038,22 +2099,11 @@ def test_k(gate, tmp_path):
     vs = [v for n in ("a.txt",) for v in [_attempt(gate, tmp_path, n).verdict]]
     assert vs == [Verdict.DENY]
 """,
-    "annotated_result": """
-def test_k(gate, tmp_path):
-    d: object = _attempt(gate, tmp_path)
-    assert d.verdict is Verdict.DENY
-""",
     "augmented_result": """
 def test_k(gate, tmp_path):
     total = 0
     total += int(_attempt(gate, tmp_path).verdict is Verdict.DENY)
     assert total == 1
-""",
-    "walrus_in_if": """
-def test_k(gate, tmp_path):
-    if (d := _attempt(gate, tmp_path)) is None:
-        return
-    assert d.verdict is Verdict.DENY
 """,
     "flag_in_try_else": """
 def test_k(gate, tmp_path):
@@ -2086,6 +2136,19 @@ def test_t14_more_legitimate_shapes(tmp_path: Path, shape: str) -> None:
         check=False,
     )
     assert run.returncode == 0, run.stdout + run.stderr
+
+
+@pytest.mark.parametrize("shape", sorted(CORPUS_MORE_REFUSED_BY_ALLOWLIST))
+def test_t14_more_legitimate_shapes_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    path = _write(
+        tmp_path,
+        f"test_k_{shape}.py",
+        CORPUS_HEAD.format(root=str(ROOT)) + CORPUS_MORE_REFUSED_BY_ALLOWLIST[shape],
+    )
+    r = _lint(path)
+    _assert_refused(r)
 
 
 _REAL_PLATFORMS = (
@@ -2179,23 +2242,12 @@ def test_each_rule_rejects_its_form_2(tmp_path: Path, shape: str) -> None:
 
 CLEAN_2 = {
     "parameter_shadows_module": ("assert X", "X = 0", "gate, X"),
-    "walrus_statement_rebinds": ("(X := d)\nassert X", "X = 0"),
     # Rebound to int: str of anything is rejected as never testing the answer.
     "assigned_builtin": ("assert bool(0)", "bool = int"),
     "imported_builtin_name": ("assert bool(0)", "from os.path import exists as bool"),
     "builtin_named_parameter": ("assert bool(0)", "", "gate, bool"),
-    "starred_list_may_be_empty": ("assert [*d.reason]", ""),
-    "list_with_unknown_compares_unknown": ("assert [d] != [None]", ""),
-    "dict_unpack_may_be_empty": ("assert {**vars(d)}", ""),
-    "dict_unknown_compares_unknown": ("assert {1: d} != {1: None}", ""),
-    "negating_partial_knowledge": ("assert -(0 if d else 0) == 0", ""),
-    "arithmetic_on_partial_knowledge": ("assert (0 if d else 0) + 1 == 1", ""),
-    "subscript_of_partial_knowledge": ("assert [d][0] is not None", ""),
-    "slice_with_unknown_bound": ("assert [1, 2][len(d.reason) :]", ""),
-    "or_with_unknown_side": ("assert d or 0", ""),
     # A display's length is known whatever its elements are (rejected, see the
     # review round tests); one with a starred part is not.
-    "len_of_partial_knowledge": ("assert len([*d.reason]) == 1", ""),
     "dunder_import_returns_the_top_package": (
         "x = __import__('_pytest.outcomes').fail",
         "",
@@ -2225,6 +2277,21 @@ CLEAN_2 = {
     ),
 }
 
+# Entries of CLEAN_2 whose answer assert the allowlist now refuses.
+CLEAN_2_REFUSED_BY_ALLOWLIST = {
+    "walrus_statement_rebinds": ("(X := d)\nassert X", "X = 0"),
+    "starred_list_may_be_empty": ("assert [*d.reason]", ""),
+    "list_with_unknown_compares_unknown": ("assert [d] != [None]", ""),
+    "dict_unpack_may_be_empty": ("assert {**vars(d)}", ""),
+    "dict_unknown_compares_unknown": ("assert {1: d} != {1: None}", ""),
+    "negating_partial_knowledge": ("assert -(0 if d else 0) == 0", ""),
+    "arithmetic_on_partial_knowledge": ("assert (0 if d else 0) + 1 == 1", ""),
+    "subscript_of_partial_knowledge": ("assert [d][0] is not None", ""),
+    "slice_with_unknown_bound": ("assert [1, 2][len(d.reason) :]", ""),
+    "or_with_unknown_side": ("assert d or 0", ""),
+    "len_of_partial_knowledge": ("assert len([*d.reason]) == 1", ""),
+}
+
 
 @pytest.mark.parametrize("shape", sorted(CLEAN_2))
 def test_each_allowed_form_stays_clean_2(tmp_path: Path, shape: str) -> None:
@@ -2232,26 +2299,46 @@ def test_each_allowed_form_stays_clean_2(tmp_path: Path, shape: str) -> None:
     _clean(tmp_path, _kat(body, prelude, params=params[0] if params else "gate"))
 
 
+@pytest.mark.parametrize("shape", sorted(CLEAN_2_REFUSED_BY_ALLOWLIST))
+def test_each_allowed_form_stays_clean_2_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    body, prelude, *params = CLEAN_2_REFUSED_BY_ALLOWLIST[shape]
+    _assert_refused(
+        _lint(
+            _write(
+                tmp_path,
+                "test_k_case.py",
+                _kat(body, prelude, params=params[0] if params else "gate"),
+            )
+        )
+    )
+
+
 EVAL = "gate.evaluate('s', 'read_file', ['zqxwvk'])"
 VERDICT = "    assert d.verdict is Verdict.DENY\n"
 DECISION_FIXTURE = f"@pytest.fixture()\ndef decision(gate):\n    return {EVAL}\n\n\n"
 REACH_CLEAN = {
-    "true_ternary": f"    d = {EVAL} if True else None\n" + VERDICT,
-    "false_ternary_else": f"    d = None if False else {EVAL}\n" + VERDICT,
     "constant_true_if": f"    if True:\n        d = {EVAL}\n" + VERDICT,
     "with_body": f"    with contextlib.nullcontext():\n        d = {EVAL}\n" + VERDICT,
-    "assert_inside_branch": f"    d = {EVAL}\n    if d is not None:\n    " + VERDICT,
     "assert_in_true_branch": f"    d = {EVAL}\n    if True:\n    " + VERDICT,
     "assert_in_else": f"    d = {EVAL}\n    if False:\n        pass\n    else:\n    "
     + VERDICT,
+    "assert_in_try": f"    d = {EVAL}\n    try:\n    "
+    + VERDICT
+    + "    finally:\n        pass\n",
+}
+
+# Entries of REACH_CLEAN whose answer assert the allowlist now refuses.
+REACH_CLEAN_REFUSED_BY_ALLOWLIST = {
+    "true_ternary": f"    d = {EVAL} if True else None\n" + VERDICT,
+    "false_ternary_else": f"    d = None if False else {EVAL}\n" + VERDICT,
+    "assert_inside_branch": f"    d = {EVAL}\n    if d is not None:\n    " + VERDICT,
     "assert_in_while": (
         f"    d = {EVAL}\n    n = 0\n    while n < 1:\n    "
         + VERDICT
         + "        n += 1\n"
     ),
-    "assert_in_try": f"    d = {EVAL}\n    try:\n    "
-    + VERDICT
-    + "    finally:\n        pass\n",
     "assert_in_match": f"    d = {EVAL}\n    match d:\n        case _:\n        "
     + VERDICT,
 }
@@ -2262,12 +2349,29 @@ def test_reach_and_result_in_every_live_position(tmp_path: Path, shape: str) -> 
     _clean(tmp_path, KAT_HEAD + "def test_k(gate):\n" + REACH_CLEAN[shape])
 
 
+@pytest.mark.parametrize("shape", sorted(REACH_CLEAN_REFUSED_BY_ALLOWLIST))
+def test_reach_and_result_in_every_live_position_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    _assert_refused(
+        _lint(
+            _write(
+                tmp_path,
+                "test_k_case.py",
+                KAT_HEAD
+                + "def test_k(gate):\n"
+                + REACH_CLEAN_REFUSED_BY_ALLOWLIST[shape],
+            )
+        )
+    )
+
+
 def test_cyclic_fixtures_do_not_crash_the_lint(tmp_path: Path) -> None:
     src = (
         KAT_HEAD
         + "@pytest.fixture()\ndef a(b):\n    return b\n\n\n"
         + "@pytest.fixture()\ndef b(a):\n    return a\n\n\n"
-        + f"def test_k(gate, a):\n    assert {EVAL} is not None\n"
+        + f"def test_k(gate, a):\n    assert {EVAL}.verdict is Verdict.DENY\n"
     )
     _clean(tmp_path, src)
 
@@ -2578,11 +2682,7 @@ HOLE_CLEAN = {
         "monkeypatch.setattr(os, 'lstat', os.lstat)", params="gate, monkeypatch"
     ),
     "vars_of_another_object": _first("vars(tmp_path)", params="gate, tmp_path"),
-    "assert_in_one_verdict": _plain("assert d.verdict in (Verdict.DENY,)"),
     # evaluate can return ASK, so naming two verdicts still tells ASK apart.
-    "assert_in_two_verdicts": _plain(
-        "assert d.verdict in (Verdict.ALLOW, Verdict.DENY)"
-    ),
     "assert_equal_to_constant": _plain("assert d.verdict == Verdict.DENY"),
     "try_that_reraises": _plain(
         "try:\n    assert d.verdict is Verdict.DENY\nexcept AssertionError:\n    raise"
@@ -2599,11 +2699,29 @@ HOLE_CLEAN = {
     ),
 }
 
+# Entries of HOLE_CLEAN whose answer assert the allowlist now refuses.
+HOLE_CLEAN_REFUSED_BY_ALLOWLIST = {
+    "assert_in_one_verdict": _plain("assert d.verdict in (Verdict.DENY,)"),
+    "assert_in_two_verdicts": _plain(
+        "assert d.verdict in (Verdict.ALLOW, Verdict.DENY)"
+    ),
+}
+
 
 @pytest.mark.parametrize("shape", sorted(HOLE_CLEAN))
 def test_the_honest_form_of_each_hole_stays_clean(tmp_path: Path, shape: str) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", HOLE_CLEAN[shape]))
     assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize("shape", sorted(HOLE_CLEAN_REFUSED_BY_ALLOWLIST))
+def test_the_honest_form_of_each_hole_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(
+        _write(tmp_path, "test_k_case.py", HOLE_CLEAN_REFUSED_BY_ALLOWLIST[shape])
+    )
+    _assert_refused(r)
 
 
 # --require-kats: a run that finds no KAT file fails, so the CI step cannot pass
@@ -2848,6 +2966,10 @@ GROUP_B_CLEAN = {
     "assert-under-finally-pass": _plain(
         f"try:\n    {_VERDICT_ASSERT}\nfinally:\n    pass"
     ),
+}
+
+# Entries of GROUP_B_CLEAN whose answer assert the allowlist now refuses.
+GROUP_B_CLEAN_REFUSED_BY_ALLOWLIST = {
     "function-of-the-result": _plain(
         "assert _denied(d)",
         "def _denied(x):\n    return x.verdict is Verdict.DENY",
@@ -2874,6 +2996,16 @@ def test_a_live_assert_or_a_result_routed_through_a_helper_stays_clean(
     assert r.returncode == 0, r.stdout
 
 
+@pytest.mark.parametrize("shape", sorted(GROUP_B_CLEAN_REFUSED_BY_ALLOWLIST))
+def test_a_live_assert_or_a_result_routed_through_a_helper_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(
+        _write(tmp_path, "test_k_case.py", GROUP_B_CLEAN_REFUSED_BY_ALLOWLIST[shape])
+    )
+    _assert_refused(r)
+
+
 def test_require_kats_is_a_documented_flag() -> None:
     """CI wiring of the flag follows in the leak scan pull request's floor job."""
     r = _lint("--help")
@@ -2896,12 +3028,18 @@ GROUP_C_TAUTOLOGY = {
     ),
     "and-of-tautologies": _plain("assert d is d and d.verdict == d.verdict"),
 }
+# The answer is asserted in the accepted form; the side check reads no
+# answer, so the blocklist judges it and must not over-reject it.
 GROUP_C_TAUTOLOGY_CLEAN = {
+    "or-of-two-side-checks": _kat("n = len(os.listdir('.'))\nassert n == 1 or n == 2"),
+}
+
+# Entries of GROUP_C_TAUTOLOGY_CLEAN whose answer assert the allowlist now refuses.
+GROUP_C_TAUTOLOGY_CLEAN_REFUSED_BY_ALLOWLIST = {
     "or-of-two-real-checks": _plain(
         "assert d.verdict is Verdict.DENY or d.verdict is Verdict.ASK"
     ),
     "and-with-one-real-check": _plain("assert d is d and d.verdict is Verdict.DENY"),
-    # An always-false side leaves an `or` to its other side.
     "or-with-an-always-false-side": _plain(
         "assert d.verdict != d.verdict or d.verdict is Verdict.DENY"
     ),
@@ -2919,6 +3057,20 @@ def test_an_or_and_that_still_tests_the_answer_stays_clean(
 ) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", GROUP_C_TAUTOLOGY_CLEAN[shape]))
     assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize("shape", sorted(GROUP_C_TAUTOLOGY_CLEAN_REFUSED_BY_ALLOWLIST))
+def test_an_or_and_that_still_tests_the_answer_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(
+        _write(
+            tmp_path,
+            "test_k_case.py",
+            GROUP_C_TAUTOLOGY_CLEAN_REFUSED_BY_ALLOWLIST[shape],
+        )
+    )
+    _assert_refused(r)
 
 
 @pytest.mark.parametrize(
@@ -3092,7 +3244,6 @@ GROUP_D_CLEAN = {
     "result-rebound-from-the-gate": _plain(
         "d = gate.evaluate('s', 'read_file', ['zqxwvk'])\nassert d.verdict is Verdict.DENY"
     ),
-    "length-of-a-real-list": _plain("assert len(d.reason) > 0"),
     "class-of-another-object": _first(
         "monkeypatch.setattr(tmp_path.__class__, 'zqxwvk', 1, raising=False)",
         params="gate, monkeypatch, tmp_path",
@@ -3100,6 +3251,11 @@ GROUP_D_CLEAN = {
     "setitem-elsewhere": _first(
         "monkeypatch.setitem(os.environ, 'ZQXWVK', '1')", params="gate, monkeypatch"
     ),
+}
+
+# Entries of GROUP_D_CLEAN whose answer assert the allowlist now refuses.
+GROUP_D_CLEAN_REFUSED_BY_ALLOWLIST = {
+    "length-of-a-real-list": _plain("assert len(d.reason) > 0"),
 }
 
 
@@ -3117,6 +3273,16 @@ def test_the_honest_result_or_patch_form_stays_clean(
 ) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", GROUP_D_CLEAN[shape]))
     assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize("shape", sorted(GROUP_D_CLEAN_REFUSED_BY_ALLOWLIST))
+def test_the_honest_result_or_patch_form_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(
+        _write(tmp_path, "test_k_case.py", GROUP_D_CLEAN_REFUSED_BY_ALLOWLIST[shape])
+    )
+    _assert_refused(r)
 
 
 # --- always-pass review round: a side and its own negation -------------------------
@@ -3141,7 +3307,14 @@ ALWAYS_PASS_PAIRS = {
     "eq-and-ne": "assert d.verdict == Verdict.DENY and d.verdict != Verdict.DENY",
 }
 
+# The answer is asserted in the accepted form; the side check reads no
+# answer, so the blocklist judges it and must not over-reject it.
 ALWAYS_PASS_PAIRS_CLEAN = {
+    "side-check-that-is-not-a-pair": "assert d.verdict is Verdict.DENY\nn = len(os.listdir('.'))\nassert n == 1 or n != 2",
+}
+
+# Entries of ALWAYS_PASS_PAIRS_CLEAN whose answer assert the allowlist now refuses.
+ALWAYS_PASS_PAIRS_CLEAN_REFUSED_BY_ALLOWLIST = {
     "two-different-verdicts": (
         "assert d.verdict is Verdict.DENY or d.verdict is Verdict.ASK"
     ),
@@ -3164,6 +3337,20 @@ def test_sides_that_are_not_negations_stay_clean(tmp_path: Path, shape: str) -> 
         _write(tmp_path, "test_k_case.py", _plain(ALWAYS_PASS_PAIRS_CLEAN[shape]))
     )
     assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize("shape", sorted(ALWAYS_PASS_PAIRS_CLEAN_REFUSED_BY_ALLOWLIST))
+def test_sides_that_are_not_negations_stay_clean_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(
+        _write(
+            tmp_path,
+            "test_k_case.py",
+            _plain(ALWAYS_PASS_PAIRS_CLEAN_REFUSED_BY_ALLOWLIST[shape]),
+        )
+    )
+    _assert_refused(r)
 
 
 # --- always-pass review round: a test that is truthy by construction --------------
@@ -3194,7 +3381,14 @@ ALWAYS_TRUTHY = {
     "len-gt-minus-one": "assert len(d.reason) > -1",
 }
 
+# The answer is asserted in the accepted form; the side check reads no
+# answer, so the blocklist judges it and must not over-reject it.
 ALWAYS_TRUTHY_CLEAN = {
+    "length-of-a-listing": "assert d.verdict is Verdict.DENY\nassert len(os.listdir('.')) > 0",
+}
+
+# Entries of ALWAYS_TRUTHY_CLEAN whose answer assert the allowlist now refuses.
+ALWAYS_TRUTHY_CLEAN_REFUSED_BY_ALLOWLIST = {
     "len-gt-zero": "assert len(d.reason) > 0",
     "any-of-real-tests": (
         "assert any([d.verdict is Verdict.DENY, d.verdict is Verdict.ASK])"
@@ -3220,6 +3414,20 @@ def test_an_assert_whose_truth_depends_on_the_answer_stays_clean(
     assert r.returncode == 0, r.stdout
 
 
+@pytest.mark.parametrize("shape", sorted(ALWAYS_TRUTHY_CLEAN_REFUSED_BY_ALLOWLIST))
+def test_an_assert_whose_truth_depends_on_the_answer_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(
+        _write(
+            tmp_path,
+            "test_k_case.py",
+            _plain(ALWAYS_TRUTHY_CLEAN_REFUSED_BY_ALLOWLIST[shape]),
+        )
+    )
+    _assert_refused(r)
+
+
 # --- always-pass review round: an expression compared with itself in disguise -------
 # A walrus target is the value it names, the element of a one-off display picked
 # by a constant index is that element, and membership in a display holding the
@@ -3238,7 +3446,14 @@ SELF_IN_DISGUISE = {
     "first-of-own-tuple-eq": "assert (d.verdict,)[0] == d.verdict",
 }
 
+# The answer is asserted in the accepted form; the side check reads no
+# answer, so the blocklist judges it and must not over-reject it.
 SELF_IN_DISGUISE_CLEAN = {
+    "two-different-listings": "assert d.verdict is Verdict.DENY\nassert os.listdir('.') == os.listdir('..')",
+}
+
+# Entries of SELF_IN_DISGUISE_CLEAN whose answer assert the allowlist now refuses.
+SELF_IN_DISGUISE_CLEAN_REFUSED_BY_ALLOWLIST = {
     "walrus-then-real-compare": "assert (y := d.verdict) is Verdict.DENY",
     "in-other-values": "assert d.verdict in (Verdict.DENY, Verdict.ASK)",
     "len-of-a-real-list": "assert len(d.reason) == 1",
@@ -3260,6 +3475,20 @@ def test_a_compare_that_reads_the_answer_stays_clean(
 ) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", _plain(SELF_IN_DISGUISE_CLEAN[shape])))
     assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize("shape", sorted(SELF_IN_DISGUISE_CLEAN_REFUSED_BY_ALLOWLIST))
+def test_a_compare_that_reads_the_answer_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(
+        _write(
+            tmp_path,
+            "test_k_case.py",
+            _plain(SELF_IN_DISGUISE_CLEAN_REFUSED_BY_ALLOWLIST[shape]),
+        )
+    )
+    _assert_refused(r)
 
 
 # --- always-pass review round: a constant routed through a call --------------------
@@ -3323,7 +3552,16 @@ ROUTED_CONSTANT = {
     ),
 }
 
+# The answer is asserted in the accepted form; the side check reads no
+# answer, so the blocklist judges it and must not over-reject it.
 ROUTED_CONSTANT_CLEAN = {
+    "call-on-a-side-value": _kat(
+        "def count(path):\n    return len(os.listdir(path))\nassert count('.') == 3"
+    ),
+}
+
+# Entries of ROUTED_CONSTANT_CLEAN whose answer assert the allowlist now refuses.
+ROUTED_CONSTANT_CLEAN_REFUSED_BY_ALLOWLIST = {
     "identity-of-the-answer": _plain(
         "assert ident(d.verdict) is Verdict.DENY", ROUTED_PRELUDE
     ),
@@ -3348,6 +3586,20 @@ def test_a_call_on_the_answer_stays_clean(tmp_path: Path, shape: str) -> None:
     assert r.returncode == 0, r.stdout
 
 
+@pytest.mark.parametrize("shape", sorted(ROUTED_CONSTANT_CLEAN_REFUSED_BY_ALLOWLIST))
+def test_a_call_on_the_answer_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(
+        _write(
+            tmp_path,
+            "test_k_case.py",
+            ROUTED_CONSTANT_CLEAN_REFUSED_BY_ALLOWLIST[shape],
+        )
+    )
+    _assert_refused(r)
+
+
 # --- always-pass review round: an assert in a while-True else never runs ----------
 # The else of a while loop runs only when its test turns false. A test that folds
 # true never does, so an assert there is dead, and a KAT whose only assert on the
@@ -3365,7 +3617,14 @@ DEAD_LOOP_ELSE = {
     ),
 }
 
+# The answer is asserted in the accepted form; the side check reads no
+# answer, so the blocklist judges it and must not over-reject it.
 LIVE_LOOP_ELSE = {
+    "side-check-in-a-live-loop-else": "assert d.verdict is Verdict.DENY\nfor _ in ('x',):\n    pass\nelse:\n    assert len(os.listdir('.')) >= 1",
+}
+
+# Entries of LIVE_LOOP_ELSE whose answer assert the allowlist now refuses.
+LIVE_LOOP_ELSE_REFUSED_BY_ALLOWLIST = {
     "while-false-else": (
         "while False:\n    pass\nelse:\n    assert d.verdict is Verdict.DENY"
     ),
@@ -3387,6 +3646,20 @@ def test_an_assert_in_a_while_true_else_is_dead(tmp_path: Path, shape: str) -> N
 def test_an_assert_in_a_live_loop_else_stays_clean(tmp_path: Path, shape: str) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", _plain(LIVE_LOOP_ELSE[shape])))
     assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize("shape", sorted(LIVE_LOOP_ELSE_REFUSED_BY_ALLOWLIST))
+def test_an_assert_in_a_live_loop_else_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(
+        _write(
+            tmp_path,
+            "test_k_case.py",
+            _plain(LIVE_LOOP_ELSE_REFUSED_BY_ALLOWLIST[shape]),
+        )
+    )
+    _assert_refused(r)
 
 
 # --- review round: class aliases, rebinding stores, coding aliases ----------------
@@ -3423,12 +3696,16 @@ RESULT_REBOUND_BY_STORE = {
 }
 
 STORES_THAT_KEEP_THE_ANSWER = {
+    "class-alias-of-another-object": _first(
+        "k = type(tmp_path)\nk.zqxwvk = 1", params="gate, tmp_path"
+    ),
+}
+
+# Entries of STORES_THAT_KEEP_THE_ANSWER whose answer assert the allowlist now refuses.
+STORES_THAT_KEEP_THE_ANSWER_REFUSED_BY_ALLOWLIST = {
     "unpack-of-the-answer": _plain("d, = (d,)\nassert d.verdict is Verdict.DENY"),
     "loop-over-the-answer": _plain(
         "for d in [d]:\n    pass\nassert d.verdict is Verdict.DENY"
-    ),
-    "class-alias-of-another-object": _first(
-        "k = type(tmp_path)\nk.zqxwvk = 1", params="gate, tmp_path"
     ),
 }
 
@@ -3453,6 +3730,22 @@ def test_a_result_rebound_by_any_store_stops_counting(
 def test_a_store_that_keeps_the_answer_stays_clean(tmp_path: Path, shape: str) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", STORES_THAT_KEEP_THE_ANSWER[shape]))
     assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize(
+    "shape", sorted(STORES_THAT_KEEP_THE_ANSWER_REFUSED_BY_ALLOWLIST)
+)
+def test_a_store_that_keeps_the_answer_refused_by_the_answer_allowlist(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(
+        _write(
+            tmp_path,
+            "test_k_case.py",
+            STORES_THAT_KEEP_THE_ANSWER_REFUSED_BY_ALLOWLIST[shape],
+        )
+    )
+    _assert_refused(r)
 
 
 @pytest.mark.parametrize("cookie", ["utf8", "utf_8", "U8", "UTF8", "utf-8", "UTF-8"])
