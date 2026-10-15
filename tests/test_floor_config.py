@@ -2721,7 +2721,7 @@ def test_every_other_ruff_config_place_is_a_rules_violation(
 def test_a_noqa_comment_on_one_line_stays_allowed(tmp_path: Path) -> None:
     root = _copy_tree(tmp_path)
     (root / "zqxwvk.py").write_text(
-        "import os  # noqa: F401\nx = '# ruff: noqa'\n", encoding="utf-8"
+        "x = '# ruff: noqa'\ny = '# noqa: F401'\n", encoding="utf-8"
     )
     found = _repin(root)
     assert not any("lint exemption" in f for f in found), found
@@ -2884,8 +2884,8 @@ def test_a_full_run_passes_the_run_check(tmp_path: Path) -> None:
         tmp_path,
         {
             "tests/test_a.py": _PASSING,
-            "tests/test_b.py": "import pytest\n"
-            "pytest.skip('x', allow_module_level=True)\n" + _PASSING,
+            "tests/test_b.py": "import pytest\n\n@pytest.mark.skip('x')\n"
+            "def test_one_skipped():\n    pass\n\n" + _PASSING,
             "test_c.py": _PASSING,
         },
     )
@@ -2937,3 +2937,165 @@ def test_the_tests_job_checks_its_run_record() -> None:
         'python -I scripts/run_record_check.py "$FLOOR_RUN_RECORD"'
         in (guard.REQUIRED_COMMANDS["tests"])
     )
+
+
+# --- 82 follow-ups: run record, module skips, per-line and notebook noqa ---------
+# A per-line noqa silences ruff on that line, so each one is an exemption the
+# guard holds by inventory (file, code, count); a new one, a blanket one, or one
+# in a notebook cell is a violation even with the pins regenerated.
+
+
+@pytest.mark.parametrize(
+    ("rel", "text"),
+    [
+        pytest.param("zqxwvk.py", "import os  # noqa: F401\n", id="new-file-coded"),
+        pytest.param("zqxwvk.py", "import os  # noqa\n", id="new-file-blanket"),
+        pytest.param("zqxwvk.py", "import os  #NOQA:F401\n", id="new-file-spacing"),
+        pytest.param(
+            "tests/test_zqxwvk.py",
+            "x = undefined  # type: int  # noqa: F821\n",
+            id="after-comment",
+        ),
+    ],
+)
+def test_a_per_line_noqa_outside_the_inventory_is_a_rules_violation(
+    tmp_path: Path, rel: str, text: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(text, encoding="utf-8")
+    found = _repin(root)
+    assert any(f"{rel}: per-line lint exemption" in f for f in found), found
+
+
+def test_one_more_noqa_in_an_inventoried_file_is_a_rules_violation(
+    tmp_path: Path,
+) -> None:
+    root = _copy_tree(tmp_path)
+    path = root / "tests" / "test_floor_fixes.py"
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\nimport os  # noqa: E402\n",
+        encoding="utf-8",
+    )
+    found = _repin(root)
+    assert any(
+        "tests/test_floor_fixes.py: per-line lint exemption" in f for f in found
+    ), found
+
+
+def test_the_live_noqa_inventory_is_exact() -> None:
+    found = guard.noqa_inventory(ROOT)
+    assert found == guard.NOQA_INVENTORY, sorted(
+        set(found.items()) ^ set(guard.NOQA_INVENTORY.items())
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(["# ruff: noqa\n", "import os\n"], id="file-level"),
+        pytest.param(["import os  # noqa: F401\n"], id="per-line"),
+    ],
+)
+def test_a_notebook_cell_exemption_is_a_rules_violation(
+    tmp_path: Path, source: list[str]
+) -> None:
+    root = _copy_tree(tmp_path)
+    notebook = {
+        "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": ["# title\n"]},
+            {
+                "cell_type": "code",
+                "metadata": {},
+                "source": source,
+                "outputs": [],
+                "execution_count": None,
+            },
+        ],
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+    (root / "zqxwvk.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
+    found = _repin(root)
+    assert any("zqxwvk.ipynb:" in f and "lint exemption" in f for f in found), found
+
+
+def test_a_notebook_that_does_not_parse_is_a_rules_violation(tmp_path: Path) -> None:
+    root = _copy_tree(tmp_path)
+    (root / "zqxwvk.ipynb").write_text("{not json", encoding="utf-8")
+    found = _repin(root)
+    assert any("zqxwvk.ipynb: notebook does not parse" in f for f in found), found
+
+
+def test_a_module_skipped_whole_is_not_a_run(tmp_path: Path) -> None:
+    root = _pytest_tree(
+        tmp_path,
+        {
+            "tests/test_a.py": _PASSING,
+            "tests/test_b.py": "import pytest\n"
+            "pytest.skip('x', allow_module_level=True)\n" + _PASSING,
+        },
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert "tests/test_b.py: skipped as a whole module" in check.stdout, check.stdout
+
+
+def test_only_the_listed_module_may_skip_whole(tmp_path: Path) -> None:
+    """The one module CI skips whole by design (it needs a host install the
+    workflow deliberately leaves out) is listed by path; its skip passes."""
+    sys.path.insert(0, str(RUN_CHECK.parent))
+    import run_record_check
+
+    listed = sorted(getattr(run_record_check, "SKIPPABLE_MODULES", ()))
+    assert listed == ["test_e2_mode_staleness.py"]
+    root = _pytest_tree(
+        tmp_path,
+        {
+            "tests/test_a.py": _PASSING,
+            listed[0]: "import pytest\n"
+            "pytest.skip('x', allow_module_level=True)\n" + _PASSING,
+        },
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 0, check.stdout + check.stderr
+
+
+def test_a_run_that_collected_nothing_fails_the_check(tmp_path: Path) -> None:
+    root = _pytest_tree(tmp_path, {"tests/test_a.py": _PASSING})
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    data = json.loads(record.read_text(encoding="utf-8"))
+    data.update(collected=0, reported=0)
+    record.write_text(json.dumps(data), encoding="utf-8")
+    check = _run_check(root, record)
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert "no tests collected" in check.stdout, check.stdout
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="disclosed residual: a test module runs arbitrary code inside pytest, "
+    "so it can write a plausible run record and then end the process",
+)
+def test_a_forged_record_then_an_exit_fails_the_check(tmp_path: Path) -> None:
+    forger = (
+        "import json, os\n"
+        "path = os.environ['FLOOR_RUN_RECORD']\n"
+        "json.dump({'finished': True, 'exitstatus': 0, 'collected': 2, "
+        "'reported': 2, 'modules': ['tests/test_a.py', 'tests/test_b.py'], "
+        "'skipped_modules': []}, open(path, 'w'))\n"
+        "os._exit(0)\n" + _PASSING
+    )
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": forger}
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 0
+    check = _run_check(root, record)
+    assert check.returncode == 1, check.stdout + check.stderr
