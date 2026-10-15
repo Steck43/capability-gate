@@ -76,8 +76,7 @@ Return to `capability-gate` before running the other commands.
 The offline command does not start a KVM or contact the test box. The live
 three-object replay is recorded separately in a private receipt
 (`STEP-11b-2026-10-09.md`):
-call id `step11-20261010T050143Z`, raw artifact
-`wsl/receipts/raw/step11b-bound-prove.json`, sha256
+call id `step11-20261010T050143Z`, raw prove artifact (also private), sha256
 `c6884b7a9941885f71d4fffe27e7dba4b2d363f2ae55bc183d1115bda1a7e7b6`,
 and 7 passing behavioral negatives. That receipt proves the named replay only;
 it does not independently attest the host hypervisor or make a KVM path always
