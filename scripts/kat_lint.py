@@ -42,6 +42,12 @@ Fiat outcomes, anywhere in the file (tests, helpers, nested functions, module):
   anything; ``any`` over a display with an element that folds true; and a
   length compared so that no length can fail it (``len(x) >= 0``,
   ``0 <= len(x)``, ``len(x) > -1``);
+* an expression compared with itself in disguise: a walrus is both its
+  target and its value (``(y := d) is y``), a one-off display picked by a
+  constant index is the element it picks (``[d][0] is d``), membership in a
+  display that holds the expression itself always holds (``x in (x,)``), and
+  ``len`` of a display whose shape fixes its size (a tuple or list with no
+  starred part, a one-element set or dict) compared with a constant;
 * a statement, return value, or assigned value that always raises;
 * in a test function, a ``raise`` that runs on every path and nothing catches.
   A loop over a non-empty constant, ``while True`` and the first case of a
@@ -2737,8 +2743,58 @@ def _verdict_members() -> set[str]:
 _VERDICTS = _verdict_members()
 
 
+def _forms(node: ast.AST, depth: int = 0) -> set[str]:
+    """Every spelling of one value: the node itself, a walrus as both its
+    target and its value, and a one-off display picked by a constant index as
+    the element it picks."""
+    out = {ast.dump(node, annotate_fields=False)}
+    if depth > 20:
+        return out
+    if isinstance(node, ast.NamedExpr):
+        # The target is a store; the reads that follow it are loads of the
+        # same name.
+        target = ast.Name(id=node.target.id, ctx=ast.Load())
+        out |= _forms(target, depth + 1) | _forms(node.value, depth + 1)
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, (ast.Tuple, ast.List))
+        and not any(isinstance(e, ast.Starred) for e in node.value.elts)
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, int)
+        and not isinstance(node.slice.value, bool)
+        and -len(node.value.elts) <= node.slice.value < len(node.value.elts)
+    ):
+        out |= _forms(node.value.elts[node.slice.value], depth + 1)
+    return out
+
+
 def _same(a: ast.AST, b: ast.AST) -> bool:
-    return ast.dump(a, annotate_fields=False) == ast.dump(b, annotate_fields=False)
+    return bool(_forms(a) & _forms(b))
+
+
+def _display_len(f: _File, node: ast.AST) -> int | None:
+    """The length of len(<display>) when the display's shape fixes it: a tuple
+    or list with no starred part, or a set or dict with exactly one element."""
+    if not (
+        isinstance(node, ast.Call)
+        and len(node.args) == 1
+        and f.names.resolve(node.func) == {"builtins.len"}
+    ):
+        return None
+    arg = node.args[0]
+    if isinstance(arg, (ast.Tuple, ast.List)) and not any(
+        isinstance(e, ast.Starred) for e in arg.elts
+    ):
+        return len(arg.elts)
+    if (
+        isinstance(arg, ast.Set)
+        and len(arg.elts) == 1
+        and not isinstance(arg.elts[0], ast.Starred)
+    ):
+        return 1
+    if isinstance(arg, ast.Dict) and len(arg.keys) == 1 and arg.keys[0] is not None:
+        return 1
+    return None
 
 
 # Calls whose result says nothing about the answer as an assert test.
@@ -2829,6 +2885,18 @@ def _tautology(f: _File, test: ast.AST) -> bool:
             (ast.Eq, ast.NotEq, ast.Is, ast.IsNot, ast.Lt, ast.LtE, ast.Gt, ast.GtE),
         ):
             return True
+        if isinstance(test.ops[0], (ast.In, ast.NotIn)) and isinstance(
+            right, (ast.Tuple, ast.List, ast.Set)
+        ):
+            if any(
+                not isinstance(e, ast.Starred) and _same(left, e) for e in right.elts
+            ):
+                return True
+        for sized, other in ((left, right), (right, left)):
+            if _display_len(f, sized) is not None:
+                kind, _v = f.fold.fold(other, f.fold.at(other))
+                if kind == "value":
+                    return True
         if (
             isinstance(test.ops[0], (ast.In, ast.NotIn))
             and isinstance(right, (ast.Tuple, ast.List, ast.Set))
