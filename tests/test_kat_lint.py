@@ -3387,3 +3387,78 @@ def test_an_assert_in_a_while_true_else_is_dead(tmp_path: Path, shape: str) -> N
 def test_an_assert_in_a_live_loop_else_stays_clean(tmp_path: Path, shape: str) -> None:
     r = _lint(_write(tmp_path, "test_k_case.py", _plain(LIVE_LOOP_ELSE[shape])))
     assert r.returncode == 0, r.stdout
+
+
+# --- review round: class aliases, rebinding stores, coding aliases ----------------
+
+FAKE_PRELUDE = """
+
+class Fake:
+    verdict = Verdict.DENY
+"""
+
+CLASS_ALIAS_PATCH = {
+    "class-alias-setattr": _first(
+        "k = gate.__class__\nsetattr(k, 'evaluate', lambda *a, **kw: None)"
+    ),
+    "class-alias-store": _first("k = type(gate)\nk.evaluate = lambda *a, **kw: None"),
+    "type-of-gate-store": _first("type(gate).evaluate = lambda *a, **kw: None"),
+    "mro-first-store": _first("type(gate).__mro__[0].evaluate = lambda *a, **kw: None"),
+    "class-alias-mro-setattr": _first(
+        "k = type(gate).__mro__[0]\nsetattr(k, 'evaluate', lambda *a, **kw: None)"
+    ),
+}
+
+RESULT_REBOUND_BY_STORE = {
+    "tuple-unpack-rebind": _plain(
+        "d, = (Fake(),)\nassert d.verdict is Verdict.DENY", FAKE_PRELUDE
+    ),
+    "list-unpack-rebind": _plain(
+        "[d] = [Fake()]\nassert d.verdict is Verdict.DENY", FAKE_PRELUDE
+    ),
+    "for-loop-rebind": _plain(
+        "for d in [Fake()]:\n    pass\nassert d.verdict is Verdict.DENY",
+        FAKE_PRELUDE,
+    ),
+}
+
+STORES_THAT_KEEP_THE_ANSWER = {
+    "unpack-of-the-answer": _plain("d, = (d,)\nassert d.verdict is Verdict.DENY"),
+    "loop-over-the-answer": _plain(
+        "for d in [d]:\n    pass\nassert d.verdict is Verdict.DENY"
+    ),
+    "class-alias-of-another-object": _first(
+        "k = type(tmp_path)\nk.zqxwvk = 1", params="gate, tmp_path"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(CLASS_ALIAS_PATCH))
+def test_patching_the_gate_class_through_an_alias_is_rejected(
+    tmp_path: Path, shape: str
+) -> None:
+    _expect(tmp_path, CLASS_ALIAS_PATCH[shape], "patches the gate at line")
+
+
+@pytest.mark.parametrize("shape", sorted(RESULT_REBOUND_BY_STORE))
+def test_a_result_rebound_by_any_store_stops_counting(
+    tmp_path: Path, shape: str
+) -> None:
+    _expect(
+        tmp_path, RESULT_REBOUND_BY_STORE[shape], "never asserts on the gate's result"
+    )
+
+
+@pytest.mark.parametrize("shape", sorted(STORES_THAT_KEEP_THE_ANSWER))
+def test_a_store_that_keeps_the_answer_stays_clean(tmp_path: Path, shape: str) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", STORES_THAT_KEEP_THE_ANSWER[shape]))
+    assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize("cookie", ["utf8", "utf_8", "U8", "UTF8", "utf-8", "UTF-8"])
+def test_every_spelling_of_the_utf8_cookie_stays_clean(
+    tmp_path: Path, cookie: str
+) -> None:
+    src = f"# coding: {cookie}\n" + _kat("")
+    r = _lint(_write(tmp_path, "test_k_case.py", src))
+    assert r.returncode == 0, r.stdout
