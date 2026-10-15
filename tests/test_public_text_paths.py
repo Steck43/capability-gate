@@ -178,3 +178,75 @@ def test_every_tracked_text_file_is_read(name: str) -> None:
 
 def test_a_binary_file_is_not_read_as_text() -> None:
     assert not _is_read("x.png", b"\x89PNG\r\n\x1a\n\0\0\0")
+
+
+# --- every non-web scheme is a local path; every spelling of the folder counts ---
+
+_FOREIGN_MORE = [
+    pytest.param(f"file:///C:/x/{_R}/y.md", id="file-url-drive"),
+    pytest.param(f"file:///srv/x/{_R}/y.md", id="file-url-posix"),
+    pytest.param(f"file://host/share/{_R}/y.md", id="file-url-host"),
+    pytest.param(f"vscode://file/C:/x/{_R}/y.md", id="vscode-url"),
+    pytest.param(f"ssh://git@host/x/{_R}/y.md", id="ssh-url"),
+    pytest.param(f"elsewhere\uff0f{_R}\uff0fy.md", id="fullwidth-slash"),
+    pytest.param(f"elsewhere\u2215{_R}\u2215y.md", id="division-slash"),
+    pytest.param(f"elsewhere/{_R[:3]}\u200b{_R[3:]}/y.md", id="zero-width-inside"),
+    pytest.param(f"elsewhere/{_R.replace('e', chr(0x435))}/y.md", id="cyrillic-e"),
+    pytest.param(f"elsewhere&#47;{_R}&#47;y.md", id="html-entity"),
+    pytest.param(f"elsewhere/{_R}", id="no-trailing-slash"),
+    pytest.param(f"see elsewhere/{_R}.", id="no-trailing-slash-sentence"),
+    pytest.param(f'os.path.join("elsewhere", "{_R}", "y.md")', id="os-path-join"),
+    pytest.param(f'"elsewhere/" + "{_R}/y.md"', id="literal-concatenation"),
+    pytest.param(
+        f"https://gitlab.com/someone/other/-/blob/main/{_R}/y.md", id="gitlab"
+    ),
+    pytest.param(
+        f"https://bitbucket.org/someone/other/src/main/{_R}/y.md", id="bitbucket"
+    ),
+    pytest.param(
+        f"https://codeberg.org/someone/other/src/branch/main/{_R}/y.md", id="codeberg"
+    ),
+]
+
+
+@pytest.mark.parametrize("line", _FOREIGN_MORE)
+def test_every_scheme_and_spelling_of_a_foreign_receipt_path_is_caught(
+    line: str,
+) -> None:
+    assert _foreign(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(f"https://example.invalid/{_R}/x", id="web-url-elsewhere"),
+        pytest.param(f"http://example.invalid/a/{_R}/x", id="plain-http"),
+        pytest.param(f"the {_R} folder holds proofs", id="word-in-prose"),
+        pytest.param(f"{_R}/A1-KILL-SWITCH-2026-10-09.md", id="own-tree"),
+    ],
+)
+def test_web_urls_and_prose_stay_clean(line: str) -> None:
+    assert not _foreign(line)
+
+
+@pytest.mark.parametrize(
+    ("data", "label"),
+    [
+        pytest.param(
+            b"\0" + f"elsewhere/{_R}/y.md\n".encode(), "nul-first", id="nul-first"
+        ),
+        pytest.param(
+            f"elsewhere/{_R}/y.md\n".encode("utf-16"), "utf-16-bom", id="utf-16-bom"
+        ),
+        pytest.param(
+            f"elsewhere/{_R}/y.md\n".encode("utf-16-le"), "utf-16-le", id="utf-16-le"
+        ),
+        pytest.param(
+            f"elsewhere/{_R}/y.md\n".encode("utf-16-be"), "utf-16-be", id="utf-16-be"
+        ),
+    ],
+)
+def test_a_file_that_is_not_plain_utf8_is_still_read(data: bytes, label: str) -> None:
+    assert any(
+        _foreign(line) for view in _text_views(data) for line in view.split("\n")
+    ), label
