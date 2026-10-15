@@ -269,3 +269,53 @@ def test_text_mode_fails_closed_without_list(repo: Path) -> None:
     )
     assert r.returncode == 1
     assert "denylist not configured" in r.stdout
+
+
+# --- the shared list's canary line is not a name (shared secret, 2026-10-14) ------
+# The same LEAK_DENYLIST value feeds isolation-layer's public surface scan, which
+# needs the fixed canary "zqxwvk" to prove the list matches. Here that line is
+# skipped: it names nothing private, and the tests use it as a fake term.
+
+CANARY = "zqx" + "wvk"
+
+
+def _commit(repo: Path, message: str) -> str:
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", message], check=True)
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+@pytest.mark.parametrize("canary", [CANARY, CANARY.upper(), f"  {CANARY}  "])
+def test_the_canary_line_is_not_a_name(repo: Path, canary: str) -> None:
+    f = _write(repo, f"fixture {CANARY} and {CANARY.upper()}\n")
+    r = _run([str(f)], repo, denylist=f"{canary}\n{SYNTHETIC_NAME}\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_canary_line_is_not_a_name_in_ci_mode(repo: Path) -> None:
+    _write(repo, "base\n")
+    base = _commit(repo, "base")
+    _write(repo, f"fixture {CANARY}\n")
+    _commit(repo, f"add a {CANARY} fixture")
+    r = _run(["--ci", "--base", base], repo, denylist=f"{CANARY}\n{SYNTHETIC_NAME}\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_every_other_entry_still_hits_beside_the_canary(repo: Path) -> None:
+    f = _write(repo, f"notes on {SYNTHETIC_NAME}\n")
+    r = _run([str(f)], repo, denylist=f"{CANARY}\n{SYNTHETIC_NAME}\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist entry 1" in r.stdout, r.stdout
+
+
+def test_a_list_holding_only_the_canary_is_not_configured(repo: Path) -> None:
+    _write(repo, "base\n")
+    base = _commit(repo, "base")
+    r = _run(["--ci", "--base", base], repo, denylist=f"{CANARY}\n")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "denylist not configured" in r.stdout, r.stdout
