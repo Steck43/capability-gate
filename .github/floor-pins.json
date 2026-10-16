@@ -66,7 +66,7 @@
     },
     {
       "path": "scripts/floor_guard.py",
-      "sha256": "4b36c8f67b1a72b00088ef91686a59690d52a21d676ebb54e30242ee65aad12f"
+      "sha256": "12ef9d85c7544eead530d13d426f1022b493fdadf904ad8fade76c6a44bc79c7"
     },
     {
       "path": "scripts/kat_lint.py",
@@ -86,7 +86,7 @@
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "4456adeb7cda222baf56a1a0f79ccdfe561b706aaa37980dfa7b0d48ebd2c883"
+      "sha256": "83efa67216fe48b35d2688cd91164127e66752c7879657c41a387cdd47d4dc93"
     },
     {
       "path": "tests/test_kat_lint.py",

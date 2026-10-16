@@ -1508,6 +1508,48 @@ def plugin_violations(root: Path) -> list[str]:
     return found
 
 
+def _names_xfail(node, aliases: set[str]) -> bool:
+    """An expression that reaches pytest's xfail mark: one whose attribute chain
+    holds xfail, or a name this module binds to such an expression."""
+    while isinstance(node, (ast.Attribute, ast.Call, ast.Subscript)):
+        if isinstance(node, ast.Attribute) and node.attr == "xfail":
+            return True
+        node = node.func if isinstance(node, ast.Call) else node.value
+    return isinstance(node, ast.Name) and (node.id == "xfail" or node.id in aliases)
+
+
+def xfail_strict_violations(root: Path) -> list[str]:
+    """No test module gives an xfail mark a strict other than True. pytest.ini
+    sets xfail_strict, but a mark's own strict= wins over it, so strict=False on
+    one mark keeps a passing test green under its xfail. A strict that is not the
+    constant True, or keywords passed with **, count."""
+    found = []
+    for path in _test_modules(root):
+        rel = path.relative_to(root).as_posix()
+        try:
+            tree = ast.parse(path.read_bytes())
+        except (SyntaxError, ValueError):
+            continue  # plugin_violations reports it
+        aliases: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and _names_xfail(node.value, set()):
+                aliases |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and _names_xfail(node.func, aliases)):
+                continue
+            for kw in node.keywords:
+                if kw.arg is None or (
+                    kw.arg == "strict"
+                    and not (isinstance(kw.value, ast.Constant) and kw.value.value is True)
+                ):
+                    found.append(
+                        f"{rel}: an xfail mark sets strict to something other than "
+                        f"True (line {node.lineno})"
+                    )
+                    break
+    return found
+
+
 def _folded_str(node) -> str | None:
     """A string constant, or a + of string constants, folded to its value. Names
     built any other way are caught at run time by the floor's conftest."""
@@ -2022,6 +2064,7 @@ def violations(root: Path, pins_path: Path | None = None) -> list[str]:
         + lock_violations(root)
         + pytest_config_violations(root)
         + plugin_violations(root)
+        + xfail_strict_violations(root)
         + path_violations(root)
         + lint_config_violations(root)
     )
