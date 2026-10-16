@@ -3985,8 +3985,10 @@ def test_a_named_form_with_the_wrong_side_is_refused(
 def test_a_globals_store_under_an_unknown_key_takes_every_name_out(
     tmp_path: Path,
 ) -> None:
+    # It may rebind Verdict or the gate class as well, so the KAT is refused
+    # however the rest of it reads.
     body = "globals()[os.environ.get('ZQXWVK', 'd')] = None\nassert d.verdict is Verdict.DENY"
-    _expect(tmp_path, _kat_without_answer(body), _NO_ANSWER)
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _kat_without_answer(body))))
 
 
 _FIXTURE_RESULT = (
@@ -4798,6 +4800,7 @@ VERDICT_REBINDS_ONE_RULE = {
         "setattr(me, os.environ.get('ZQXWVK', 'Verdict'), _NS)"
     ),
     "subscript-through-an-alias": "g = globals()\ng['Verdict'] = _NS",
+    "vars-of-the-module-object": "vars(sys.modules[__name__])['Verdict'] = _NS",
 }
 
 

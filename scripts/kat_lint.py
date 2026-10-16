@@ -167,7 +167,11 @@ helper; one that reaches the gate and returns anything else does not. A
 ``capability_gate.Verdict`` (any other binding of the name, in any form below,
 adds another resolution), nothing stores into ``globals()`` under that name or
 a key the lint cannot fold, nothing changes ``sys.modules``, and nothing
-patches it (a store on ``Verdict`` is a gate patch). The gate fixture a test
+patches it (a store on ``Verdict`` is a gate patch). A store that rebinds
+the name through an object (this module reached through ``sys.modules``, an
+attribute named ``Verdict``, a module ``__dict__``, ``globals()``, an
+``update`` of one) counts too, and the gate class is judged the same way
+under every name the file imports it as. The gate fixture a test
 takes, the gate class and ``Verdict`` are judged by the same binding walk as a
 result name.
 
@@ -1526,11 +1530,13 @@ class _File:
             name: fn for name, fn in self.funcs.items() if self._is_fixture(fn)
         }
         self.autouse = [fn for fn in self.fixtures.values() if self._autouse(fn)]
+        # Read by real_gate_class, which finding the gate makers already calls.
+        self._verdict_real: bool | None = None
+        self._gate_class_real: bool | None = None
         self.makers = self._gate_makers()
         self._reach_memo: dict[tuple[str, frozenset[str]], bool] = {}
         self._result_memo: dict[str, bool] = {}
         self._answer_memo: dict[tuple[str, frozenset[str]], bool] = {}
-        self._verdict_real: bool | None = None
 
     # --- helpers
 
@@ -1589,7 +1595,11 @@ class _File:
     # --- gates
 
     def real_gate_class(self, node: ast.AST) -> bool:
-        return not self.shadowed and self.names.strictly(node) == {REAL_GATE}
+        return (
+            not self.shadowed
+            and self.names.strictly(node) == {REAL_GATE}
+            and self.gate_class_is_real()
+        )
 
     def real_gate_func(self, node: ast.AST) -> bool:
         if self.shadowed:
@@ -2835,10 +2845,28 @@ class _File:
         (an overridden __eq__ included), or changes sys.modules, so a Verdict
         member the lint resolves is the one the gate returns."""
         if self._verdict_real is None:
-            self._verdict_real = not self._verdict_tampered()
+            self._verdict_real = not self._rebound_through_an_object(
+                self._local_names("capability_gate.Verdict")
+            )
         return self._verdict_real
 
-    def _verdict_tampered(self) -> bool:
+    def gate_class_is_real(self) -> bool:
+        """Nothing rebinds the gate class's local name through an object."""
+        if self._gate_class_real is None:
+            self._gate_class_real = not self._rebound_through_an_object(
+                self._local_names(REAL_GATE)
+            )
+        return self._gate_class_real
+
+    def _local_names(self, real: str) -> set[str]:
+        """The names this file imports real under."""
+        return {
+            name
+            for name, entries in self.names.binds.items()
+            if any(kind == "import" and _canon(str(v)) == real for kind, v in entries)
+        }
+
+    def _rebound_through_an_object(self, protected: set[str]) -> bool:
         """A rebinding of Verdict by name, or a store on it, reads as another
         resolution or as a gate patch. What is left: a store that rebinds the
         name Verdict through an object (this module through sys.modules, any
@@ -2867,13 +2895,15 @@ class _File:
                     if (
                         isinstance(x, ast.Attribute)
                         and isinstance(x.ctx, (ast.Store, ast.Del))
-                        and x.attr == "Verdict"
+                        and x.attr in protected
                     ):
                         return True
                     if isinstance(x, ast.Subscript) and isinstance(
                         x.ctx, (ast.Store, ast.Del)
                     ):
-                        if self._sys_modules(x.value) or self._namespace_key(x):
+                        if self._sys_modules(x.value) or self._namespace_key(
+                            x, protected
+                        ):
                             return True
             if isinstance(n, ast.Call):
                 f = n.func
@@ -2888,7 +2918,7 @@ class _File:
                         return True
                     if len(n.args) > 1:
                         kind, key = self.fold.fold(n.args[1], self.fold.at(n))
-                        if key == "Verdict" or (
+                        if key in protected or (
                             not (kind == "value" and isinstance(key, str))
                             and self._namespace_holder(first)
                         ):
@@ -2947,16 +2977,19 @@ class _File:
         return False
 
     def _namespace_obj(self, node: ast.AST, depth: int = 0) -> bool:
-        """A mapping that holds module names: globals(), vars() with no
-        argument, locals(), any __dict__ or vars(x), or a name bound only to
-        one."""
+        """A mapping that holds module names: globals(), locals(), vars() with
+        no argument, the __dict__ of a module object, or a name bound
+        only to one. Another object's __dict__ holds that object's attributes,
+        which the result and patch rules read."""
         if depth > 10:
             return False
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id in ("globals", "locals") or node.func.id == "vars":
+            if node.func.id in ("globals", "locals"):
                 return True
+            if node.func.id == "vars":
+                return not node.args
         if isinstance(node, ast.Attribute) and node.attr == "__dict__":
-            return True
+            return self._module_obj(node.value)
         if isinstance(node, ast.Name):
             vals = self.names.binds.get(node.id, [])
             return bool(vals) and all(
@@ -2970,13 +3003,13 @@ class _File:
         reached through sys.modules."""
         return self._module_obj(node)
 
-    def _namespace_key(self, sub: ast.Subscript) -> bool:
+    def _namespace_key(self, sub: ast.Subscript, protected: set[str]) -> bool:
         """A globals(), vars() or locals() store under the key Verdict, or a
         key the lint cannot fold."""
         if not self._namespace_obj(sub.value):
             return False
         kind, key = self.fold.fold(sub.slice, self.fold.at(sub))
-        return not (kind == "value" and isinstance(key, str)) or key == "Verdict"
+        return not (kind == "value" and isinstance(key, str)) or key in protected
 
     def answer_names(
         self, fn, typed: set[str], seed: set[str], seen: frozenset[str] = frozenset()
