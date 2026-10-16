@@ -170,8 +170,13 @@ a key the lint cannot fold, nothing changes ``sys.modules``, and nothing
 patches it (a store on ``Verdict`` is a gate patch). A store that rebinds
 the name through an object (this module reached through ``sys.modules``, an
 attribute named ``Verdict``, a module ``__dict__``, ``globals()``, an
-``update`` of one) counts too, and the gate class is judged the same way
-under every name the file imports it as. The gate fixture a test
+``update`` of one, a function's ``__globals__``) counts too, and the gate
+class is judged the same way under every name the file imports it as. The gate
+class is read only directly (an attribute, called, ``isinstance`` or
+``issubclass``, ``is`` or ``==``, an annotation, a tracked alias); passed on as
+a value it is refused. Any other dynamic path into the module namespace (a
+frame's ``f_globals``, a ``gc`` or ``inspect`` walk, code built at run time)
+is out of scope for a static lint. The gate fixture a test
 takes, the gate class and ``Verdict`` are judged by the same binding walk as a
 result name.
 
@@ -2898,6 +2903,15 @@ class _File:
                         and x.attr in protected
                     ):
                         return True
+                    # A store on the object a namespace holds under the name
+                    # (globals()['Gate'].evaluate = ...).
+                    if (
+                        isinstance(x, ast.Attribute)
+                        and isinstance(x.ctx, (ast.Store, ast.Del))
+                        and isinstance(x.value, ast.Subscript)
+                        and self._namespace_key(x.value, protected)
+                    ):
+                        return True
                     if isinstance(x, ast.Subscript) and isinstance(
                         x.ctx, (ast.Store, ast.Del)
                     ):
@@ -2990,6 +3004,9 @@ class _File:
                 return not node.args
         if isinstance(node, ast.Attribute) and node.attr == "__dict__":
             return self._module_obj(node.value)
+        # A function's globals are its module's namespace.
+        if isinstance(node, ast.Attribute) and node.attr == "__globals__":
+            return True
         if isinstance(node, ast.Name):
             vals = self.names.binds.get(node.id, [])
             return bool(vals) and all(
@@ -3977,6 +3994,66 @@ def _side_truth(f: _File, node: ast.AST, depth: int = 0) -> bool | None:
     return bool(v) if kind == "value" else None
 
 
+def _gate_class_escapes(f: _File) -> list[ast.AST]:
+    """Every place the gate class (the name it is imported as, type(gate),
+    gate.__class__, its mro, or a name bound only to one) is passed on as a
+    value: a call argument, a container element, a return or yield value, a
+    lambda body, or an operand of anything but a comparison. Read directly (an
+    attribute, the class called, isinstance or issubclass, is or ==, an
+    annotation, the value bound to a tracked alias), it stays where the patch
+    rules see it; passed on, it can be patched where they do not follow."""
+    out: list[ast.AST] = []
+    scopes = [(f.tree, set())] + [
+        (fn, f.typed_names(fn, f.auto_params(fn))) for fn in f.funcs.values()
+    ]
+
+    def yields(node: ast.AST, typed: set[str]) -> bool:
+        # A name being bound is not a value passed on.
+        if not isinstance(node, ast.expr) or isinstance(
+            getattr(node, "ctx", None), (ast.Store, ast.Del)
+        ):
+            return False
+        if f.names.strictly(node) == {REAL_GATE}:
+            return True
+        return f.gate_type(node, typed)
+
+    for scope, typed in scopes:
+        for n in _scope_nodes(scope):
+            if isinstance(n, ast.Lambda) and yields(n.body, typed):
+                out.append(n.body)
+                continue
+            if not yields(n, typed):
+                continue
+            p = f.parents.get(n)
+            if _direct_read(f, n, p):
+                continue
+            out.append(n)
+    return out
+
+
+def _direct_read(f: _File, n: ast.AST, p: ast.AST | None) -> bool:
+    if isinstance(p, ast.Attribute) and p.value is n:
+        return True
+    if isinstance(p, ast.Call):
+        if p.func is n:
+            return True
+        checks = f.names.resolve(p.func) & {
+            "builtins.isinstance",
+            "builtins.issubclass",
+        }
+        return bool(checks) and n in p.args
+    if isinstance(p, ast.Compare):
+        return True
+    if isinstance(p, (ast.Assign, ast.NamedExpr)) and p.value is n:
+        targets = p.targets if isinstance(p, ast.Assign) else [p.target]
+        return all(isinstance(t, ast.Name) for t in targets)
+    if isinstance(p, ast.AnnAssign):
+        return p.annotation is n or (p.value is n and isinstance(p.target, ast.Name))
+    if isinstance(p, ast.arg) or (isinstance(p, _FUNCS) and p.returns is n):
+        return True
+    return isinstance(p, ast.Expr)
+
+
 def _rebound_gate(f: _File, fn) -> ast.AST | None:
     """The first statement in a test that rebinds a gate fixture parameter to
     anything that is not the real gate."""
@@ -4147,6 +4224,15 @@ def lint_source(src: str, label: str, shadowed: bool = False) -> list[str]:
                         "always raises in a KAT file fails by fiat",
                     )
     _check_marks(f, problems, label, kat=True)
+
+    for n in _gate_class_escapes(f):
+        _report(
+            problems,
+            label,
+            n.lineno,
+            "the gate class is passed on as a value; read it only directly"
+            " (an attribute, isinstance or issubclass, is or ==)",
+        )
 
     # pytest keeps the last module-level definition of a name; the lint would
     # judge the first. A second definition is refused outright.

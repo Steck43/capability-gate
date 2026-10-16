@@ -1704,12 +1704,20 @@ CLEAN = {
         "",
     ),
     "raise_under_false_branch": ("if False:\n    raise ValueError('zqxwvk')", ""),
-    "fixture_autouse_false_not_applied": (
-        "",
-        "@pytest.fixture(autouse=False)\ndef _swap(monkeypatch):\n"
-        "    monkeypatch.setattr(Gate, 'evaluate', lambda *a, **k: None)",
-    ),
 }
+
+
+# Allowed before the gate class was read only directly: a fixture nothing
+# applies still passes the class on as a value.
+def test_an_unapplied_fixture_that_passes_the_gate_class_on_is_rejected(
+    tmp_path: Path,
+) -> None:
+    prelude = (
+        "@pytest.fixture(autouse=False)\ndef _swap(monkeypatch):\n"
+        "    monkeypatch.setattr(Gate, 'evaluate', lambda *a, **k: None)"
+    )
+    _expect(tmp_path, _kat("", prelude), "the gate class is passed on as a value")
+
 
 # Entries of CLEAN whose answer assert the allowlist now refuses.
 CLEAN_REFUSED_BY_ALLOWLIST = {
@@ -4957,7 +4965,9 @@ def test_the_gate_class_passed_on_as_a_value_is_rejected(
     helper, line = GATE_CLASS_AS_A_VALUE[shape]
     prelude = _FAKE + ("\n\n\n" + helper if helper else "")
     body = f"{line}\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
-    _expect(tmp_path, _src(prelude, "gate", body), "gate class")
+    # A helper's own return of type(g) is caught at the call by the patch rule;
+    # every other shape by the value rule.
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, "gate", body))))
 
 
 GATE_CLASS_READ_DIRECTLY = {
@@ -4966,6 +4976,7 @@ GATE_CLASS_READ_DIRECTLY = {
     "is": "assert type(gate) is Gate",
     "attribute-read": "assert type(gate).__name__ == 'Gate'",
     "annotation": "g: Gate = gate",
+    "alias-read": "cls = type(gate)\nassert cls is Gate",
 }
 
 
@@ -4974,3 +4985,11 @@ def test_the_gate_class_read_directly_stays_clean(tmp_path: Path, shape: str) ->
     body = f"{GATE_CLASS_READ_DIRECTLY[shape]}\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
     r = _lint(_write(tmp_path, "test_k_case.py", _src("", "gate", body)))
     assert r.returncode == 0, r.stdout
+
+
+def test_setattr_on_the_gate_class_held_by_globals_is_rejected(tmp_path: Path) -> None:
+    body = (
+        "setattr(globals()['Gate'], 'evaluate', lambda *a, **kw: _Fake())\n"
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    )
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(_FAKE, "gate", body))))
