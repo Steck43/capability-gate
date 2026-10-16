@@ -4993,3 +4993,96 @@ def test_setattr_on_the_gate_class_held_by_globals_is_rejected(tmp_path: Path) -
         f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
     )
     _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(_FAKE, "gate", body))))
+
+
+# --- review round on #101 at aacb21e: every namespace object, and every name bound
+# --- to one, is tainted; any write through it rebinds ---------------------------
+
+NAMESPACE_WRITES_VERDICT = {
+    "vars-of-a-module-alias": "me = sys.modules[__name__]\nvars(me)['Verdict'] = _NS",
+    "vars-of-the-module-update": "vars(sys.modules[__name__]).update(Verdict=_NS)",
+    "alias-of-vars-of-the-module": "ns = vars(sys.modules[__name__])\nns['Verdict'] = _NS",
+    "operator-setitem": "import operator\noperator.setitem(globals(), 'Verdict', _NS)",
+    "dict-setitem": "dict.__setitem__(globals(), 'Verdict', _NS)",
+    "dict-update": "dict.update(globals(), Verdict=_NS)",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(NAMESPACE_WRITES_VERDICT))
+def test_a_write_through_any_namespace_object_rebinds_verdict(
+    tmp_path: Path, shape: str
+) -> None:
+    body = f"d = {_CALL}\n{NAMESPACE_WRITES_VERDICT[shape]}\nassert d.verdict is Verdict.DENY"
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(_NS, "gate", body))))
+
+
+NAMESPACE_WRITES_GATE_CLASS = {
+    "vars-of-the-module-store": "vars(sys.modules[__name__])['Gate'] = _FakeGate",
+    "vars-of-the-module-update": "vars(sys.modules[__name__]).update(Gate=_FakeGate)",
+    "vars-of-a-module-alias": "me = sys.modules[__name__]\nvars(me)['Gate'] = _FakeGate",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(NAMESPACE_WRITES_GATE_CLASS))
+def test_a_write_through_any_namespace_object_rebinds_the_gate_class(
+    tmp_path: Path, shape: str
+) -> None:
+    prelude = (
+        _FAKE + "\n\n\n" + _FAKE_GATE + "\n\n\n" + NAMESPACE_WRITES_GATE_CLASS[shape]
+    )
+    body = f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, "gate", body))))
+
+
+GATE_NAMESPACE_WRITES = {
+    "ior-on-the-instance-dict": "gate.__dict__ |= {'evaluate': lambda *a, **kw: _Fake()}",
+    "ior-on-vars-of-the-instance": "vars(gate) |= {'evaluate': lambda *a, **kw: _Fake()}",
+    "ior-through-an-alias": "ns = vars(gate)\nns |= {'evaluate': lambda *a, **kw: _Fake()}",
+    "store-through-an-alias": "ns = gate.__dict__\nns['evaluate'] = lambda *a, **kw: _Fake()",
+    "update-through-an-alias": "ns = vars(gate)\nns.update(evaluate=lambda *a, **kw: _Fake())",
+    "operator-setitem-on-the-instance": (
+        "import operator\noperator.setitem(vars(gate), 'evaluate', lambda *a, **kw: _Fake())"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(GATE_NAMESPACE_WRITES))
+def test_a_write_through_the_gate_instances_namespace_patches_the_gate(
+    tmp_path: Path, shape: str
+) -> None:
+    body = (
+        f"{GATE_NAMESPACE_WRITES[shape]}\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
+    )
+    _expect(tmp_path, _src(_FAKE, "gate", body), "patches the gate")
+
+
+GATE_MODULE_WRITES = {
+    "ior-on-vars-of-the-module": "vars(capability_gate) |= {'_decide': None}",
+    "ior-through-an-alias": "ns = vars(capability_gate)\nns |= {'_decide': None}",
+    "store-through-an-alias": "ns = capability_gate.__dict__\nns['_decide'] = None",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(GATE_MODULE_WRITES))
+def test_a_write_through_the_gate_modules_namespace_patches_the_gate(
+    tmp_path: Path, shape: str
+) -> None:
+    body = f"{GATE_MODULE_WRITES[shape]}\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
+    _expect(tmp_path, _src("import capability_gate", "gate", body), "patches the gate")
+
+
+def test_the_gate_module_name_rebound_through_this_modules_object_is_rejected(
+    tmp_path: Path,
+) -> None:
+    prelude = (
+        "import types\n\nimport capability_gate\n\n"
+        + _FAKE
+        + "\n\n\n"
+        + _FAKE_GATE
+        + "\n\n\nsys.modules[__name__].capability_gate = types.SimpleNamespace(Gate=_FakeGate)"
+    )
+    body = (
+        "g = capability_gate.Gate(load_policy({'skills': {}}))\n"
+        "d = g.evaluate('s', 'read_file', ['zqxwvk'])\nassert d.verdict is Verdict.DENY"
+    )
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, "", body))))
