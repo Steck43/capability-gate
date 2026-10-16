@@ -7,11 +7,17 @@ with NUL bytes dropped, and UTF-16 when a byte-order mark or a NUL byte says it
 may be). Each line is decoded until it stops changing: HTML entities, URL
 encoding, NFKC, format characters dropped, slash look-alikes and Cyrillic
 letters that look like the folder name's letters folded, backslashes and JSON
-escaped slashes as slashes, os.path.join and .joinpath calls and two
-adjacent string literals joined; a name, attribute or call joined in front of
-the folder name (by a join call, a Path "/" or a "+") is a runtime value, so
-the path is not one in this checkout. Then every receipts folder (any letter case, with or without a
-trailing slash) is judged by the whole path before it:
+escaped slashes as slashes, string prefixes, triple quotes and brackets around
+a lone literal dropped, os.path.join and .joinpath calls, literals joined by a
+Path "/" and two adjacent string literals joined. A left operand anchored to
+this checkout (this file's own path through Path(__file__) or os.path.dirname,
+ROOT, or a name the file binds once to one of those) is replaced by its literal
+tail, judged against ROOT like any relative path; it is a runtime value once it
+climbs above the checkout. Any other name, attribute, call, subscript or
+bracketed expression joined in front of a literal that reaches the folder name
+(by a join call, a Path "/" or a "+") is a runtime value, so the path is not
+one in this checkout. Then every receipts folder (any letter case, with or
+without a trailing slash) is judged by the whole path before it:
 
 - nothing before it, or a folder path that exists inside this checkout: home;
 - a leading slash, a drive letter, or any ".." step: another tree, even when
@@ -55,43 +61,42 @@ _RAW = re.compile(
 # Code forges other than GitHub: this repository lives only on GitHub, so a forge
 # URL that reaches a receipts folder points into another repository.
 _FORGES = ("gitlab.com", "bitbucket.org", "codeberg.org", "git.sr.ht", "gitea.com")
-# Slash look-alikes NFKC keeps, and letters from other scripts (Cyrillic,
-# Greek, Latin small capitals) that look like the Latin letters of the folder
-# name: r, e, c, i, p, t, s.
+# Letters from other scripts that look like the Latin letters of the folder
+# name (r, e, c, i, p, t, s), as HEX:LETTER pairs: every pair in Unicode's
+# confusables.txt 18.0.0 (UTS #39, (c) Unicode, Inc., Unicode License v3) whose
+# skeleton is one of those letters, as isolation-layer's public surface scan
+# folds them (its capital-I look-alikes fold to I), less the code points NFKC
+# already turns into ASCII. A test pins the list.
+_FOLDER_CONFUSABLES = (
+    "A1:i FE:p 131:i 196:I 1A6:R 1BD:s 1BF:p 1C0:I 1DD:e 24C:R 268:i 269:i "
+    "26A:i 27D:r 27E:r 280:r 395:E 399:I 3A1:P 3A4:T 3B5:e 3B9:i 3C1:p 3F1:p "
+    "3F2:c 3F8:p 3F9:C 405:S 406:I 415:E 420:P 421:C 422:T 433:r 435:e 440:p "
+    "441:c 442:t 454:e 455:s 456:i 4BD:e 4C0:I 54F:S 582:i 7E0:T D1F:s 1004:c "
+    "105A:c 10BD:S 10FD:S 13A1:R 13A2:T 13A5:i 13AC:E 13D2:R 13D5:S 13DA:S "
+    "13DF:C 13E2:P 146D:P 1587:R 16C1:I 1C83:c 1CBD:S 1D04:c 1D07:e 1D09:i "
+    "1D18:p 1D1B:t 1D26:r 212E:e 22A4:T 22FF:E 2373:i 2374:p 27D9:T 2C85:r "
+    "2C92:I 2C93:i 2CA2:P 2CA3:p 2CA4:C 2CA5:c 2CA6:T 2CCE:P 2CCF:p 2D39:E "
+    "3112:T 4E05:T A4D1:P A4D4:T A4DA:C A4E2:S A4E3:R A4F0:E A4F2:I A50B:T "
+    "A576:S A5CB:E A647:i A731:s A7AE:I A7FE:I AB32:e AB47:r AB48:r AB75:i "
+    "AB81:r ABAA:s ABAF:c 10286:E 10295:P 10296:S 10297:T 102A2:C 102B1:T "
+    "10302:C 10309:I 10315:T 10415:C 10420:S 1043D:c 10448:s 104B4:R 1051B:C "
+    "10926:I 118A6:E 118AE:E 118BC:T 118C1:s 118C3:i 118E9:C 118F2:C 16A19:r "
+    "16AD6:S 16F0A:T 16F35:R 16F3A:S 1CCD8:C 1CCDA:E 1CCE5:P 1CCE7:R 1CCE8:S "
+    "1CCE9:T 1D134:c 1D216:R 1D373:T 1D6A4:i 1D6AC:E 1D6B8:P 1D6BB:T 1D6CA:i "
+    "1D6D2:p 1D6E0:p 1D6E6:E 1D6F2:P 1D6F5:T 1D704:i 1D70C:p 1D71A:p 1D720:E "
+    "1D72C:P 1D72F:T 1D73E:i 1D746:p 1D754:p 1D75A:E 1D766:P 1D769:T 1D778:i "
+    "1D780:p 1D78E:p 1D794:E 1D7A0:P 1D7A3:T 1D7B2:i 1D7BA:p 1D7C8:p 1DF81:E "
+    "1F74C:C 1F768:T"
+)
+# Look-alikes that table leaves out, and slash look-alikes NFKC keeps.
+_FOLD_EXTRA = "3C4:t 2215:/ 2044:/ 29F8:/"
 _FOLD = str.maketrans(
     {
-        "\u2215": "/",
-        "\u2044": "/",
-        "\u29f8": "/",
-        # Cyrillic
-        "\u0435": "e",
-        "\u0415": "E",
-        "\u0441": "c",
-        "\u0421": "C",
-        "\u0440": "p",
-        "\u0420": "P",
-        "\u0456": "i",
-        "\u0406": "I",
-        "\u0455": "s",
-        "\u0405": "S",
-        "\u0422": "T",
-        # Greek
-        "\u03b5": "e",
-        "\u0395": "E",
-        "\u03b9": "i",
-        "\u0399": "I",
-        "\u03c1": "p",
-        "\u03a1": "P",
-        "\u03c4": "t",
-        "\u03a4": "T",
-        # Latin small capitals
-        "\u0280": "r",
-        "\u1d07": "e",
-        "\u1d04": "c",
-        "\u026a": "i",
-        "\u1d18": "p",
-        "\u1d1b": "t",
-        "\ua731": "s",
+        chr(int(code, 16)): letter
+        for code, letter in (
+            pair.split(":")
+            for pair in (_FOLDER_CONFUSABLES + " " + _FOLD_EXTRA).split()
+        )
     }
 )
 # A path built from a runtime value is not a path in this checkout. Its unknown
@@ -101,13 +106,145 @@ _FOLDER = "rece" + "ipts"
 _JOIN_CALL = re.compile(
     r"(?:(?:os\.path|posixpath|ntpath)\.join|\.joinpath)\(((?:[^()]|\([^()]*\))*)\)"
 )
-# A Path "/" operator, or a "+", whose left operand is a name, attribute or call
-# and whose right operand is a literal that starts at the folder name.
+# A Path "/" operator, or a "+", whose left operand is a name, attribute, call,
+# subscript or anything closed by a bracket, and whose right operand is a
+# literal that reaches the folder name.
 _RUNTIME_LEFT = re.compile(
-    r"""(?:[A-Za-z_][\w.]*(?:\([^()]*\))?)\s*[/+]\s*(["'])(?=receipts)""", re.I
+    r"""(?:[A-Za-z_][\w.]*(?:\[[^\[\]]*\])*|[)\]])\s*[/+]\s*(["'])(?=[^"'\n]*receipts)""",
+    re.I,
 )
 _LITERAL = re.compile(r"""["']([^"']*)["']""")
 _LITERAL_PLUS = re.compile(r"""(["'])\s*\+\s*(["'])""")
+# A string prefix (raw, unicode, bytes, f-string) is dropped, a triple quote reads
+# as one quote, a literal alone in brackets is unwrapped, and literals joined by a
+# Path "/" read as one literal.
+_PREFIX = re.compile(r"""(?<![\w"'])[rRbBuUfF]{1,2}(?=["'])""")
+_BRACKETED = re.compile(r"""(?<![\w)\]])\(\s*((["'])[^"'\n]*\2)\s*\)""")
+_LITERAL_SLASH = re.compile(r"""(["'])([^"'\n]*)\1\s*/\s*(["'])([^"'\n]*)\3""")
+_PATH_JOIN = re.compile(
+    r"((?:os\.path|posixpath|ntpath)\.join)\(((?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)"
+)
+
+# A left operand anchored to this checkout: this file's own path (Path(__file__)
+# or os.path.dirname of it, with .resolve(), .parent and .parents[n]), ROOT, or
+# a name the same file binds once to one of those. Its literal tail is judged
+# against ROOT the way any relative path is; an anchor that climbs above the
+# checkout is a runtime value.
+_FILE_ANCHOR = (
+    r"(?:Path\(\s*__file__\s*\)|(?:os\.path\.(?:dirname|abspath|realpath)\(\s*)+"
+    r"__file__\s*\)+)(?:\.resolve\(\)|\.absolute\(\)|\.parent\b|\.parents\[\d+\])*"
+)
+_DEFAULT_REL = "tests/test_x.py"
+_OUTSIDE = "outside_checkout"
+
+
+def _anchor_tail(expr: str, rel: str) -> str | None:
+    """ "" for this file's own path while it stays inside the checkout, None once
+    it climbs above it."""
+    level = len(rel.split("/"))
+    level -= expr.count("dirname(")
+    for step in re.findall(r"\.parent\b|\.parents\[(\d+)\]", expr):
+        level -= int(step) + 1 if step else 1
+    return "" if level >= 0 else None
+
+
+def _anchors(names: dict[str, str | None]) -> re.Pattern[str]:
+    alts = [_FILE_ANCHOR] + [rf"\b{re.escape(n)}\b(?![\w.(\[])" for n in names]
+    return re.compile("(" + "|".join(alts) + ")")
+
+
+def _resolve(expr: str, names: dict[str, str | None], rel: str) -> str | None:
+    return names[expr] if expr in names else _anchor_tail(expr, rel)
+
+
+def _anchored(text: str, names: dict[str, str | None], rel: str) -> str:
+    """Each anchored left operand replaced by its tail as a literal, or by a
+    runtime name when it is above the checkout."""
+    rx = _anchors(names)
+
+    def slash(m: re.Match[str]) -> str:
+        tail = _resolve(m.group(1), names, rel)
+        if tail is None:
+            return _OUTSIDE + m.group(2)
+        return f'"{tail}" / ' if tail else ""
+
+    def joinpath(m: re.Match[str]) -> str:
+        tail = _resolve(m.group(1), names, rel)
+        if tail is None:
+            return _OUTSIDE + ".joinpath("
+        return f'os.path.join("{tail}", ' if tail else "os.path.join("
+
+    def join_args(m: re.Match[str]) -> str:
+        kept = []
+        for arg in _args(m.group(2)):
+            if rx.fullmatch(arg):
+                tail = _resolve(arg, names, rel)
+                if tail is None:
+                    kept.append(_OUTSIDE)
+                elif tail:
+                    kept.append(f'"{tail}"')
+                continue
+            kept.append(arg)
+        return m.group(1) + "(" + ", ".join(kept) + ")"
+
+    text = re.sub(rx.pattern + r"(\s*/\s*)(?=[\"'])", slash, text)
+    text = re.sub(rx.pattern + r"\.joinpath\(", joinpath, text)
+    return _PATH_JOIN.sub(join_args, text)
+
+
+_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*)\s*(?::[^=]*)?=(?!=)\s*(.*?)\s*$")
+# Any place a name is bound: assignment and annotation, walrus, for and with
+# targets, imports, global and nonlocal, def and class.
+_BOUND = re.compile(
+    r"(?:^|[;,(]|\bfor|\bas|\bglobal|\bnonlocal|\bdef|\bclass|\bimport)\s*"
+    r"([A-Za-z_]\w*)\s*(?::[^=\n]*)?(?:=(?!=)|:=|\bin\b|[,)(:]|$)"
+)
+_TAIL = re.compile(r"""\s*/\s*["']([^"']*)["']""")
+
+
+def _bindings(text: str, rel: str) -> dict[str, str | None]:
+    """Names the file binds exactly once, by plain assignment, to an anchored
+    path and an optional literal tail, mapped to that tail (None above the
+    checkout). ROOT is the checkout root unless the file binds it otherwise."""
+    lines = [_plain(line) for line in text.split("\n")]
+    count: dict[str, int] = {}
+    for line in lines:
+        for name in _BOUND.findall(line):
+            count[name] = count.get(name, 0) + 1
+    names: dict[str, str | None] = {"ROOT": ""}
+    for _ in range(5):
+        changed = False
+        rx = _anchors(names)
+        for line in lines:
+            m = _ASSIGN.match(line)
+            if not m:
+                continue
+            name, rhs = m.groups()
+            head = rx.match(rhs)
+            rest = rhs[head.end() :] if head else rhs
+            once = count.get(name, 0) == 1
+            only_literals = "".join(m.group(0) for m in _TAIL.finditer(rest)) == rest
+            if head is None or not once or not only_literals:
+                if name in names:
+                    del names[name]
+                    changed = True
+                continue
+            base = _resolve(head.group(1), names, rel)
+            parts = [base, *_TAIL.findall(rest)] if base is not None else None
+            tail = None if parts is None else "/".join(x for x in parts if x)
+            if names.get(name, "?") != tail:
+                names[name] = tail
+                changed = True
+        if not changed:
+            break
+    return names
+
+
+def _plain(line: str) -> str:
+    """A line with string prefixes dropped, triple quotes read as one, and the
+    brackets around a lone literal removed."""
+    line = _PREFIX.sub("", line.replace('"' * 3, '"').replace("'" * 3, "'"))
+    return _BRACKETED.sub(r"\1", line)
 
 
 def _args(text: str) -> list[str]:
@@ -159,13 +296,21 @@ def _visible(text: str) -> str:
     return unicodedata.normalize("NFC", "".join(out))
 
 
-def _decoded(line: str) -> str:
+def _decoded(
+    line: str, names: dict[str, str | None] | None = None, rel: str = _DEFAULT_REL
+) -> str:
+    names = {"ROOT": ""} if names is None else names
     text = line
     for _ in range(6):
         nxt = html.unescape(unquote(text.replace("\\/", "/")))
-        nxt = unicodedata.normalize("NFKC", nxt)
+        # Folded before NFKC too: NFKC turns some look-alikes (a lunate sigma)
+        # into letters that no longer look like the Latin one.
+        nxt = unicodedata.normalize("NFKC", nxt.translate(_FOLD))
         nxt = _visible(nxt)
-        nxt = nxt.translate(_FOLD).replace("\\", "/")
+        nxt = _plain(nxt.translate(_FOLD).replace("\\", "/"))
+        nxt = _anchored(nxt, names, rel)
+        while (collapsed := _LITERAL_SLASH.sub(r'"\2/\4"', nxt)) != nxt:
+            nxt = collapsed
         nxt = _RUNTIME_LEFT.sub(lambda m: m.group(1) + _RUNTIME + "/", nxt)
         nxt = _LITERAL_PLUS.sub("", _JOIN_CALL.sub(_joined, nxt))
         if nxt == text:
@@ -227,10 +372,20 @@ def _foreign_prefix(prefix: str) -> bool:
     return not ROOT.joinpath(*parts, _FOLDER).is_dir()
 
 
-def _foreign(line: str) -> bool:
+def _foreign(
+    line: str, names: dict[str, str | None] | None = None, rel: str = _DEFAULT_REL
+) -> bool:
     return any(
-        _foreign_prefix(m.group(1)) for m in _BEFORE_RECEIPTS.finditer(_decoded(line))
+        _foreign_prefix(m.group(1))
+        for m in _BEFORE_RECEIPTS.finditer(_decoded(line, names, rel))
     )
+
+
+def _hits(text: str, rel: str) -> list[int]:
+    """Line numbers in one text view of a tracked file that cite a foreign path."""
+    names = _bindings(text, rel)
+    lines = text.split("\n")
+    return [n for n, line in enumerate(lines, 1) if _foreign(line, names, rel)]
 
 
 def _text_views(data: bytes) -> list[str]:
@@ -257,9 +412,7 @@ def test_tracked_text_cites_no_private_repository_path() -> None:
         if not path.is_file():
             continue
         for view in _text_views(path.read_bytes()):
-            for n, line in enumerate(view.split("\n"), 1):
-                if _foreign(line):
-                    found.append(f"{rel}:{n}")
+            found += [f"{rel}:{n}" for n in _hits(view, rel)]
     assert sorted(set(found)) == []
 
 
@@ -648,9 +801,7 @@ _ANCHORED_HOME = [
         id="file-parent",
     ),
     pytest.param(f'Path(__file__).parents[1] / "{_R}" / "X.md"', id="file-parents"),
-    pytest.param(
-        f'Path(__file__).resolve().parent / "{_R}"', id="file-resolve-parent"
-    ),
+    pytest.param(f'Path(__file__).resolve().parent / "{_R}"', id="file-resolve-parent"),
     pytest.param(f'ROOT / "{_R}" / "x.md"', id="root"),
     pytest.param(
         f'os.path.join(os.path.dirname(__file__), "{_R}", "y.md")',
@@ -670,11 +821,29 @@ def test_a_path_anchored_to_this_checkout_is_home(line: str) -> None:
 def test_a_name_bound_to_this_checkout_in_the_same_file_is_home() -> None:
     text = (
         "HERE = Path(__file__).resolve().parents[1]\n"
-        "DATA = HERE / 'docs'\n"
+        "TOP: Path = HERE\n"
         f"a = HERE / '{_R}' / 'y.md'\n"
-        f"b = DATA / '..' / '{_R}' / 'y.md'\n"
+        f"b = TOP / '{_R}' / 'y.md'\n"
     )
     assert _hits(text, "tests/test_zqxwvk.py") == []
+
+
+def test_a_bound_name_keeps_its_tail_and_a_rebound_name_is_not_an_anchor() -> None:
+    text = (
+        "HERE = Path(__file__).resolve().parents[1]\n"
+        "DOCS = HERE / 'docs'\n"
+        f"a = DOCS / '{_R}'\n"
+        "TWICE = Path(__file__).parent\n"
+        "TWICE = get_root()\n"
+        f"b = TWICE / '{_R}'\n"
+        "LOOPED = Path(__file__).parent\n"
+        "for LOOPED in dirs:\n"
+        f"    c = LOOPED / '{_R}'\n"
+        "OPENED = Path(__file__).parent\n"
+        "with mount() as OPENED:\n"
+        f"    d = OPENED / '{_R}'\n"
+    )
+    assert _hits(text, "tests/test_zqxwvk.py") == [3, 6, 9, 12]
 
 
 def test_a_name_bound_to_a_runtime_value_stays_foreign() -> None:
@@ -687,7 +856,8 @@ def test_a_name_bound_to_a_runtime_value_stays_foreign() -> None:
     [
         pytest.param(f'Path(__file__).parents[5] / "{_R}"', id="parents-above-root"),
         pytest.param(
-            f'Path(__file__).parent.parent.parent / "{_R}"', id="parent-chain-above-root"
+            f'Path(__file__).parent.parent.parent / "{_R}"',
+            id="parent-chain-above-root",
         ),
         pytest.param(f'ROOT / ".." / "{_R}"', id="root-then-parent-step"),
         pytest.param(f'ROOT / "elsewhere" / "{_R}"', id="root-then-missing-folder"),
@@ -700,6 +870,9 @@ def test_an_anchor_that_leaves_the_checkout_is_foreign(line: str) -> None:
 _RUNTIME_SHAPES = [
     pytest.param(f'base / "x" / "{_R}" / "y.md"', id="through-an-intermediate-literal"),
     pytest.param(f'base / "x/{_R}/y.md"', id="literal-holding-the-folder-later"),
+    pytest.param(
+        f'base / "./{_R}/y.md"', id="literal-that-names-this-checkouts-folder"
+    ),
     pytest.param(f'base / r"{_R}"', id="raw-literal"),
     pytest.param(f'base / u"{_R}"', id="unicode-literal"),
     pytest.param(f'base / b"{_R}"', id="bytes-literal"),
@@ -738,7 +911,6 @@ def test_a_literal_that_starts_at_this_checkouts_folder_stays_clean(line: str) -
 _MORE_LOOKALIKES = [
     pytest.param(_swap("c", "ϲ"), id="greek-lunate-sigma"),
     pytest.param(_R.upper().replace("C", "Ϲ"), id="greek-capital-lunate-sigma"),
-    pytest.param(_swap("s", "ս"), id="armenian-seh"),
     pytest.param(_swap("i", "ɩ"), id="latin-iota"),
     pytest.param(_swap("t", "т"), id="cyrillic-te"),
     pytest.param(_swap("r", "ɽ"), id="r-with-tail"),
@@ -759,15 +931,19 @@ def test_the_fold_covers_every_confusable_of_the_folder_letters() -> None:
     assert len(pairs) == FOLDER_CONFUSABLE_PAIRS
     digest = hashlib.sha256(_FOLDER_CONFUSABLES.encode()).hexdigest()
     assert digest == FOLDER_CONFUSABLES_SHA256, digest
-    # Through NFKC first, as _decoded reads a line.
+    # Read the way _decoded reads a line: folded, NFKC, folded again.
     missing = [
         code
         for code, letter in pairs
-        if unicodedata.normalize("NFKC", chr(int(code, 16))).translate(_FOLD).casefold()
+        if unicodedata.normalize("NFKC", chr(int(code, 16)).translate(_FOLD))
+        .translate(_FOLD)
+        .casefold()
         != letter.casefold()
     ]
     assert missing == []
 
 
 FOLDER_CONFUSABLE_PAIRS = 182
-FOLDER_CONFUSABLES_SHA256 = "ab0abcd7b3b4811670700e74e0df9862ab6e2800bed3dceca752dc001e2fea1c"
+FOLDER_CONFUSABLES_SHA256 = (
+    "ab0abcd7b3b4811670700e74e0df9862ab6e2800bed3dceca752dc001e2fea1c"
+)
