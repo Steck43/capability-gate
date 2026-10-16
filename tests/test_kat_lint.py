@@ -4872,3 +4872,105 @@ def test_the_gate_class_rebound_through_an_object_is_not_the_real_class(
     )
     body = f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
     _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, "gate", body))))
+
+
+# --- review round on #101 at cba40bf ------------------------------------------------
+
+# Item 1: a function's __globals__ is this module's namespace.
+_POLICY_HELPER = "def _policy():\n    return {'skills': {}}"
+FUNCTION_GLOBALS = {
+    "subscript-store": "test_k_case.__globals__['Verdict'] = _NS",
+    "update": "test_k_case.__globals__.update(Verdict=_NS)",
+    "alias-subscript-store": "g = test_k_case.__globals__\ng['Verdict'] = _NS",
+    "another-function": "_policy.__globals__['Verdict'] = _NS",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(FUNCTION_GLOBALS))
+def test_verdict_rebound_through_a_functions_globals_is_not_real(
+    tmp_path: Path, shape: str
+) -> None:
+    body = f"d = {_CALL}\n{FUNCTION_GLOBALS[shape]}\nassert d.verdict is Verdict.DENY"
+    prelude = _NS + "\n\n\n" + _POLICY_HELPER
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, "gate", body))))
+
+
+def test_the_gate_class_patched_through_a_functions_globals_is_rejected(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "test_k_case.__globals__['Gate'].evaluate = lambda *a, **kw: _Fake()\n"
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    )
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(_FAKE, "gate", body))))
+
+
+def test_the_gate_class_patched_through_globals_by_subscript_is_rejected(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "globals()['Gate'].evaluate = lambda *a, **kw: _Fake()\n"
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    )
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(_FAKE, "gate", body))))
+
+
+# Item 2: the gate class is read only directly; passed on as a value, it can be
+# patched where the lint does not follow it.
+GATE_CLASS_AS_A_VALUE = {
+    "call-argument": (
+        "def _p(k):\n    k.evaluate = lambda *a, **kw: _Fake()",
+        "_p(type(gate))",
+    ),
+    "keyword-argument": (
+        "def _p(k=None):\n    k.evaluate = lambda *a, **kw: _Fake()",
+        "_p(k=gate.__class__)",
+    ),
+    "tuple-element": (
+        "",
+        "ks = (type(gate),)\nks[0].evaluate = lambda *a, **kw: _Fake()",
+    ),
+    "dict-value": ("", "{'k': type(gate)}['k'].evaluate = lambda *a, **kw: _Fake()"),
+    "lambda-return": (
+        "",
+        "f = lambda: type(gate)\nf().evaluate = lambda *a, **kw: _Fake()",
+    ),
+    "function-return": (
+        "def _cls(g):\n    return type(g)",
+        "_cls(gate).evaluate = lambda *a, **kw: _Fake()",
+    ),
+    "the-class-name-as-an-argument": (
+        "def _p(k):\n    k.evaluate = lambda *a, **kw: _Fake()",
+        "_p(Gate)",
+    ),
+    "an-alias-as-an-argument": (
+        "def _p(k):\n    k.evaluate = lambda *a, **kw: _Fake()",
+        "k = type(gate)\n_p(k)",
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(GATE_CLASS_AS_A_VALUE))
+def test_the_gate_class_passed_on_as_a_value_is_rejected(
+    tmp_path: Path, shape: str
+) -> None:
+    helper, line = GATE_CLASS_AS_A_VALUE[shape]
+    prelude = _FAKE + ("\n\n\n" + helper if helper else "")
+    body = f"{line}\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
+    _expect(tmp_path, _src(prelude, "gate", body), "gate class")
+
+
+GATE_CLASS_READ_DIRECTLY = {
+    "isinstance": "assert isinstance(gate, Gate)",
+    "issubclass": "assert issubclass(type(gate), Gate)",
+    "is": "assert type(gate) is Gate",
+    "attribute-read": "assert type(gate).__name__ == 'Gate'",
+    "annotation": "g: Gate = gate",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(GATE_CLASS_READ_DIRECTLY))
+def test_the_gate_class_read_directly_stays_clean(tmp_path: Path, shape: str) -> None:
+    body = f"{GATE_CLASS_READ_DIRECTLY[shape]}\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
+    r = _lint(_write(tmp_path, "test_k_case.py", _src("", "gate", body)))
+    assert r.returncode == 0, r.stdout
