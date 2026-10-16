@@ -4848,3 +4848,24 @@ def test_an_unconditional_caught_raise_in_a_first_statement_block_is_refused(
 ) -> None:
     body = _GATE_HERE + FIRST_STATEMENT_BLOCKS[shape]
     _expect(tmp_path, _src("", "tmp_path", body), _NO_ANSWER)
+
+
+# The gate class rebound through an object, the way Verdict is.
+GATE_CLASS_OBJECT_REBINDS = {
+    "module-attribute-store": "sys.modules[__name__].Gate = _FakeGate",
+    "module-setattr": "setattr(sys.modules[__name__], 'Gate', _FakeGate)",
+    "module-dict-store": "sys.modules[__name__].__dict__['Gate'] = _FakeGate",
+    "module-alias-store": "me = sys.modules[__name__]\nme.Gate = _FakeGate",
+    "globals-update": "globals().update({'Gate': _FakeGate})",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(GATE_CLASS_OBJECT_REBINDS))
+def test_the_gate_class_rebound_through_an_object_is_not_the_real_class(
+    tmp_path: Path, shape: str
+) -> None:
+    prelude = (
+        _FAKE + "\n\n\n" + _FAKE_GATE + "\n\n\n" + GATE_CLASS_OBJECT_REBINDS[shape]
+    )
+    body = f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, "gate", body))))
