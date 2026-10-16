@@ -124,10 +124,12 @@ test helper module, conftest, a class defined or subclassed in the file,
 ``adapters`` folder sits beside the test file, when the test, its fixtures,
 autouse fixtures, its helpers or the module patch the gate (``setattr`` or
 ``monkeypatch.setattr`` or ``mock.patch`` on a gate, the Gate class, a gate
-function, or the gate module reached through ``sys.modules``; assignment
-to one of their attributes or to an attribute of ``type(gate)`` or
-``gate.__class__``, with ``getattr(x, "name")`` read as ``x.name``, and
-the class read through ``__mro__[i]`` or ``__bases__[i]``, through a
+function, or any attribute of the gate module (``_decide`` and
+``_path_allowed`` are the decision itself), the module reached through
+``sys.modules`` included; assignment to one of their attributes or to an
+attribute of ``type(gate)`` or ``gate.__class__``, with ``getattr(x, "name")``
+read as ``x.name``, and the class read through ``__mro__[i]``, ``.mro()[i]``
+or ``__bases__[i]``, through a
 same-file helper whose one return is ``type(x)`` or ``x.__class__`` of the
 gate it is given, or through a name every binding of which is that class
 (an assignment, an unpacking, a walrus, or a loop over a fixed display of
@@ -154,16 +156,33 @@ between either
   its ``returncode`` (the hook script run as a process); and a literal
   (``None``, a bool, a number or a string).
 
+The answer is the gate call's own return. A call to a same-file helper, or a
+fixture the test takes, counts only when every ``return`` or ``yield`` in it is
+the gate call, a name that only ever holds a gate result, or another such
+helper; one that reaches the gate and returns anything else does not. A
+``Verdict`` member counts only when it resolves to the real
+``capability_gate.Verdict`` and nothing in the file rebinds ``Verdict`` (a
+class, an assignment, a ``globals()`` store, an import from elsewhere), stores
+on it or one of its members (``__eq__`` included), or changes ``sys.modules``.
+
 A name only ever holds a result when every store to it in the test is that
 binding; any other store anywhere in the test (a plain assignment, an
 unpacking, an augmented assignment, a loop target, a ``with`` or ``except``
-name, an import, a store through ``globals()`` (under a key the lint cannot
-fold it takes every name out), a ``global`` or ``nonlocal`` declaration, a
-delete) takes it out. A ``raise`` caught inside a ``try`` body does not end
-the path. The assert must sit on the test's straight path: the body, the
-chosen branch of a constant ``if``, a ``try`` or ``with`` body, a ``finally``,
-and the body of a ``for`` over a non-empty constant, before any statement that
-always leaves (a call to ``pytest.xfail``, ``skip``, ``fail`` or ``exit`` leaves). An assert in an ``if`` on an unknown test, a handler, a loop's
+name, a ``match`` capture, a nested ``def`` or ``class``, an import, a store
+through ``globals()`` (under a key the lint cannot fold it takes every name
+out), a ``global`` or ``nonlocal`` declaration, a ``nonlocal`` store in a
+nested function, a delete) takes it out, and so does any store into it (an
+attribute, ``setattr`` or ``object.__setattr__``, its ``__dict__`` or
+``vars()`` written or updated). A ``raise`` caught inside a ``try`` body does
+not end the path. The assert must sit on the test's straight path: the body,
+the chosen branch of a constant ``if``, a ``try`` or ``with`` body, a
+``finally``, and the body of a ``for`` over a non-empty constant, before any
+statement that always leaves (a call to ``pytest.xfail``, ``skip``, ``fail``
+or ``exit`` leaves) and before any statement that may leave: one that may
+``return``, or end the test in an imperative ``skip`` or ``xfail``, on some
+pass (a branch, a loop body, a handler, a ``with`` body or a ``match`` case).
+A skip under a test of the platform alone is judged by the platform rules
+instead. An assert in an ``if`` on an unknown test, a handler, a loop's
 ``else``, a ``while`` body, a nested function or a helper does not satisfy the
 KAT, nor does one inside a ``try`` whose handler catches its failure
 (``AssertionError``, ``Exception``, ``BaseException``, a bare ``except`` or a
@@ -190,7 +209,10 @@ row read back, a count from a helper) is still judged by the rules above.
 
 A name defined more than once at module level in a KAT file is rejected:
 pytest uses the last definition, so a second fixture of the same name can
-replace the real gate.
+replace the real gate. A module-level store to a defined name counts as a
+second definition. A KAT test decorated by anything but a pytest mark or
+fixture is rejected (pytest runs what the decorator returns), and so is a bare
+``pytest.mark.xfail`` that names neither a reason nor ``strict``.
 
 KAT files are found among test files: those under tests/ and at the top level
 whose names start with test, and every file pytest itself collects (its
@@ -1472,6 +1494,8 @@ class _File:
         self.makers = self._gate_makers()
         self._reach_memo: dict[tuple[str, frozenset[str]], bool] = {}
         self._result_memo: dict[str, bool] = {}
+        self._answer_memo: dict[tuple[str, frozenset[str]], bool] = {}
+        self._verdict_real: bool | None = None
 
     # --- helpers
 
@@ -1849,6 +1873,15 @@ class _File:
     ) -> bool:
         if self.gate_call(call, typed):
             return True
+        name = self.helper_name(call)
+        if name is None or name in seen:
+            return False
+        fn = self.funcs[name]
+        params = self.gate_params(fn, call, typed)
+        return self.reaches(name, params, seen | {name})
+
+    def helper_name(self, call: ast.Call) -> str | None:
+        """The same-file function a call runs, if the lint can tell."""
         callee = call.func
         name = None
         if isinstance(callee, ast.Name):
@@ -1859,15 +1892,58 @@ class _File:
             and callee.value.id in ("self", "cls")
         ):
             name = callee.attr
-        if name not in self.funcs or name in seen:
-            return False
+        if name not in self.funcs:
+            return None
         if self.names.strictly(callee) != {f"<local>.{name}"} and not (
             isinstance(callee, ast.Attribute)
         ):
+            return None
+        return name
+
+    def answer_call(
+        self, call: ast.Call, typed: set[str], seen: frozenset[str] = frozenset()
+    ) -> bool:
+        """The gate call itself, or a call to a same-file helper whose every
+        return is: a helper that only reaches the gate and returns something
+        else does not hand back the gate's answer."""
+        if self.gate_call(call, typed):
+            return True
+        name = self.helper_name(call)
+        if name is None or name in seen:
             return False
         fn = self.funcs[name]
-        params = self.gate_params(fn, call, typed)
-        return self.reaches(name, params, seen | {name})
+        params = self.gate_params(fn, call, typed) | self.auto_params(fn)
+        return self.returns_answer(fn, params, seen | {name})
+
+    def returns_answer(self, fn, params: frozenset[str], seen: frozenset[str]) -> bool:
+        """Every return or yield of fn is the gate call, a name that only ever
+        holds a gate result, or a helper call that returns one."""
+        key = (fn.name, params)
+        if key in self._answer_memo:
+            return self._answer_memo[key]
+        self._answer_memo[key] = False
+        typed = self.typed_names(fn, params)
+        direct, _ = self.answer_names(fn, typed, self.result_params(fn), seen)
+        outs = [
+            n
+            for n in _scope_nodes(fn)
+            if isinstance(n, (ast.Return, ast.Yield, ast.YieldFrom))
+        ]
+        hit = bool(outs) and all(
+            n.value is not None
+            and not isinstance(n, ast.YieldFrom)
+            and self.answer_value(n.value, direct, typed, seen)
+            for n in outs
+        )
+        self._answer_memo[key] = hit
+        return hit
+
+    def answer_value(
+        self, node: ast.AST, direct: set[str], typed: set[str], seen: frozenset[str]
+    ) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in direct and isinstance(node.ctx, ast.Load)
+        return isinstance(node, ast.Call) and self.answer_call(node, typed, seen)
 
     def gate_params(self, fn, call: ast.Call, typed: set[str]) -> frozenset[str]:
         """Parameters of fn that receive a gate at this call."""
@@ -2062,8 +2138,8 @@ class _File:
 
     def gate_type(self, expr: ast.AST, typed: set[str], depth: int = 0) -> bool:
         """type(gate) or gate.__class__ (getattr included): the class a gate
-        instance was built from, read through ``__mro__[i]`` and through a
-        name every binding of which is such a class."""
+        instance was built from, read through ``__mro__[i]``, ``.mro()[i]`` and
+        through a name every binding of which is such a class."""
         expr = self.attr_view(expr)
         if depth > 10:
             return False
@@ -2074,6 +2150,14 @@ class _File:
                 "__bases__",
             ):
                 return self.gate_type(owner.value, typed, depth + 1)
+            # cls.mro() is the same list as cls.__mro__.
+            if (
+                isinstance(owner, ast.Call)
+                and not owner.args
+                and isinstance(owner.func, ast.Attribute)
+                and owner.func.attr == "mro"
+            ):
+                return self.gate_type(owner.func.value, typed, depth + 1)
         if isinstance(expr, ast.Name):
             vals = self.names.binds.get(expr.id, [])
             if vals and all(
@@ -2176,14 +2260,13 @@ class _File:
             if self.gate_type(target, typed):
                 return True
             if isinstance(target, ast.Constant) and isinstance(target.value, str):
+                # Any attribute of the gate's modules: _decide and
+                # _path_allowed are the decision itself.
                 parts = target.value.split(".")
-                return parts[0] in REAL_ROOTS and bool(set(parts[1:]) & GATE_ATTRS)
+                return parts[0] in REAL_ROOTS and len(parts) > 1
             if self.gate_target(target, typed):
                 return True
             if self.real_module(target) and len(node.args) > 1:
-                attr = node.args[1]
-                if isinstance(attr, ast.Constant):
-                    return attr.value in GATE_ATTRS
                 return True
             return False
         if isinstance(node, (ast.Assign, ast.Delete)):
@@ -2202,7 +2285,7 @@ class _File:
                             owner, typed
                         ):
                             return True
-                        if self.real_module(a.value) and a.attr in GATE_ATTRS:
+                        if self.real_module(a.value):
                             return True
         return False
 
@@ -2234,13 +2317,8 @@ class _File:
         if fixture.name in self._result_memo:
             return self._result_memo[fixture.name]
         self._result_memo[fixture.name] = False
-        typed = self.typed_names(fixture, self.auto_params(fixture))
-        results = self.result_names(fixture, typed, self.result_params(fixture))
-        hit = any(
-            isinstance(n, (ast.Return, ast.Yield))
-            and n.value is not None
-            and self.uses_result(n.value, typed, results)
-            for n in _scope_nodes(fixture)
+        hit = self.returns_answer(
+            fixture, self.auto_params(fixture), frozenset({fixture.name})
         )
         self._result_memo[fixture.name] = hit
         return hit
@@ -2376,7 +2454,9 @@ class _File:
         branch of a constant if, try and with bodies, a finally, and the body of
         a for over a non-empty constant. A branch on an unknown test, a handler,
         a loop's else and a while body are not on the path. Stops at the first
-        statement that always leaves."""
+        statement that always leaves, and after the first that may leave: one
+        that may return, or end the test in an imperative skip or xfail, on
+        some pass makes every assert after it conditional."""
         out: list[ast.stmt] = []
         for s in stmts:
             out.append(s)
@@ -2412,7 +2492,52 @@ class _File:
             how = self.leaves(s) or ("func" if self.ends_the_test(s) else None)
             if how:
                 return out, how
+            if self.may_leave(s):
+                return out, "may"
         return out, None
+
+    def may_leave(self, s: ast.stmt) -> bool:
+        """A compound statement that may return, or end the test in an
+        imperative skip or xfail, on some pass. A branch a constant test rules
+        out does not count, and a skip or xfail under a test of the platform
+        alone is judged by the platform rules instead."""
+        if isinstance(s, ast.If):
+            truth = self.fold.truth(s.test)
+            if truth == "true":
+                branch = s.body
+            elif truth == "false":
+                branch = s.orelse
+            else:
+                branch = [*s.body, *s.orelse]
+            platform = _platform_kind(self, s.test) == "pure"
+            return any(
+                self.may_leave(x) or self._leaves_here(x, returns_only=platform)
+                for x in branch
+            )
+        if isinstance(
+            s, (ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith, ast.Try)
+        ) or type(s).__name__ in ("TryStar",):
+            blocks = [getattr(s, "body", [])]
+            blocks += [getattr(s, "orelse", []), getattr(s, "finalbody", [])]
+            blocks += [h.body for h in getattr(s, "handlers", [])]
+            return any(
+                self.may_leave(x) or self._leaves_here(x) for b in blocks for x in b
+            )
+        if isinstance(s, ast.Match):
+            return any(
+                self.may_leave(x) or self._leaves_here(x)
+                for case in s.cases
+                for x in case.body
+            )
+        return False
+
+    def _leaves_here(self, s: ast.stmt, returns_only: bool = False) -> bool:
+        return isinstance(s, ast.Return) or (
+            not returns_only
+            and isinstance(s, ast.Expr)
+            and isinstance(s.value, ast.Call)
+            and bool(self.names.resolve(s.value.func) & _MAY_PASS)
+        )
 
     def ends_the_test(self, s: ast.stmt) -> bool:
         """A call to pytest.xfail, skip, fail or exit: nothing after it runs."""
@@ -2425,10 +2550,13 @@ class _File:
     def stores(self, fn) -> dict[str, list[ast.AST | None]]:
         """Every value each name in the test is set to; None where the store
         binds something the lint does not read as a value (an unpacking, an
-        augmented assignment, a loop target, a with or except name, an import,
-        a store through globals(), a global or nonlocal declaration, a delete).
-        A globals() store under a key the lint cannot fold may be any name, so
-        it is recorded under "*" and takes every name out."""
+        augmented assignment, a loop target, a with or except name, a match
+        capture, a nested def or class, an import, a store through globals(), a
+        global or nonlocal declaration, including a nonlocal store in a nested
+        function, a delete), and None for a store into the name itself (an
+        attribute, setattr, its __dict__ or vars()). A globals() store under a
+        key the lint cannot fold may be any name, so it is recorded under "*"
+        and takes every name out."""
         out: dict[str, list[ast.AST | None]] = {}
 
         def add(name: str, value: ast.AST | None) -> None:
@@ -2470,6 +2598,25 @@ class _File:
             elif isinstance(n, (ast.Global, ast.Nonlocal)):
                 for name in n.names:
                     add(name, None)
+            elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
+                add(n.name, None)
+            elif isinstance(n, ast.MatchMapping) and n.rest:
+                add(n.rest, None)
+            elif isinstance(n, (*_FUNCS, ast.ClassDef)):
+                add(n.name, None)
+            if isinstance(n, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete)):
+                targets = (
+                    n.targets if isinstance(n, (ast.Assign, ast.Delete)) else [n.target]
+                )
+                for tgt in targets:
+                    for x in ast.walk(tgt):
+                        owner = self._store_owner(x)
+                        if owner:
+                            add(owner, None)
+            if isinstance(n, ast.Call):
+                owner = self._mutated_by_call(n)
+                if owner:
+                    add(owner, None)
             if isinstance(n, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
                 targets = n.targets if isinstance(n, ast.Assign) else [n.target]
                 for tgt in targets:
@@ -2484,14 +2631,73 @@ class _File:
                             key if kind == "value" and isinstance(key, str) else "*",
                             None,
                         )
+        # A nonlocal store in a nested function rebinds the test's name.
+        for x in ast.walk(fn):
+            if isinstance(x, ast.Nonlocal) and x is not fn:
+                for name in x.names:
+                    add(name, None)
         return out
 
+    @staticmethod
+    def _dict_owner(node: ast.AST) -> str | None:
+        """X for X.__dict__ or vars(X)."""
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == "__dict__"
+            and isinstance(node.value, ast.Name)
+        ):
+            return node.value.id
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "vars"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+        ):
+            return node.args[0].id
+        return None
+
+    def _store_owner(self, x: ast.AST) -> str | None:
+        """The name a store target writes into: X.attr, X.__dict__[k], vars(X)[k]."""
+        if isinstance(x, ast.Attribute) and isinstance(x.ctx, (ast.Store, ast.Del)):
+            if isinstance(x.value, ast.Name):
+                return x.value.id
+        if isinstance(x, ast.Subscript) and isinstance(x.ctx, (ast.Store, ast.Del)):
+            return self._dict_owner(x.value)
+        return None
+
+    def _mutated_by_call(self, call: ast.Call) -> str | None:
+        """The name a call writes into: setattr(X, ...), object.__setattr__(X,
+        ...), X.__setattr__(...), and X.__dict__ or vars(X) updated in place."""
+        f = call.func
+        first = call.args[0] if call.args else None
+        resolved = self.names.resolve(f)
+        if resolved & {"builtins.setattr", "builtins.delattr"} or (
+            isinstance(f, ast.Attribute)
+            and f.attr in ("__setattr__", "__delattr__")
+            and isinstance(f.value, ast.Name)
+            and f.value.id in ("object", "type")
+        ):
+            return first.id if isinstance(first, ast.Name) else None
+        if isinstance(f, ast.Attribute):
+            if f.attr in ("__setattr__", "__delattr__") and isinstance(
+                f.value, ast.Name
+            ):
+                return f.value.id
+            if f.attr in (
+                "update",
+                "setdefault",
+                "pop",
+                "popitem",
+                "clear",
+                "__setitem__",
+                "__delitem__",
+            ):
+                return self._dict_owner(f.value)
+        return None
+
     def result_value(self, node: ast.AST, direct: set[str], typed: set[str]) -> bool:
-        if isinstance(node, ast.Name):
-            return node.id in direct and isinstance(node.ctx, ast.Load)
-        return isinstance(node, ast.Call) and self.call_reaches(
-            node, typed, frozenset()
-        )
+        return self.answer_value(node, direct, typed, frozenset())
 
     def verdict_value(
         self, node: ast.AST, direct: set[str], verdicts: set[str], typed: set[str]
@@ -2507,10 +2713,82 @@ class _File:
     def verdict_token(self, node: ast.AST) -> bool:
         if isinstance(node, ast.Constant):
             return node.value in _VERDICT_STRINGS
-        return bool(self.names.resolve(node) & _VERDICTS)
+        resolved = self.names.resolve(node)
+        return (
+            bool(resolved)
+            and None not in resolved
+            and resolved <= _VERDICTS
+            and self.verdict_is_real()
+        )
+
+    def verdict_is_real(self) -> bool:
+        """Nothing in the file rebinds Verdict, stores on Verdict or a member
+        (an overridden __eq__ included), or changes sys.modules, so a Verdict
+        member the lint resolves is the one the gate returns."""
+        if self._verdict_real is None:
+            self._verdict_real = not self._verdict_tampered()
+        return self._verdict_real
+
+    def _verdict_tampered(self) -> bool:
+        """A rebinding of Verdict or a store on it reads as another resolution or
+        as a gate patch; what is left is a globals() store and sys.modules."""
+        for n in ast.walk(self.tree):
+            targets: list[ast.AST] = []
+            if isinstance(n, (ast.Assign, ast.Delete)):
+                targets = list(n.targets)
+            elif isinstance(n, (ast.AugAssign, ast.AnnAssign)):
+                targets = [n.target]
+            for t in targets:
+                for x in ast.walk(t):
+                    if isinstance(x, ast.Subscript) and isinstance(
+                        x.ctx, (ast.Store, ast.Del)
+                    ):
+                        if self._sys_modules(x.value) or self._namespace_key(x):
+                            return True
+            if isinstance(n, ast.Call):
+                f = n.func
+                first = n.args[0] if n.args else None
+                resolved = self.names.resolve(f)
+                setter = resolved & {"builtins.setattr", "builtins.delattr"} or (
+                    isinstance(f, ast.Attribute)
+                    and f.attr in ("setattr", "delattr", "__setattr__", "__delattr__")
+                )
+                if setter and first is not None and self._sys_modules(first):
+                    return True
+                if isinstance(f, ast.Attribute):
+                    if f.attr in ("setitem", "delitem") and first is not None:
+                        if self._sys_modules(first):
+                            return True
+                    if f.attr in (
+                        "update",
+                        "setdefault",
+                        "pop",
+                        "popitem",
+                        "clear",
+                        "__setitem__",
+                        "__delitem__",
+                    ) and self._sys_modules(f.value):
+                        return True
+        return False
+
+    def _sys_modules(self, node: ast.AST) -> bool:
+        return "sys.modules" in self.names.resolve(node)
+
+    def _namespace_key(self, sub: ast.Subscript) -> bool:
+        """A globals(), vars() or locals() store under the key Verdict, or a
+        key the lint cannot fold."""
+        v = sub.value
+        if not (
+            isinstance(v, ast.Call)
+            and isinstance(v.func, ast.Name)
+            and v.func.id in ("globals", "vars", "locals")
+        ):
+            return False
+        kind, key = self.fold.fold(sub.slice, self.fold.at(sub))
+        return not (kind == "value" and isinstance(key, str)) or key == "Verdict"
 
     def answer_names(
-        self, fn, typed: set[str], seed: set[str]
+        self, fn, typed: set[str], seed: set[str], seen: frozenset[str] = frozenset()
     ) -> tuple[set[str], set[str]]:
         """Names that only ever hold a gate result, and names that only ever
         hold a result's verdict. Any other store to a name, anywhere in the
@@ -2525,7 +2803,7 @@ class _File:
             and all(
                 v is not None
                 and isinstance(v, ast.Call)
-                and self.call_reaches(v, typed, frozenset())
+                and self.answer_call(v, typed, seen)
                 for v in values
             )
         }
@@ -3156,6 +3434,8 @@ def _plain_literal(node: ast.AST) -> bool:
 _ENDS_THE_TEST = frozenset(
     {"pytest.xfail", "pytest.skip", "pytest.fail", "pytest.exit"}
 )
+# The imperative outcomes that end a test without failing it.
+_MAY_PASS = frozenset({"pytest.xfail", "pytest.skip"})
 
 _VERDICT_STRINGS = frozenset({"allow", "deny", "ask"})
 # The richer answer forms a real KAT needs beside the verdict comparison.
@@ -3622,6 +3902,47 @@ def lint_source(src: str, label: str, shadowed: bool = False) -> list[str]:
                     f"{s.name} is defined more than once in a KAT file; pytest uses the last definition",
                 )
             seen_defs.setdefault(s.name, s.lineno)
+    # A module-level store to a defined name, before or after it, replaces it
+    # the same way.
+    for s in tree.body:
+        if isinstance(s, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = s.targets if isinstance(s, ast.Assign) else [s.target]
+            for t in targets:
+                for x in ast.walk(t):
+                    if isinstance(x, ast.Name) and x.id in seen_defs:
+                        _report(
+                            problems,
+                            label,
+                            s.lineno,
+                            f"{x.id} is defined more than once in a KAT file; pytest uses the last definition",
+                        )
+
+    # pytest runs what a test's decorators return. Only pytest's own marks and
+    # fixtures keep the test the lint read; a bare xfail mark names neither a
+    # reason nor whether it is strict.
+    for name, fn in f.funcs.items():
+        if not name.startswith("test") or fn not in tree.body:
+            continue
+        for deco in fn.decorator_list:
+            head = deco.func if isinstance(deco, ast.Call) else deco
+            resolved = f.names.resolve(head)
+            if not resolved or not all(r and r.startswith("pytest.") for r in resolved):
+                _report(
+                    problems,
+                    label,
+                    deco.lineno,
+                    f"{name} has a decorator other than a pytest mark; pytest would run what it returns",
+                )
+            elif resolved == {"pytest.mark.xfail"} and not (
+                isinstance(deco, ast.Call)
+                and {k.arg for k in deco.keywords} & {"reason", "strict"}
+            ):
+                _report(
+                    problems,
+                    label,
+                    deco.lineno,
+                    f"{name} has a bare xfail mark: no reason and no strict",
+                )
 
     for name, fn in f.funcs.items():
         if not name.startswith("test"):

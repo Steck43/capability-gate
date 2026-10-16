@@ -2035,16 +2035,17 @@ def test_k(gate, tmp_path):
     d: object = _attempt(gate, tmp_path)
     assert d.verdict is Verdict.DENY
 """,
+}
+
+# Entries of CORPUS_MORE whose answer assert the allowlist now refuses.
+CORPUS_MORE_REFUSED_BY_ALLOWLIST = {
+    # A conditional return before the assert makes the assert conditional.
     "walrus_in_if": """
 def test_k(gate, tmp_path):
     if (d := _attempt(gate, tmp_path)) is None:
         return
     assert d.verdict is Verdict.DENY
 """,
-}
-
-# Entries of CORPUS_MORE whose answer assert the allowlist now refuses.
-CORPUS_MORE_REFUSED_BY_ALLOWLIST = {
     "match_case": """
 def test_k(gate, tmp_path):
     denied = False
@@ -2258,11 +2259,6 @@ CLEAN_2 = {
     "recursive_helper": (
         "assert _r(2) == 0",
         "def _r(n):\n    return 0 if n <= 0 else _r(n - 1)",
-    ),
-    "patch_other_module_attr": (
-        "monkeypatch.setattr(capability_gate, '_zqxwvk', print)",
-        "import capability_gate",
-        "gate, monkeypatch",
     ),
     "shadowed_len_mutates": (
         "items = []\nlen(items)\nassert items",
@@ -2853,9 +2849,6 @@ GROUP_A_CLEAN = {
         f"'{_HOOK}'], input='x', capture_output=True, text=True)\n"
         "    assert r.returncode == 2\n"
     ),
-    "private-helper-in-gate-module": _first(
-        "setattr(sys.modules['capability_gate'], '_zqxwvk', object)"
-    ),
 }
 
 
@@ -2958,9 +2951,6 @@ GROUP_B = {
 }
 
 GROUP_B_CLEAN = {
-    "return-under-unknown-branch": _plain(
-        f"if d.reason:\n    return\n{_VERDICT_ASSERT}"
-    ),
     "assert-after-loop-with-break": _plain(
         f"for _ in [1]:\n    break\n{_VERDICT_ASSERT}"
     ),
@@ -2971,6 +2961,10 @@ GROUP_B_CLEAN = {
 
 # Entries of GROUP_B_CLEAN whose answer assert the allowlist now refuses.
 GROUP_B_CLEAN_REFUSED_BY_ALLOWLIST = {
+    # A conditional return before the assert makes the assert conditional.
+    "return-under-unknown-branch": _plain(
+        f"if d.reason:\n    return\n{_VERDICT_ASSERT}"
+    ),
     "function-of-the-result": _plain(
         "assert _denied(d)",
         "def _denied(x):\n    return x.verdict is Verdict.DENY",
@@ -4269,7 +4263,7 @@ def test_a_non_pytest_decorator_on_a_kat_is_rejected(tmp_path: Path) -> None:
         f"d = {_CALL}\nassert d.verdict is Verdict.DENY",
         deco="@_keep",
     )
-    _expect(tmp_path, src, "a decorator other than a pytest mark")
+    _expect(tmp_path, src, "has a decorator other than a pytest mark")
 
 
 def test_a_rebound_test_name_is_rejected(tmp_path: Path) -> None:
@@ -4305,6 +4299,17 @@ INTERNAL_PATCHES = {
         "gate",
         "setattr(capability_gate, '_decide', None)",
     ),
+    # Allowed before this round: any module attribute now counts.
+    "monkeypatch-other-module-attr": (
+        "import capability_gate",
+        "gate, monkeypatch",
+        "monkeypatch.setattr(capability_gate, '_zqxwvk', print)",
+    ),
+    "setattr-through-sys-modules": (
+        "",
+        "gate",
+        "setattr(sys.modules['capability_gate'], '_zqxwvk', object)",
+    ),
 }
 
 
@@ -4335,7 +4340,7 @@ def test_a_gate_class_reached_through_mro_is_a_gate_patch(tmp_path: Path) -> Non
 # Item 10b: a bare xfail mark on a KAT names no reason and no strictness.
 def test_a_bare_xfail_mark_on_a_kat_is_rejected(tmp_path: Path) -> None:
     src = _kat("", deco="@pytest.mark.xfail")
-    _expect(tmp_path, src, "a bare xfail mark")
+    _expect(tmp_path, src, "has a bare xfail mark")
 
 
 # A real UTF-8 alias is not a foreign encoding.
@@ -4362,3 +4367,11 @@ def test_the_floor_guard_refuses_a_link_the_kat_walk_would_not_follow(
         pytest.skip("this host cannot create a symbolic link")
     found = floor_guard.symlink_violations(tmp_path)
     assert any("symlink tests" in f for f in found), found
+
+
+def test_a_name_that_may_be_a_member_or_something_else_is_not_a_verdict(
+    tmp_path: Path,
+) -> None:
+    prelude = "from zqxwvk_fake import Other\n\nWANT = Verdict.DENY\nWANT = Other.DENY"
+    body = f"d = {_CALL}\nassert d.verdict == WANT"
+    _expect(tmp_path, _src(prelude, "gate", body), _ANSWER_REFUSED)
