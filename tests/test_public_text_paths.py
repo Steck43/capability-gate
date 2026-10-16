@@ -30,6 +30,7 @@ does not exist here, not because it is listed.
 from __future__ import annotations
 
 import codecs
+import hashlib
 import html
 import re
 import subprocess
@@ -636,3 +637,137 @@ def test_a_scheme_right_before_the_folder_name_is_foreign(line: str) -> None:
 )
 def test_a_colon_label_before_this_checkouts_folder_stays_clean(line: str) -> None:
     assert not _foreign(line)
+
+
+# --- a left operand anchored to this checkout is home; any other runtime value ----
+# --- is foreign, however the literal after it is spelled ---------------------------
+
+_ANCHORED_HOME = [
+    pytest.param(
+        f'assert (Path(__file__).parent / "{_R}" / "K94.md").is_file()',
+        id="file-parent",
+    ),
+    pytest.param(f'Path(__file__).parents[1] / "{_R}" / "X.md"', id="file-parents"),
+    pytest.param(
+        f'Path(__file__).resolve().parent / "{_R}"', id="file-resolve-parent"
+    ),
+    pytest.param(f'ROOT / "{_R}" / "x.md"', id="root"),
+    pytest.param(
+        f'os.path.join(os.path.dirname(__file__), "{_R}", "y.md")',
+        id="join-dirname-file",
+    ),
+    pytest.param(
+        f'Path(__file__).parent.joinpath("{_R}", "y.md")', id="joinpath-on-file"
+    ),
+]
+
+
+@pytest.mark.parametrize("line", _ANCHORED_HOME)
+def test_a_path_anchored_to_this_checkout_is_home(line: str) -> None:
+    assert not _foreign(line)
+
+
+def test_a_name_bound_to_this_checkout_in_the_same_file_is_home() -> None:
+    text = (
+        "HERE = Path(__file__).resolve().parents[1]\n"
+        "DATA = HERE / 'docs'\n"
+        f"a = HERE / '{_R}' / 'y.md'\n"
+        f"b = DATA / '..' / '{_R}' / 'y.md'\n"
+    )
+    assert _hits(text, "tests/test_zqxwvk.py") == []
+
+
+def test_a_name_bound_to_a_runtime_value_stays_foreign() -> None:
+    text = f"HERE = get_root()\na = HERE / '{_R}' / 'y.md'\n"
+    assert _hits(text, "tests/test_zqxwvk.py") == [2]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(f'Path(__file__).parents[5] / "{_R}"', id="parents-above-root"),
+        pytest.param(
+            f'Path(__file__).parent.parent.parent / "{_R}"', id="parent-chain-above-root"
+        ),
+        pytest.param(f'ROOT / ".." / "{_R}"', id="root-then-parent-step"),
+        pytest.param(f'ROOT / "elsewhere" / "{_R}"', id="root-then-missing-folder"),
+    ],
+)
+def test_an_anchor_that_leaves_the_checkout_is_foreign(line: str) -> None:
+    assert _hits(line + "\n", "tests/test_zqxwvk.py") == [1]
+
+
+_RUNTIME_SHAPES = [
+    pytest.param(f'base / "x" / "{_R}" / "y.md"', id="through-an-intermediate-literal"),
+    pytest.param(f'base / "x/{_R}/y.md"', id="literal-holding-the-folder-later"),
+    pytest.param(f'base / r"{_R}"', id="raw-literal"),
+    pytest.param(f'base / u"{_R}"', id="unicode-literal"),
+    pytest.param(f'base / b"{_R}"', id="bytes-literal"),
+    pytest.param(f'base / rb"{_R}"', id="raw-bytes-literal"),
+    pytest.param(f'base / f"{_R}/{{name}}"', id="f-string"),
+    pytest.param(f'base / """{_R}"""', id="triple-quoted"),
+    pytest.param(f"base / '''{_R}'''", id="triple-single-quoted"),
+    pytest.param(f'base / ("{_R}")', id="parenthesised-literal"),
+    pytest.param(f'dirs[0] / "{_R}"', id="subscript-left"),
+    pytest.param(f'cfg["root"] / "{_R}"', id="string-subscript-left"),
+    pytest.param(f'(a or b) / "{_R}"', id="parenthesised-left"),
+    pytest.param(f'get_root(cfg(x)) / "{_R}"', id="nested-call-left"),
+    pytest.param(f'base + r"{_R}/y.md"', id="concat-raw-literal"),
+]
+
+
+@pytest.mark.parametrize("line", _RUNTIME_SHAPES)
+def test_every_join_shape_onto_a_runtime_value_is_foreign(line: str) -> None:
+    assert _foreign(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(f'r"{_R}/y.md"', id="raw-literal-alone"),
+        pytest.param(f'("{_R}") / name', id="parenthesised-folder-first"),
+        pytest.param("x = rows[0] / 2", id="subscript-arithmetic"),
+    ],
+)
+def test_a_literal_that_starts_at_this_checkouts_folder_stays_clean(line: str) -> None:
+    assert not _foreign(line)
+
+
+# --- every look-alike Unicode's confusables data gives for the folder's letters ---
+
+_MORE_LOOKALIKES = [
+    pytest.param(_swap("c", "ϲ"), id="greek-lunate-sigma"),
+    pytest.param(_R.upper().replace("C", "Ϲ"), id="greek-capital-lunate-sigma"),
+    pytest.param(_swap("s", "ս"), id="armenian-seh"),
+    pytest.param(_swap("i", "ɩ"), id="latin-iota"),
+    pytest.param(_swap("t", "т"), id="cyrillic-te"),
+    pytest.param(_swap("r", "ɽ"), id="r-with-tail"),
+    pytest.param(_swap("r", "ɾ"), id="r-with-fishhook"),
+    pytest.param(_swap("e", "ǝ"), id="turned-e"),
+    pytest.param(_swap("e", "є"), id="cyrillic-ukrainian-ie"),
+    pytest.param(_R.upper().replace("R", "Ꭱ"), id="cherokee-letter-e"),
+]
+
+
+@pytest.mark.parametrize("name", _MORE_LOOKALIKES)
+def test_every_confusable_for_the_folder_letters_is_folded(name: str) -> None:
+    assert _foreign(f"elsewhere/{name}/y.md")
+
+
+def test_the_fold_covers_every_confusable_of_the_folder_letters() -> None:
+    pairs = [p.split(":") for p in _FOLDER_CONFUSABLES.split()]
+    assert len(pairs) == FOLDER_CONFUSABLE_PAIRS
+    digest = hashlib.sha256(_FOLDER_CONFUSABLES.encode()).hexdigest()
+    assert digest == FOLDER_CONFUSABLES_SHA256, digest
+    # Through NFKC first, as _decoded reads a line.
+    missing = [
+        code
+        for code, letter in pairs
+        if unicodedata.normalize("NFKC", chr(int(code, 16))).translate(_FOLD).casefold()
+        != letter.casefold()
+    ]
+    assert missing == []
+
+
+FOLDER_CONFUSABLE_PAIRS = 182
+FOLDER_CONFUSABLES_SHA256 = "ab0abcd7b3b4811670700e74e0df9862ab6e2800bed3dceca752dc001e2fea1c"
