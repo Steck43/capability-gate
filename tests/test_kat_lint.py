@@ -4238,15 +4238,53 @@ VERDICT_STAND_INS = {
     "member-store": ("", "gate", "Verdict.DENY = d.verdict"),
     "member-setattr": ("", "gate", "setattr(Verdict, 'DENY', d.verdict)"),
     "eq-override": ("", "gate", "Verdict.__eq__ = lambda a, b: True"),
+    # Verdict rebound through this module's own object.
+    "module-attribute-store": (
+        "class _NS:\n    DENY = None",
+        "gate",
+        "sys.modules[__name__].Verdict = _NS",
+    ),
+    "module-setattr": (
+        "class _NS:\n    DENY = None",
+        "gate",
+        "setattr(sys.modules[__name__], 'Verdict', _NS)",
+    ),
+    "module-dict-store": (
+        "class _NS:\n    DENY = None",
+        "gate",
+        "sys.modules[__name__].__dict__['Verdict'] = _NS",
+    ),
+    "module-alias-store": (
+        "class _NS:\n    DENY = None",
+        "gate",
+        "me = sys.modules[__name__]\nme.Verdict = _NS",
+    ),
+    "globals-update": (
+        "class _NS:\n    DENY = None",
+        "gate",
+        "globals().update(Verdict=_NS)",
+    ),
+    "globals-setdefault": (
+        "class _NS:\n    DENY = None",
+        "gate",
+        "globals().setdefault('Verdict', _NS)",
+    ),
+    "globals-ior": (
+        "class _NS:\n    DENY = None",
+        "gate",
+        "g = globals()\ng |= {'Verdict': _NS}",
+    ),
 }
 
 
+# The assert is the accepted form, by identity, so only the stand-in can be what
+# the lint refuses.
 @pytest.mark.parametrize("shape", sorted(VERDICT_STAND_INS))
 def test_a_verdict_that_is_not_the_real_one_is_not_an_answer(
     tmp_path: Path, shape: str
 ) -> None:
     prelude, params, extra = VERDICT_STAND_INS[shape]
-    body = f"d = {_CALL}\n{extra}\nassert d.verdict == Verdict.DENY".replace(
+    body = f"d = {_CALL}\n{extra}\nassert d.verdict is Verdict.DENY".replace(
         "\n\n", "\n"
     )
     _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, params, body))))
@@ -4583,3 +4621,162 @@ def test_a_verdict_compared_by_identity_with_a_string_is_refused(
             )
         )
     )
+
+
+# --- review round on #101 at 8e4ec28 ----------------------------------------------
+
+# Item 2: a name bound from the gate's class is the gate class; a store through
+# it patches the gate.
+GATE_CLASS_ALIASES = {
+    "type-of-gate": "k = type(gate)\nk.evaluate = lambda *a, **kw: _Fake()",
+    "class-of-gate": "k = gate.__class__\nk.evaluate = lambda *a, **kw: _Fake()",
+    "walrus-class-of-gate": "(k := gate.__class__).evaluate = lambda *a, **kw: _Fake()",
+    "walrus-type-of-gate": "(k := type(gate)).evaluate = lambda *a, **kw: _Fake()",
+    "the-gate-class": "k = Gate\nk.evaluate = lambda *a, **kw: _Fake()",
+    "mro-of-gate": "k = type(gate).mro()[0]\nk.evaluate = lambda *a, **kw: _Fake()",
+    "alias-setattr": "k = type(gate)\nsetattr(k, 'evaluate', lambda *a, **kw: _Fake())",
+    "alias-of-an-alias": (
+        "k = type(gate)\nj = k\nj.evaluate = lambda *a, **kw: _Fake()"
+    ),
+}
+
+
+def test_a_gate_class_alias_whose_name_is_reused_elsewhere_still_patches(
+    tmp_path: Path,
+) -> None:
+    prelude = _FAKE + "\n\n\ndef _other():\n    k = 1\n    return k"
+    body = (
+        "k = type(gate)\nk.evaluate = lambda *a, **kw: _Fake()\n"
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    )
+    _expect(tmp_path, _src(prelude, "gate", body), "patches the gate")
+
+
+@pytest.mark.parametrize("shape", sorted(GATE_CLASS_ALIASES))
+def test_a_store_through_a_gate_class_alias_patches_the_gate(
+    tmp_path: Path, shape: str
+) -> None:
+    body = f"{GATE_CLASS_ALIASES[shape]}\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
+    _expect(tmp_path, _src(_FAKE, "gate", body), "patches the gate")
+
+
+# Item 3: in a try a handler can swallow, the path enters only a simple first
+# statement; a compound one may raise inside before the assert runs.
+NESTED_CAUGHT_RAISES = {
+    "nested-try-finally": (
+        "try:\n    try:\n        if os.environ.get('ZQXWVK'):\n"
+        "            raise RuntimeError('x')\n"
+        "        assert d.verdict is Verdict.DENY\n    finally:\n        pass\n"
+        "except RuntimeError:\n    pass"
+    ),
+    "with-block": (
+        "try:\n    with contextlib.nullcontext():\n"
+        "        if os.environ.get('ZQXWVK'):\n            raise RuntimeError('x')\n"
+        "        assert d.verdict is Verdict.DENY\nexcept RuntimeError:\n    pass"
+    ),
+    "if-true-block": (
+        "try:\n    if True:\n        os.listdir('zqxwvk')\n"
+        "        assert d.verdict is Verdict.DENY\nexcept OSError:\n    pass"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(NESTED_CAUGHT_RAISES))
+def test_a_caught_raise_inside_a_nested_block_skips_the_assert(
+    tmp_path: Path, shape: str
+) -> None:
+    body = f"d = {_CALL}\n{NESTED_CAUGHT_RAISES[shape]}"
+    _expect(tmp_path, _src("", "gate", body), _NO_ANSWER)
+
+
+# Item 4: an assert message is evaluated when the assert fails, and can raise
+# the error a swallowing handler catches.
+def test_a_message_that_can_raise_in_a_swallowing_try_is_refused(
+    tmp_path: Path,
+) -> None:
+    body = (
+        f"d = {_CALL}\ntry:\n    assert d.verdict is Verdict.DENY, os.listdir('zqxwvk')\n"
+        "except OSError:\n    pass"
+    )
+    _expect(tmp_path, _src("", "gate", body), _NO_ANSWER)
+
+
+def test_a_constant_message_in_a_swallowing_try_stays_clean(tmp_path: Path) -> None:
+    body = (
+        f"d = {_CALL}\ntry:\n    assert d.verdict is Verdict.DENY, 'zqxwvk'\n"
+        "except OSError:\n    pass"
+    )
+    r = _lint(_write(tmp_path, "test_k_case.py", _src("", "gate", body)))
+    assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize(
+    "jump",
+    [
+        pytest.param("    if os.environ.get('ZQXWVK'):\n        return", id="return"),
+        pytest.param(
+            "    for _ in [1]:\n        pass\n    if os.environ.get('ZQXWVK'):\n"
+            "        return",
+            id="return-after-a-loop",
+        ),
+    ],
+)
+def test_a_finally_that_may_return_takes_the_try_body_off_the_path(
+    tmp_path: Path, jump: str
+) -> None:
+    body = f"d = {_CALL}\ntry:\n    assert d.verdict is Verdict.DENY\nfinally:\n{jump}"
+    _expect(tmp_path, _src("", "gate", body), _NO_ANSWER)
+
+
+def test_a_finally_that_may_break_out_of_a_loop_takes_the_try_body_off_the_path(
+    tmp_path: Path,
+) -> None:
+    body = (
+        f"d = {_CALL}\nfor _ in [1]:\n    try:\n        assert d.verdict is Verdict.DENY\n"
+        "    finally:\n        if os.environ.get('ZQXWVK'):\n            break"
+    )
+    _expect(tmp_path, _src("", "gate", body), _NO_ANSWER)
+
+
+def test_a_loop_inside_a_finally_may_break_itself(tmp_path: Path) -> None:
+    body = (
+        f"d = {_CALL}\ntry:\n    assert d.verdict is Verdict.DENY\nfinally:\n"
+        "    for _ in os.listdir('.'):\n        break"
+    )
+    r = _lint(_write(tmp_path, "test_k_case.py", _src("", "gate", body)))
+    assert r.returncode == 0, r.stdout
+
+
+# Item 5: the refusal says what to write, and an assert in a try's else runs
+# whenever the test goes on when no handler can swallow.
+def test_the_refusal_names_the_identity_form(tmp_path: Path) -> None:
+    r = _lint(
+        _write(
+            tmp_path,
+            "test_k_case.py",
+            _kat_without_answer("assert d.verdict == 'deny'"),
+        )
+    )
+    assert "is Verdict." in r.stdout, r.stdout
+    assert "verdict string" not in r.stdout, r.stdout
+
+
+def test_an_assert_in_the_else_of_a_try_with_no_swallowing_handler_counts(
+    tmp_path: Path,
+) -> None:
+    body = (
+        f"d = {_CALL}\ntry:\n    os.listdir('.')\nexcept OSError:\n    raise\n"
+        "else:\n    assert d.verdict is Verdict.DENY"
+    )
+    r = _lint(_write(tmp_path, "test_k_case.py", _src("", "gate", body)))
+    assert r.returncode == 0, r.stdout
+
+
+def test_an_assert_in_the_else_of_a_swallowing_try_does_not_count(
+    tmp_path: Path,
+) -> None:
+    body = (
+        f"d = {_CALL}\ntry:\n    os.listdir('zqxwvk')\nexcept OSError:\n    pass\n"
+        "else:\n    assert d.verdict is Verdict.DENY"
+    )
+    _expect(tmp_path, _src("", "gate", body), _NO_ANSWER)
