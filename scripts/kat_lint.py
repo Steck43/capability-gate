@@ -275,6 +275,14 @@ shapes, and a display with a starred part of unknown contents is not one of
 them (it may be empty); a helper folds only when its one ``return`` reads
 none of its parameters or returns one unchanged.
 
+The lint is frozen: it refuses the shapes above and no new shape is added
+here. Whether a KAT's answer follows the gate is a behavioral question, judged
+by running the test under swapped gates (scripts/kat_swap.py), not by listing
+spellings. Known gaps that this lint does not close and the behavioral check
+does: a gate fixture the test never receives, a patch applied from another
+file, the gate class or a module namespace reached by a route this lint does
+not read, and a test that changes the gate module on disk.
+
 Every file is read as Python reads it: a coding cookie other than UTF-8 (any
 alias of UTF-8, such as ``utf8`` or ``U8``, is UTF-8), or bytes that are not
 UTF-8, is a lint problem, never a traceback.
