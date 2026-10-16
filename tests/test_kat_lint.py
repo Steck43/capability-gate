@@ -4375,3 +4375,165 @@ def test_a_name_that_may_be_a_member_or_something_else_is_not_a_verdict(
     prelude = "from zqxwvk_fake import Other\n\nWANT = Verdict.DENY\nWANT = Other.DENY"
     body = f"d = {_CALL}\nassert d.verdict == WANT"
     _expect(tmp_path, _src(prelude, "gate", body), _ANSWER_REFUSED)
+
+
+# --- review round on #101 at df0038b: every binding form counts against the gate
+# --- name, the gate class and Verdict, not only against a result name ----------
+
+_FAKE_GATE = (
+    "class _FakeGate:\n    def evaluate(self, *a, **k):\n        return _Fake()"
+)
+_NS = "class _NS:\n    DENY = None"
+
+PROTECTED_REBINDS = {
+    "match-capture-of-verdict": (
+        _FAKE + "\n\n\n" + _NS,
+        "gate",
+        f"d = {_CALL}\nmatch _NS:\n    case Verdict:\n        pass\n"
+        "assert d.verdict is Verdict.DENY",
+    ),
+    "match-as-of-verdict": (
+        _FAKE + "\n\n\n" + _NS,
+        "gate",
+        f"d = {_CALL}\nmatch _NS:\n    case type() as Verdict:\n        pass\n"
+        "assert d.verdict is Verdict.DENY",
+    ),
+    "walrus-in-a-call-arg-of-verdict": (
+        _FAKE + "\n\n\n" + _NS,
+        "gate",
+        f"d = {_CALL}\nprint(Verdict := _NS)\nassert d.verdict is Verdict.DENY",
+    ),
+    "except-name-of-verdict": (
+        _FAKE,
+        "gate",
+        f"d = {_CALL}\ntry:\n    pass\nexcept Exception as Verdict:\n    pass\n"
+        "assert d.verdict is Verdict.DENY",
+    ),
+    "match-capture-of-gate": (
+        _FAKE + "\n\n\n" + _FAKE_GATE,
+        "gate",
+        "match _FakeGate():\n    case gate:\n        pass\n"
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY",
+    ),
+    "nonlocal-swap-of-gate": (
+        _FAKE + "\n\n\n" + _FAKE_GATE,
+        "gate",
+        "def _swap():\n    nonlocal gate\n    gate = _FakeGate()\n_swap()\n"
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY",
+    ),
+    "walrus-in-a-call-arg-of-gate": (
+        _FAKE + "\n\n\n" + _FAKE_GATE,
+        "gate",
+        f"print(gate := _FakeGate())\nd = {_CALL}\nassert d.verdict is Verdict.DENY",
+    ),
+    "for-target-of-gate": (
+        _FAKE + "\n\n\n" + _FAKE_GATE,
+        "gate",
+        f"for gate in [_FakeGate()]:\n    pass\nd = {_CALL}\nassert d.verdict is Verdict.DENY",
+    ),
+    "with-target-of-gate": (
+        _FAKE + "\n\n\n" + _FAKE_GATE,
+        "gate",
+        "with contextlib.nullcontext(_FakeGate()) as gate:\n    pass\n"
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY",
+    ),
+    "walrus-of-the-gate-class": (
+        _FAKE + "\n\n\n" + _FAKE_GATE,
+        "",
+        "print(Gate := _FakeGate)\n"
+        "g = Gate(load_policy({'skills': {}}))\n"
+        "d = g.evaluate('s', 'read_file', ['zqxwvk'])\nassert d.verdict is Verdict.DENY",
+    ),
+    "module-walrus-of-the-gate-class": (
+        _FAKE + "\n\n\n" + _FAKE_GATE + "\n\n\nprint(Gate := _FakeGate)",
+        "gate",
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY",
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(PROTECTED_REBINDS))
+def test_every_binding_form_of_the_gate_or_verdict_is_rejected(
+    tmp_path: Path, shape: str
+) -> None:
+    prelude, params, body = PROTECTED_REBINDS[shape]
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, params, body))))
+
+
+# Item 2: a verdict is compared by identity. == reads through __eq__, which any
+# route to the class can override, so it never satisfies a KAT.
+VERDICT_EQ_PATCHES = {
+    "type-of-the-verdict": "type(d.verdict).__eq__ = lambda a, b: True",
+    "class-of-the-verdict": "d.verdict.__class__.__eq__ = lambda a, b: True",
+    "mro-of-the-verdict": "type(d.verdict).mro()[0].__eq__ = lambda a, b: True",
+    "setattr-on-the-type": "setattr(type(d.verdict), '__eq__', lambda a, b: True)",
+    "alias-of-the-type": "cls = type(d.verdict)\ncls.__eq__ = lambda a, b: True",
+    "monkeypatch-the-type": (
+        "monkeypatch.setattr(type(d.verdict), '__eq__', lambda a, b: True)"
+    ),
+    "string-compare-with-patched-eq": "type(d.verdict).__eq__ = lambda a, b: True",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(VERDICT_EQ_PATCHES))
+def test_a_verdict_compared_with_eq_is_never_the_answer(
+    tmp_path: Path, shape: str
+) -> None:
+    target = "'deny'" if shape.startswith("string") else "Verdict.DENY"
+    body = f"d = {_CALL}\n{VERDICT_EQ_PATCHES[shape]}\nassert d.verdict == {target}"
+    _expect(tmp_path, _src("", "gate, monkeypatch", body), _NO_ANSWER)
+
+
+def test_a_verdict_compared_by_identity_is_the_answer(tmp_path: Path) -> None:
+    body = f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    r = _lint(_write(tmp_path, "test_k_case.py", _src("", "gate", body)))
+    assert r.returncode == 0, r.stdout
+
+
+# Item 3: a try body with a handler that can swallow a raise is not on the
+# straight path; any statement in it may raise before the assert runs.
+CAUGHT_RAISES = {
+    "conditional-raise-caught": (
+        "try:\n    if os.environ.get('ZQXWVK'):\n        raise RuntimeError('x')\n"
+        "    assert d.verdict is Verdict.DENY\nexcept RuntimeError:\n    pass"
+    ),
+    "call-that-may-raise-caught": (
+        "try:\n    os.listdir('zqxwvk')\n    assert d.verdict is Verdict.DENY\n"
+        "except OSError:\n    pass"
+    ),
+    "caught-raise-in-a-while-loop": (
+        "while True:\n    try:\n        if os.environ.get('ZQXWVK'):\n"
+        "            raise RuntimeError('x')\n        assert d.verdict is Verdict.DENY\n"
+        "    except RuntimeError:\n        pass\n    break"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(CAUGHT_RAISES))
+def test_an_assert_a_caught_raise_can_skip_is_not_the_answer(
+    tmp_path: Path, shape: str
+) -> None:
+    body = f"d = {_CALL}\n{CAUGHT_RAISES[shape]}"
+    _expect(tmp_path, _src("", "gate", body), _NO_ANSWER)
+
+
+CAUGHT_RAISES_CLEAN = {
+    "try-finally": "try:\n    assert d.verdict is Verdict.DENY\nfinally:\n    pass",
+    "handler-that-raises-again": (
+        "try:\n    os.listdir('.')\n    assert d.verdict is Verdict.DENY\n"
+        "except OSError:\n    raise"
+    ),
+    "assert-after-the-try": (
+        "try:\n    os.listdir('zqxwvk')\nexcept OSError:\n    pass\n"
+        "assert d.verdict is Verdict.DENY"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(CAUGHT_RAISES_CLEAN))
+def test_an_assert_no_handler_can_skip_stays_the_answer(
+    tmp_path: Path, shape: str
+) -> None:
+    body = f"d = {_CALL}\n{CAUGHT_RAISES_CLEAN[shape]}"
+    r = _lint(_write(tmp_path, "test_k_case.py", _src("", "gate", body)))
+    assert r.returncode == 0, r.stdout
