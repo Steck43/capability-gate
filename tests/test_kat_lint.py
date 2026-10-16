@@ -247,7 +247,7 @@ import sys
 
 import pytest
 
-from capability_gate import Gate, load_policy
+from capability_gate import Gate, Verdict, load_policy
 
 
 @pytest.fixture()
@@ -399,7 +399,7 @@ def test_platform_conditional_skip_with_gate_call_is_accepted(tmp_path: Path) ->
 def test_k_pl(gate):
     if sys.platform == "win32":
         pytest.skip("no symlinks without privilege")
-    assert gate.evaluate("s", "read_file", ["x"]).verdict == "deny"
+    assert gate.evaluate("s", "read_file", ["x"]).verdict is Verdict.DENY
 """
     r = _lint(_write(tmp_path, "test_k_platform.py", GATE_HEADER + body))
     assert r.returncode == 0, r.stdout
@@ -2680,7 +2680,6 @@ HOLE_CLEAN = {
     ),
     "vars_of_another_object": _first("vars(tmp_path)", params="gate, tmp_path"),
     # evaluate can return ASK, so naming two verdicts still tells ASK apart.
-    "assert_equal_to_constant": _plain("assert d.verdict == Verdict.DENY"),
     "try_that_reraises": _plain(
         "try:\n    assert d.verdict is Verdict.DENY\nexcept AssertionError:\n    raise"
     ),
@@ -3762,9 +3761,7 @@ _NO_ANSWER = "never asserts on the gate's result in the accepted form"
 
 ANSWER_ACCEPTED = {
     "is_member": "assert d.verdict is Verdict.DENY",
-    "eq_member": "assert d.verdict == Verdict.DENY",
     "member_first": "assert Verdict.DENY is d.verdict",
-    "eq_string": "assert d.verdict == 'deny'",
     "inline_call": "assert gate.evaluate('s', 'read_file', ['x']).verdict is Verdict.DENY",
     "verdict_name": "v = d.verdict\nassert v is Verdict.DENY",
     "named_reason_substring": "assert 'not' in d.reason",
@@ -4537,3 +4534,52 @@ def test_an_assert_no_handler_can_skip_stays_the_answer(
     body = f"d = {_CALL}\n{CAUGHT_RAISES_CLEAN[shape]}"
     r = _lint(_write(tmp_path, "test_k_case.py", _src("", "gate", body)))
     assert r.returncode == 0, r.stdout
+
+
+# Accepted before this round; a verdict is now compared by identity only.
+VERDICT_EQ_REFUSED = {
+    "eq_member": "assert d.verdict == Verdict.DENY",
+    "eq_string": "assert d.verdict == 'deny'",
+    "assert_equal_to_constant": "assert Verdict.DENY == d.verdict",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(VERDICT_EQ_REFUSED))
+def test_a_verdict_compared_with_eq_is_refused(tmp_path: Path, shape: str) -> None:
+    _assert_refused(
+        _lint(
+            _write(
+                tmp_path,
+                "test_k_case.py",
+                _kat_without_answer(VERDICT_EQ_REFUSED[shape]),
+            )
+        )
+    )
+
+
+def test_a_mapping_rest_capture_of_verdict_is_rejected(tmp_path: Path) -> None:
+    body = (
+        f"d = {_CALL}\nmatch {{}}:\n    case {{**Verdict}}:\n        pass\n"
+        "assert d.verdict is Verdict.DENY"
+    )
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(_FAKE, "gate", body))))
+
+
+def test_a_module_globals_store_of_the_gate_class_is_rejected(tmp_path: Path) -> None:
+    prelude = _FAKE + "\n\n\n" + _FAKE_GATE + "\n\n\nglobals()['Gate'] = _FakeGate"
+    body = f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, "gate", body))))
+
+
+def test_a_verdict_compared_by_identity_with_a_string_is_refused(
+    tmp_path: Path,
+) -> None:
+    _assert_refused(
+        _lint(
+            _write(
+                tmp_path,
+                "test_k_case.py",
+                _kat_without_answer("assert d.verdict is 'deny'"),
+            )
+        )
+    )

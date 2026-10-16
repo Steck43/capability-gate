@@ -145,25 +145,31 @@ comprehension over one, in a generator expression nothing consumes, or inside
 ``pytest.raises``, ``contextlib.suppress`` or ``assertRaises``.
 
 Every KAT that reaches the gate must also assert on the gate's answer, and
-only one form counts (an allowlist, not a list of refused shapes): a single
-``==`` or ``is`` (never ``!=`` or ``is not``, which pass on every other answer)
-between either
+only one form counts (an allowlist, not a list of refused shapes), never
+``!=`` or ``is not``, which pass on every other answer:
 
-- a verdict: ``.verdict`` read from a gate call or from a name that only ever
-  holds a gate result, or a name that only ever holds such a verdict; and a
-  ``Verdict`` member or a verdict string (``"allow"``, ``"deny"``, ``"ask"``);
-- or a gate call's own answer: the call, a name that only ever holds it, or
-  its ``returncode`` (the hook script run as a process); and a literal
-  (``None``, a bool, a number or a string).
+- a verdict compared by identity: a single ``is`` between ``.verdict`` read
+  from a gate call or from a name that only ever holds a gate result (or a
+  name that only ever holds such a verdict) and a ``Verdict`` member. ``==``
+  reads through ``__eq__``, which any route to the class (``type(d.verdict)``,
+  ``__class__``, ``mro()``, an alias) can override, so a verdict compared
+  with ``==``, or with a verdict string, never counts; a member of the real
+  Enum cannot be reassigned, so identity holds;
+- or a gate call's own answer: a single ``==`` or ``is`` between the call, a
+  name that only ever holds it, or its ``returncode`` (the hook script run as
+  a process), and a literal (``None``, a bool, a number or a string).
 
 The answer is the gate call's own return. A call to a same-file helper, or a
 fixture the test takes, counts only when every ``return`` or ``yield`` in it is
 the gate call, a name that only ever holds a gate result, or another such
 helper; one that reaches the gate and returns anything else does not. A
-``Verdict`` member counts only when it resolves to the real
-``capability_gate.Verdict`` and nothing in the file rebinds ``Verdict`` (a
-class, an assignment, a ``globals()`` store, an import from elsewhere), stores
-on it or one of its members (``__eq__`` included), or changes ``sys.modules``.
+``Verdict`` member counts only when every resolution of it is the real
+``capability_gate.Verdict`` (any other binding of the name, in any form below,
+adds another resolution), nothing stores into ``globals()`` under that name or
+a key the lint cannot fold, nothing changes ``sys.modules``, and nothing
+patches it (a store on ``Verdict`` is a gate patch). The gate fixture a test
+takes, the gate class and ``Verdict`` are judged by the same binding walk as a
+result name.
 
 A name only ever holds a result when every store to it in the test is that
 binding; any other store anywhere in the test (a plain assignment, an
@@ -173,10 +179,12 @@ through ``globals()`` (under a key the lint cannot fold it takes every name
 out), a ``global`` or ``nonlocal`` declaration, a ``nonlocal`` store in a
 nested function, a delete) takes it out, and so does any store into it (an
 attribute, ``setattr`` or ``object.__setattr__``, its ``__dict__`` or
-``vars()`` written or updated). A ``raise`` caught inside a ``try`` body does
-not end the path. The assert must sit on the test's straight path: the body,
-the chosen branch of a constant ``if``, a ``try`` or ``with`` body, a
-``finally``, and the body of a ``for`` over a non-empty constant, before any
+``vars()`` written or updated). The assert must sit on the test's straight
+path: the body, the chosen branch of a constant ``if``, a ``with`` body, a
+``try`` body (of a ``try`` with a handler that may finish without raising
+again, only its first statement, since any later statement may follow a
+caught raise), a ``finally``, and the body of a ``for`` over a non-empty
+constant, before any
 statement that always leaves (a call to ``pytest.xfail``, ``skip``, ``fail``
 or ``exit`` leaves) and before any statement that may leave: one that may
 ``return``, or end the test in an imperative ``skip`` or ``xfail``, on some
@@ -627,14 +635,21 @@ def _target_pairs(target: ast.expr, value: ast.expr | None):
         yield from _target_pairs(target.value, None)
 
 
-def _bindings(scope: ast.AST) -> dict[str, list[ast.expr | None]]:
-    """Every binding in scope: name -> value expr, or None for an opaque one."""
+def _bindings(scope: ast.AST, args: bool = True) -> dict[str, list[ast.expr | None]]:
+    """Every binding in scope, in every form Python has: name -> value expr, or
+    None for an opaque one. A nonlocal store in a nested function rebinds the
+    scope's name. With args False, parameters are left out, so what is left is
+    every rebinding of them."""
     out: dict[str, list[ast.expr | None]] = {}
 
     def add(name: str, value: ast.expr | None) -> None:
         out.setdefault(name, []).append(value)
 
-    if isinstance(scope, (*_FUNCS, ast.Lambda)):
+    for n in ast.walk(scope):
+        if isinstance(n, ast.Nonlocal) and n is not scope:
+            for name in n.names:
+                add(name, None)
+    if args and isinstance(scope, (*_FUNCS, ast.Lambda)):
         a = scope.args
         for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg):
             if arg is not None:
@@ -1306,6 +1321,22 @@ class Names:
                 self._add(n.target.id, ("value", n.value))
             elif isinstance(n, (*_FUNCS, ast.ClassDef)):
                 self._add(n.name, ("local", n.name))
+            elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
+                self._add(n.name, ("other", None))
+            elif isinstance(n, ast.MatchMapping) and n.rest:
+                self._add(n.rest, ("other", None))
+            elif isinstance(n, ast.ExceptHandler) and n.name:
+                self._add(n.name, ("other", None))
+            elif (
+                isinstance(n, ast.Subscript)
+                and isinstance(n.ctx, (ast.Store, ast.Del))
+                and isinstance(n.value, ast.Call)
+                and isinstance(n.value.func, ast.Name)
+                and n.value.func.id in ("globals", "vars", "locals")
+                and isinstance(n.slice, ast.Constant)
+                and isinstance(n.slice.value, str)
+            ):
+                self._add(n.slice.value, ("other", None))
             elif isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
                 p = folder.parents.get(n)
                 while isinstance(p, (ast.Tuple, ast.List, ast.Starred)):
@@ -2468,7 +2499,15 @@ class _File:
                 elif truth == "false":
                     inner = s.orelse
             elif isinstance(s, ast.Try) or type(s).__name__ == "TryStar":
-                inner = s.body
+                # Any statement in the body may raise; a handler that can
+                # swallow it skips the rest of the body, asserts included.
+                # Only the first statement runs before anything in the body
+                # can raise; an accepted assert itself raises nothing but its
+                # own failure.
+                if any(self.swallows(h) for h in s.handlers):
+                    inner = s.body[:1]
+                else:
+                    inner = s.body
             elif isinstance(s, (ast.With, ast.AsyncWith)):
                 if not any(self.expected_exception(i) for i in s.items):
                     inner = s.body
@@ -2538,6 +2577,11 @@ class _File:
             and isinstance(s.value, ast.Call)
             and bool(self.names.resolve(s.value.func) & _MAY_PASS)
         )
+
+    @staticmethod
+    def swallows(handler: ast.ExceptHandler) -> bool:
+        """A handler that may finish without raising again."""
+        return not any(isinstance(x, ast.Raise) for x in handler.body)
 
     def ends_the_test(self, s: ast.stmt) -> bool:
         """A call to pytest.xfail, skip, fail or exit: nothing after it runs."""
@@ -2721,6 +2765,9 @@ class _File:
             and self.verdict_is_real()
         )
 
+    def verdict_member(self, node: ast.AST) -> bool:
+        return not isinstance(node, ast.Constant) and self.verdict_token(node)
+
     def verdict_is_real(self) -> bool:
         """Nothing in the file rebinds Verdict, stores on Verdict or a member
         (an overridden __eq__ included), or changes sys.modules, so a Verdict
@@ -2821,7 +2868,10 @@ class _File:
     def core_answer(
         self, test: ast.AST, direct: set[str], verdicts: set[str], typed: set[str]
     ) -> bool:
-        """One == or is between a verdict and a Verdict member or string."""
+        """One is between a verdict and a Verdict member, or one == or is
+        between a gate call's own answer and a literal. A verdict compared with
+        == reads through __eq__, which any route to the class can override; a
+        member of the real Enum cannot be reassigned, so identity holds."""
         if not (
             isinstance(test, ast.Compare)
             and len(test.ops) == 1
@@ -2829,9 +2879,14 @@ class _File:
         ):
             return False
         a, b = test.left, test.comparators[0]
-        if (
-            self.verdict_value(a, direct, verdicts, typed) and self.verdict_token(b)
-        ) or (self.verdict_value(b, direct, verdicts, typed) and self.verdict_token(a)):
+        member = isinstance(test.ops[0], ast.Is)
+        if member and (
+            (self.verdict_value(a, direct, verdicts, typed) and self.verdict_member(b))
+            or (
+                self.verdict_value(b, direct, verdicts, typed)
+                and self.verdict_member(a)
+            )
+        ):
             return True
         return (self.call_answer(a, direct, typed) and _plain_literal(b)) or (
             self.call_answer(b, direct, typed) and _plain_literal(a)
@@ -3733,24 +3788,32 @@ def _rebound_gate(f: _File, fn) -> ast.AST | None:
     if not params:
         return None
     typed = f.typed_names(fn, params)
-    for n in _scope_nodes(fn):
-        if not (
-            isinstance(n, ast.Name)
-            and n.id in params
-            and isinstance(n.ctx, (ast.Store, ast.Del))
-        ):
-            continue
-        p = f.parents.get(n)
-        value = None
-        if isinstance(p, (ast.Assign, ast.AnnAssign)) and any(
-            t is n for t in (p.targets if isinstance(p, ast.Assign) else [p.target])
-        ):
-            value = p.value
-        elif isinstance(p, ast.NamedExpr) and p.target is n:
-            value = p.value
-        if value is None or not f.makes_gate(value, typed):
-            return n
+    # A globals() store binds a module name, never the test's own parameter.
+    rebinds = _bindings(fn, args=False)
+    for name in sorted(params):
+        if any(v is None or not f.makes_gate(v, typed) for v in rebinds.get(name, [])):
+            site = _binding_site(fn, name)
+            return ast.Name(
+                id=name, ctx=ast.Store(), lineno=getattr(site, "lineno", fn.lineno)
+            )
     return None
+
+
+def _binding_site(fn, name: str) -> ast.AST:
+    """The first node in fn that binds name, for the report's line."""
+    for n in ast.walk(fn):
+        if (
+            (
+                isinstance(n, ast.Name)
+                and n.id == name
+                and not isinstance(n.ctx, ast.Load)
+            )
+            or (isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name == name)
+            or (isinstance(n, (ast.Global, ast.Nonlocal)) and name in n.names)
+            or (isinstance(n, ast.ExceptHandler) and n.name == name)
+        ):
+            return n
+    return fn
 
 
 def lint_source(src: str, label: str, shadowed: bool = False) -> list[str]:
