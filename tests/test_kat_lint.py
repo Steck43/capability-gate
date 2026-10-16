@@ -4627,7 +4627,7 @@ def test_a_verdict_compared_by_identity_with_a_string_is_refused(
 
 # Item 2: a name bound from the gate's class is the gate class; a store through
 # it patches the gate.
-GATE_CLASS_ALIASES = {
+GATE_CLASS_ALIASES_BY_NAME = {
     "type-of-gate": "k = type(gate)\nk.evaluate = lambda *a, **kw: _Fake()",
     "class-of-gate": "k = gate.__class__\nk.evaluate = lambda *a, **kw: _Fake()",
     "walrus-class-of-gate": "(k := gate.__class__).evaluate = lambda *a, **kw: _Fake()",
@@ -4652,11 +4652,11 @@ def test_a_gate_class_alias_whose_name_is_reused_elsewhere_still_patches(
     _expect(tmp_path, _src(prelude, "gate", body), "patches the gate")
 
 
-@pytest.mark.parametrize("shape", sorted(GATE_CLASS_ALIASES))
+@pytest.mark.parametrize("shape", sorted(GATE_CLASS_ALIASES_BY_NAME))
 def test_a_store_through_a_gate_class_alias_patches_the_gate(
     tmp_path: Path, shape: str
 ) -> None:
-    body = f"{GATE_CLASS_ALIASES[shape]}\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
+    body = f"{GATE_CLASS_ALIASES_BY_NAME[shape]}\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
     _expect(tmp_path, _src(_FAKE, "gate", body), "patches the gate")
 
 
@@ -4780,3 +4780,71 @@ def test_an_assert_in_the_else_of_a_swallowing_try_does_not_count(
         "else:\n    assert d.verdict is Verdict.DENY"
     )
     _expect(tmp_path, _src("", "gate", body), _NO_ANSWER)
+
+
+# Each form below is caught by one rule only: a positional namespace update, a
+# setattr under a key the lint cannot fold on this module's object, and a
+# subscript store through a name bound to globals().
+VERDICT_REBINDS_ONE_RULE = {
+    "positional-update": "globals().update({'Verdict': _NS})",
+    "unfolded-key-through-sys-modules": (
+        "setattr(sys.modules[__name__], os.environ.get('ZQXWVK', 'Verdict'), _NS)"
+    ),
+    "unfolded-key-through-get": (
+        "setattr(sys.modules.get(__name__), os.environ.get('ZQXWVK', 'Verdict'), _NS)"
+    ),
+    "unfolded-key-through-an-alias": (
+        "me = sys.modules[__name__]\n"
+        "setattr(me, os.environ.get('ZQXWVK', 'Verdict'), _NS)"
+    ),
+    "subscript-through-an-alias": "g = globals()\ng['Verdict'] = _NS",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(VERDICT_REBINDS_ONE_RULE))
+def test_verdict_rebound_through_a_namespace_in_any_form_is_not_real(
+    tmp_path: Path, shape: str
+) -> None:
+    body = f"d = {_CALL}\n{VERDICT_REBINDS_ONE_RULE[shape]}\nassert d.verdict is Verdict.DENY"
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(_NS, "gate", body))))
+
+
+def test_the_gate_class_given_by_a_namespace_update_is_not_the_real_class(
+    tmp_path: Path,
+) -> None:
+    prelude = _FAKE + "\n\n\n" + _FAKE_GATE + "\n\n\nglobals().update(Gate=_FakeGate)"
+    body = f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, "gate", body))))
+
+
+# A compound first statement in a swallowing try, in the three shapes review
+# ran against the real gate: the gate denies, the raise is swallowed, and the
+# assert on the wrong verdict never runs.
+_GATE_HERE = (
+    "g = Gate(load_policy({'skills': {'w': {'tools': ['read_file'], "
+    "'paths': [str(tmp_path / 'work')]}}}), str(tmp_path / 'l'))\n"
+    "d = g.evaluate('w', 'read_file', [str(tmp_path / 'zqxwvk')])\n"
+)
+FIRST_STATEMENT_BLOCKS = {
+    "nested-try-finally": (
+        "try:\n    try:\n        if d:\n            raise KeyError\n"
+        "        assert d.verdict is Verdict.ALLOW\n    finally:\n        pass\n"
+        "except KeyError:\n    pass"
+    ),
+    "with-open": (
+        "try:\n    with open(os.devnull):\n        if d:\n            raise KeyError\n"
+        "        assert d.verdict is Verdict.ALLOW\nexcept KeyError:\n    pass"
+    ),
+    "if-true": (
+        "try:\n    if True:\n        if d:\n            raise KeyError\n"
+        "        assert d.verdict is Verdict.ALLOW\nexcept KeyError:\n    pass"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(FIRST_STATEMENT_BLOCKS))
+def test_an_unconditional_caught_raise_in_a_first_statement_block_is_refused(
+    tmp_path: Path, shape: str
+) -> None:
+    body = _GATE_HERE + FIRST_STATEMENT_BLOCKS[shape]
+    _expect(tmp_path, _src("", "tmp_path", body), _NO_ANSWER)

@@ -181,10 +181,14 @@ nested function, a delete) takes it out, and so does any store into it (an
 attribute, ``setattr`` or ``object.__setattr__``, its ``__dict__`` or
 ``vars()`` written or updated). The assert must sit on the test's straight
 path: the body, the chosen branch of a constant ``if``, a ``with`` body, a
-``try`` body (of a ``try`` with a handler that may finish without raising
-again, only its first statement, since any later statement may follow a
-caught raise), a ``finally``, and the body of a ``for`` over a non-empty
-constant, before any
+``try`` body and its ``else`` (of a ``try`` with a handler that may finish
+without raising again, only the body's first statement, and only when it is
+a simple statement, since anything after it, or inside a compound one, may
+follow a caught raise, and an assert there must have no message or a
+constant one, since a failing assert evaluates its message; of a ``try``
+whose ``finally`` may return, break or continue, nothing, since the jump
+discards the assert's failure), a ``finally``, and the body of a ``for`` over
+a non-empty constant, before any
 statement that always leaves (a call to ``pytest.xfail``, ``skip``, ``fail``
 or ``exit`` leaves) and before any statement that may leave: one that may
 ``return``, or end the test in an imperative ``skip`` or ``xfail``, on some
@@ -2172,6 +2176,8 @@ class _File:
         instance was built from, read through ``__mro__[i]``, ``.mro()[i]`` and
         through a name every binding of which is such a class."""
         expr = self.attr_view(expr)
+        if isinstance(expr, ast.NamedExpr):
+            return self.gate_type(expr.value, typed, depth + 1)
         if depth > 10:
             return False
         if isinstance(expr, ast.Subscript):
@@ -2204,6 +2210,18 @@ class _File:
                 for kind, v in vals
             ):
                 return True
+            # Inside a function, the name is what that function binds it to,
+            # whatever the same name means elsewhere in the file.
+            scope = self.scope_of(expr)
+            if scope is not None:
+                local = _bindings(scope, args=False).get(expr.id, [])
+                if local and all(
+                    v is not None
+                    and v is not expr
+                    and self.gate_type(v, typed, depth + 1)
+                    for v in local
+                ):
+                    return True
         if isinstance(expr, ast.Call) and self._returns_type_of(expr, typed):
             return True
         if isinstance(expr, ast.Attribute) and expr.attr == "__class__":
@@ -2214,6 +2232,13 @@ class _File:
             and len(expr.args) == 1
             and self.gate_target(expr.args[0], typed)
         )
+
+    def scope_of(self, node: ast.AST):
+        """The function node sits in, or None at module level."""
+        p = self.parents.get(node)
+        while p is not None and not isinstance(p, _FUNCS):
+            p = self.parents.get(p)
+        return p
 
     def _returns_type_of(self, call: ast.Call, typed: set[str]) -> bool:
         """A same-file helper whose one return is type(p) or p.__class__ of a
@@ -2504,10 +2529,17 @@ class _File:
                 # Only the first statement runs before anything in the body
                 # can raise; an accepted assert itself raises nothing but its
                 # own failure.
-                if any(self.swallows(h) for h in s.handlers):
-                    inner = s.body[:1]
+                # A compound first statement may raise inside before its
+                # assert runs, so the path enters only a simple one. A finally
+                # that may return, break or continue discards whatever the
+                # body raised, the assert's failure included. With no handler
+                # that can swallow, the else runs whenever the test goes on.
+                if self.finally_may_jump(s.finalbody):
+                    inner = None
+                elif any(self.swallows(h) for h in s.handlers):
+                    inner = s.body[:1] if not isinstance(s.body[0], _COMPOUND) else []
                 else:
-                    inner = s.body
+                    inner = [*s.body, *s.orelse]
             elif isinstance(s, (ast.With, ast.AsyncWith)):
                 if not any(self.expected_exception(i) for i in s.items):
                     inner = s.body
@@ -2577,6 +2609,36 @@ class _File:
             and isinstance(s.value, ast.Call)
             and bool(self.names.resolve(s.value.func) & _MAY_PASS)
         )
+
+    @staticmethod
+    def finally_may_jump(final: list[ast.stmt]) -> bool:
+        """A return anywhere in a finally, or a break or continue there that
+        leaves the try's own loop (not one inside a loop of the finally)."""
+        stack = [(x, 0) for x in final]
+        while stack:
+            n, loops = stack.pop()
+            if isinstance(n, _SCOPES):
+                continue
+            if isinstance(n, ast.Return):
+                return True
+            if isinstance(n, (ast.Break, ast.Continue)) and loops == 0:
+                return True
+            inner = loops + isinstance(n, (ast.For, ast.AsyncFor, ast.While))
+            stack.extend((c, inner) for c in ast.iter_child_nodes(n))
+        return False
+
+    def in_swallowing_try(self, node: ast.AST, fn: ast.AST) -> bool:
+        child = node
+        while child in self.parents and child is not fn:
+            p = self.parents[child]
+            if (
+                (isinstance(p, ast.Try) or type(p).__name__ == "TryStar")
+                and child in p.body
+                and any(self.swallows(h) for h in p.handlers)
+            ):
+                return True
+            child = p
+        return False
 
     @staticmethod
     def swallows(handler: ast.ExceptHandler) -> bool:
@@ -2777,16 +2839,37 @@ class _File:
         return self._verdict_real
 
     def _verdict_tampered(self) -> bool:
-        """A rebinding of Verdict or a store on it reads as another resolution or
-        as a gate patch; what is left is a globals() store and sys.modules."""
+        """A rebinding of Verdict by name, or a store on it, reads as another
+        resolution or as a gate patch. What is left: a store that rebinds the
+        name Verdict through an object (this module through sys.modules, any
+        attribute named Verdict, a __dict__, vars(), globals() or locals(),
+        directly or through a name bound to one, by subscript, setattr,
+        update, setdefault or |=), and sys.modules itself."""
         for n in ast.walk(self.tree):
             targets: list[ast.AST] = []
             if isinstance(n, (ast.Assign, ast.Delete)):
                 targets = list(n.targets)
             elif isinstance(n, (ast.AugAssign, ast.AnnAssign)):
                 targets = [n.target]
+            if isinstance(n, ast.AugAssign) and (
+                self._namespace_obj(n.target)
+                or (
+                    isinstance(n.target, ast.Name)
+                    and any(
+                        kind == "value" and self._namespace_obj(v)
+                        for kind, v in self.names.binds.get(n.target.id, [])
+                    )
+                )
+            ):
+                return True
             for t in targets:
                 for x in ast.walk(t):
+                    if (
+                        isinstance(x, ast.Attribute)
+                        and isinstance(x.ctx, (ast.Store, ast.Del))
+                        and x.attr == "Verdict"
+                    ):
+                        return True
                     if isinstance(x, ast.Subscript) and isinstance(
                         x.ctx, (ast.Store, ast.Del)
                     ):
@@ -2800,7 +2883,22 @@ class _File:
                     isinstance(f, ast.Attribute)
                     and f.attr in ("setattr", "delattr", "__setattr__", "__delattr__")
                 )
-                if setter and first is not None and self._sys_modules(first):
+                if setter and first is not None:
+                    if self._sys_modules(first):
+                        return True
+                    if len(n.args) > 1:
+                        kind, key = self.fold.fold(n.args[1], self.fold.at(n))
+                        if key == "Verdict" or (
+                            not (kind == "value" and isinstance(key, str))
+                            and self._namespace_holder(first)
+                        ):
+                            return True
+                if (
+                    isinstance(f, ast.Attribute)
+                    and f.attr
+                    in ("update", "setdefault", "__setitem__", "__ior__", "__or__")
+                    and self._namespace_obj(f.value)
+                ):
                     return True
                 if isinstance(f, ast.Attribute):
                     if f.attr in ("setitem", "delitem") and first is not None:
@@ -2821,15 +2919,61 @@ class _File:
     def _sys_modules(self, node: ast.AST) -> bool:
         return "sys.modules" in self.names.resolve(node)
 
+    def _module_obj(self, node: ast.AST, depth: int = 0) -> bool:
+        """A module object reached through sys.modules (by subscript or get),
+        importlib.import_module or __import__, or a name bound only to one."""
+        if depth > 10:
+            return False
+        if isinstance(node, ast.Subscript) and self._sys_modules(node.value):
+            return True
+        if isinstance(node, ast.Call):
+            f = node.func
+            if (
+                isinstance(f, ast.Attribute)
+                and f.attr == "get"
+                and self._sys_modules(f.value)
+            ):
+                return True
+            if self.names.resolve(f) & {
+                "importlib.import_module",
+                "builtins.__import__",
+            }:
+                return True
+        if isinstance(node, ast.Name):
+            vals = self.names.binds.get(node.id, [])
+            return bool(vals) and all(
+                kind == "value" and self._module_obj(v, depth + 1) for kind, v in vals
+            )
+        return False
+
+    def _namespace_obj(self, node: ast.AST, depth: int = 0) -> bool:
+        """A mapping that holds module names: globals(), vars() with no
+        argument, locals(), any __dict__ or vars(x), or a name bound only to
+        one."""
+        if depth > 10:
+            return False
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in ("globals", "locals") or node.func.id == "vars":
+                return True
+        if isinstance(node, ast.Attribute) and node.attr == "__dict__":
+            return True
+        if isinstance(node, ast.Name):
+            vals = self.names.binds.get(node.id, [])
+            return bool(vals) and all(
+                kind == "value" and self._namespace_obj(v, depth + 1)
+                for kind, v in vals
+            )
+        return False
+
+    def _namespace_holder(self, node: ast.AST) -> bool:
+        """An object whose attributes are module names: this module or one
+        reached through sys.modules."""
+        return self._module_obj(node)
+
     def _namespace_key(self, sub: ast.Subscript) -> bool:
         """A globals(), vars() or locals() store under the key Verdict, or a
         key the lint cannot fold."""
-        v = sub.value
-        if not (
-            isinstance(v, ast.Call)
-            and isinstance(v.func, ast.Name)
-            and v.func.id in ("globals", "vars", "locals")
-        ):
+        if not self._namespace_obj(sub.value):
             return False
         kind, key = self.fold.fold(sub.slice, self.fold.at(sub))
         return not (kind == "value" and isinstance(key, str)) or key == "Verdict"
@@ -2951,10 +3095,17 @@ class _File:
             ):
                 refused.append(n)
         path, _left = self.straight_path(fn.body)
+        # A failing assert evaluates its message, which can raise the error a
+        # swallowing handler catches.
         accepted = any(
             isinstance(s, ast.Assert)
             and self.core_answer(s.test, direct, verdicts, typed)
             and not self.swallowed(s, fn)
+            and not (
+                s.msg is not None
+                and not isinstance(s.msg, ast.Constant)
+                and self.in_swallowing_try(s, fn)
+            )
             for s in path
         )
         return accepted, refused
@@ -3488,6 +3639,18 @@ def _plain_literal(node: ast.AST) -> bool:
 # Imperative outcomes: a test that calls one stops there.
 _ENDS_THE_TEST = frozenset(
     {"pytest.xfail", "pytest.skip", "pytest.fail", "pytest.exit"}
+)
+# Statements with a body of their own.
+_COMPOUND = (
+    ast.If,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.With,
+    ast.AsyncWith,
+    ast.Try,
+    ast.Match,
+    *((ast.TryStar,) if hasattr(ast, "TryStar") else ()),
 )
 # The imperative outcomes that end a test without failing it.
 _MAY_PASS = frozenset({"pytest.xfail", "pytest.skip"})
@@ -4042,14 +4205,15 @@ def lint_source(src: str, label: str, shadowed: bool = False) -> list[str]:
                 problems,
                 label,
                 a.lineno,
-                "not an accepted assert on the gate's answer: use one == or is between"
-                " the result's verdict and a Verdict member or verdict string",
+                "not an accepted assert on the gate's answer: write"
+                " `<result>.verdict is Verdict.X`, or compare a gate call's own"
+                " answer with a literal",
             )
         if not accepted:
             problems.append(
                 f"{where}: never asserts on the gate's result in the accepted form"
-                " (one == or is between its verdict and a Verdict member or verdict"
-                " string, on the test's straight path)"
+                " (`<result>.verdict is Verdict.X`, or a gate call's own answer"
+                " compared with a literal, on the test's straight path)"
             )
     problems += [p for p in lint_hatches(src, label, f) if p not in problems]
     return problems
