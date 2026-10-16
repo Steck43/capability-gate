@@ -4019,3 +4019,346 @@ def test_a_result_fixture_left_alone_is_an_answer(tmp_path: Path) -> None:
     src = _FIXTURE_RESULT + "    assert decision.verdict is Verdict.DENY\n"
     r = _lint(_write(tmp_path, "test_k_case.py", src))
     assert r.returncode == 0, r.stdout
+
+
+# --- review round on #101 at 2966616. Each case lints green at 2966616 and, under
+# --- pytest against the real gate, passes while the gate's answer is not the one
+# --- asserted. Every one must be rejected.
+
+_FAKE = "class _Fake:\n    verdict = Verdict.DENY"
+_CALL = "gate.evaluate('s', 'read_file', ['zqxwvk'])"
+
+
+def _src(prelude: str, params: str, body: str, deco: str = "") -> str:
+    """KAT_HEAD, a prelude, and one test with the given body."""
+    lines = "".join(f"    {x}\n" for x in body.splitlines())
+    return (
+        KAT_HEAD
+        + prelude
+        + "\n\n\n"
+        + (deco + "\n" if deco else "")
+        + f"def test_k_case({params}):\n"
+        + lines
+    )
+
+
+def _fixture(body: str) -> str:
+    return (
+        _FAKE
+        + "\n\n\n@pytest.fixture()\ndef decision(gate):\n"
+        + "".join(f"    {x}\n" for x in body.splitlines())
+    )
+
+
+def _rejected(r) -> None:
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+
+
+# Item 1: a helper's or fixture's return counts only if it is the gate call or a
+# name that only ever holds a gate result.
+PROVENANCE_REJECTED = {
+    "helper-returns-something-else": _src(
+        _FAKE + f"\n\n\ndef _attempt(gate):\n    {_CALL}\n    return _Fake()",
+        "gate",
+        "assert _attempt(gate).verdict is Verdict.DENY",
+    ),
+    "helper-result-bound-to-a-name": _src(
+        _FAKE + f"\n\n\ndef _attempt(gate):\n    {_CALL}\n    return _Fake()",
+        "gate",
+        "d = _attempt(gate)\nassert d.verdict is Verdict.DENY",
+    ),
+    "helper-returns-a-copy": _src(
+        "import dataclasses\n\n\ndef _attempt(gate):\n"
+        f"    r = {_CALL}\n"
+        "    return dataclasses.replace(r, verdict=Verdict.DENY)",
+        "gate",
+        "assert _attempt(gate).verdict is Verdict.DENY",
+    ),
+    "helper-returns-result-or-something-else": _src(
+        _FAKE + f"\n\n\ndef _attempt(gate):\n    r = {_CALL}\n"
+        "    return r if r.verdict is Verdict.DENY else _Fake()",
+        "gate",
+        "assert _attempt(gate).verdict is Verdict.DENY",
+    ),
+    "helper-with-one-other-return": _src(
+        _FAKE + "\n\n\ndef _attempt(gate):\n    if os.environ.get('ZQXWVK'):\n"
+        f"        return _Fake()\n    return {_CALL}",
+        "gate",
+        "assert _attempt(gate).verdict is Verdict.DENY",
+    ),
+    "fixture-returns-something-else": _src(
+        _fixture(f"{_CALL}\nreturn _Fake()"),
+        "decision",
+        "assert decision.verdict is Verdict.DENY",
+    ),
+    "fixture-yields-something-else": _src(
+        _fixture(f"{_CALL}\nyield _Fake()"),
+        "decision",
+        "assert decision.verdict is Verdict.DENY",
+    ),
+}
+PROVENANCE_CLEAN = {
+    "helper-returns-the-gate-call": _src(
+        f"def _attempt(gate):\n    return {_CALL}",
+        "gate",
+        "assert _attempt(gate).verdict is Verdict.DENY",
+    ),
+    "helper-returns-a-result-name": _src(
+        f"def _attempt(gate):\n    r = {_CALL}\n    return r",
+        "gate",
+        "assert _attempt(gate).verdict is Verdict.DENY",
+    ),
+    "helper-returns-an-answering-helper": _src(
+        "def _attempt(gate):\n    return _inner(gate)\n\n\n"
+        f"def _inner(gate):\n    return {_CALL}",
+        "gate",
+        "d = _attempt(gate)\nassert d.verdict is Verdict.DENY",
+    ),
+    "fixture-yields-the-gate-call": _src(
+        f"@pytest.fixture()\ndef decision(gate):\n    yield {_CALL}",
+        "decision",
+        "assert decision.verdict is Verdict.DENY",
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(PROVENANCE_REJECTED))
+def test_a_return_that_is_not_the_gate_call_is_not_the_answer(
+    tmp_path: Path, shape: str
+) -> None:
+    _assert_refused(
+        _lint(_write(tmp_path, "test_k_case.py", PROVENANCE_REJECTED[shape]))
+    )
+
+
+@pytest.mark.parametrize("shape", sorted(PROVENANCE_CLEAN))
+def test_a_return_that_is_the_gate_call_is_the_answer(
+    tmp_path: Path, shape: str
+) -> None:
+    r = _lint(_write(tmp_path, "test_k_case.py", PROVENANCE_CLEAN[shape]))
+    assert r.returncode == 0, r.stdout
+
+
+# Item 2: every binding form Python has takes a name out of "only ever holds a
+# result". Item 5: so does any store into a result.
+REBIND_BODIES = {
+    "match-capture": "match 0:\n    case d:\n        pass",
+    "match-as": "match 0:\n    case int() as d:\n        pass",
+    "match-star": "match [0]:\n    case [*d]:\n        pass",
+    "match-mapping-rest": "match {}:\n    case {**d}:\n        pass",
+    "class-rebinding": "class d:\n    verdict = Verdict.DENY",
+    "def-rebinding": "def d():\n    pass",
+    "nonlocal-in-a-nested-def": (
+        "def _swap():\n    nonlocal d\n    d = _Fake()\n_swap()"
+    ),
+    "walrus": "(d := _Fake())",
+    "attribute-store": "d.verdict = Verdict.DENY",
+    "setattr": "setattr(d, 'verdict', Verdict.DENY)",
+    "object-setattr": "object.__setattr__(d, 'verdict', Verdict.DENY)",
+    "dict-setitem": "d.__dict__['verdict'] = Verdict.DENY",
+    "dict-update": "d.__dict__.update(verdict=Verdict.DENY)",
+    "vars-setitem": "vars(d)['verdict'] = Verdict.DENY",
+    "vars-update": "vars(d).update(verdict=Verdict.DENY)",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(REBIND_BODIES))
+def test_every_binding_form_and_store_takes_a_result_name_out(
+    tmp_path: Path, shape: str
+) -> None:
+    body = f"d = {_CALL}\n{REBIND_BODIES[shape]}\nassert d.verdict is Verdict.DENY"
+    _expect(tmp_path, _src(_FAKE, "gate", body), _NO_ANSWER)
+
+
+def test_a_walrus_in_the_gate_class_alias_walk_is_a_gate_patch(tmp_path: Path) -> None:
+    body = (
+        "(G := Gate)\nG.evaluate = lambda *a, **k: _Fake()\n"
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    )
+    _expect(tmp_path, _src(_FAKE, "gate", body), "patches the gate")
+
+
+# Item 9: a global declaration in the test takes the name out (the store branch
+# for global and nonlocal).
+def test_a_global_declaration_takes_a_result_name_out(tmp_path: Path) -> None:
+    body = f"global d\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
+    _expect(tmp_path, _src("", "gate", body), _NO_ANSWER)
+
+
+# Item 3: any statement that may leave the test ends the straight path.
+MAY_LEAVE = {
+    "conditional-return": "if os.environ.get('ZQXWVK'):\n    return",
+    "conditional-skip": "if os.environ.get('ZQXWVK'):\n    pytest.skip('x')",
+    "handler-returns": "try:\n    os.listdir('zqxwvk')\nexcept OSError:\n    return",
+    "handler-skips": "try:\n    os.listdir('zqxwvk')\nexcept OSError:\n    pytest.skip('x')",
+    "loop-body-returns": "for _ in os.listdir('.'):\n    return",
+    "while-body-returns": "while os.environ.get('ZQXWVK'):\n    return",
+    "with-body-returns": (
+        "with open(os.devnull):\n    if os.environ.get('ZQXWVK'):\n        return"
+    ),
+    "match-case-returns": "match os.name:\n    case 'nt':\n        return",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(MAY_LEAVE))
+def test_a_statement_that_may_leave_the_test_ends_the_straight_path(
+    tmp_path: Path, shape: str
+) -> None:
+    body = f"d = {_CALL}\n{MAY_LEAVE[shape]}\nassert d.verdict is Verdict.DENY"
+    _expect(tmp_path, _src("", "gate", body), _NO_ANSWER)
+
+
+def test_a_statement_that_may_leave_after_the_assert_stays_clean(
+    tmp_path: Path,
+) -> None:
+    body = (
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY\n"
+        "if os.environ.get('ZQXWVK'):\n    return"
+    )
+    r = _lint(_write(tmp_path, "test_k_case.py", _src("", "gate", body)))
+    assert r.returncode == 0, r.stdout
+
+
+# Item 4: the Verdict token must be the real capability_gate.Verdict.
+VERDICT_STAND_INS = {
+    "local-class": ("class Verdict:\n    DENY = 'deny'", "gate", ""),
+    "namespace": (
+        "import types\n\nVerdict = types.SimpleNamespace(DENY=object())",
+        "gate",
+        "",
+    ),
+    "globals-injected": (
+        "globals()['Verdict'] = type('V', (), {'DENY': None})",
+        "gate",
+        "",
+    ),
+    "imported-from-elsewhere": ("from zqxwvk_fake import Verdict", "gate", ""),
+    "sys-modules-swap": (
+        "import types\n\nsys.modules['capability_gate'] = types.ModuleType('x')",
+        "gate",
+        "",
+    ),
+    "sys-modules-monkeypatched": (
+        "",
+        "gate, monkeypatch",
+        "monkeypatch.setitem(sys.modules, 'capability_gate', None)",
+    ),
+    "member-store": ("", "gate", "Verdict.DENY = d.verdict"),
+    "member-setattr": ("", "gate", "setattr(Verdict, 'DENY', d.verdict)"),
+    "eq-override": ("", "gate", "Verdict.__eq__ = lambda a, b: True"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(VERDICT_STAND_INS))
+def test_a_verdict_that_is_not_the_real_one_is_not_an_answer(
+    tmp_path: Path, shape: str
+) -> None:
+    prelude, params, extra = VERDICT_STAND_INS[shape]
+    body = f"d = {_CALL}\n{extra}\nassert d.verdict == Verdict.DENY".replace(
+        "\n\n", "\n"
+    )
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, params, body))))
+
+
+# Item 6: pytest must run the test the lint read.
+def test_a_non_pytest_decorator_on_a_kat_is_rejected(tmp_path: Path) -> None:
+    src = _src(
+        "def _keep(fn):\n    return lambda *a, **k: None",
+        "gate",
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY",
+        deco="@_keep",
+    )
+    _expect(tmp_path, src, "a decorator other than a pytest mark")
+
+
+def test_a_rebound_test_name_is_rejected(tmp_path: Path) -> None:
+    src = _kat("") + "\n\ntest_k_case = lambda gate: None\n"
+    _expect(tmp_path, src, "test_k_case is defined more than once")
+
+
+def test_a_pytest_mark_on_a_kat_stays_clean(tmp_path: Path) -> None:
+    src = _kat("", deco="@pytest.mark.parametrize('n', [1])", params="gate, n")
+    r = _lint(_write(tmp_path, "test_k_case.py", src))
+    assert r.returncode == 0, r.stdout
+
+
+# Item 7: patching any capability_gate module attribute patches the gate.
+INTERNAL_PATCHES = {
+    "assign-decide": (
+        "import capability_gate",
+        "gate",
+        "capability_gate._decide = None",
+    ),
+    "monkeypatch-path-allowed": (
+        "import capability_gate",
+        "gate, monkeypatch",
+        "monkeypatch.setattr(capability_gate, '_path_allowed', lambda *a: True)",
+    ),
+    "monkeypatch-dotted-string": (
+        "",
+        "gate, monkeypatch",
+        "monkeypatch.setattr('capability_gate._decide', lambda *a: None)",
+    ),
+    "setattr-decide": (
+        "import capability_gate",
+        "gate",
+        "setattr(capability_gate, '_decide', None)",
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(INTERNAL_PATCHES))
+def test_patching_a_capability_gate_internal_patches_the_gate(
+    tmp_path: Path, shape: str
+) -> None:
+    prelude, params, line = INTERNAL_PATCHES[shape]
+    body = f"{line}\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
+    _expect(tmp_path, _src(prelude, params, body), "patches the gate")
+
+
+def test_patching_a_non_gate_object_stays_clean(tmp_path: Path) -> None:
+    body = (
+        "monkeypatch.setattr(os, 'getcwd', lambda: 'zqxwvk')\n"
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    )
+    r = _lint(_write(tmp_path, "test_k_case.py", _src("", "gate, monkeypatch", body)))
+    assert r.returncode == 0, r.stdout
+
+
+# Item 8: the class reached through .mro() is the class reached through __mro__.
+def test_a_gate_class_reached_through_mro_is_a_gate_patch(tmp_path: Path) -> None:
+    src = _first("type(gate).mro()[0].evaluate = lambda *a, **kw: None")
+    _expect(tmp_path, src, "patches the gate")
+
+
+# Item 10b: a bare xfail mark on a KAT names no reason and no strictness.
+def test_a_bare_xfail_mark_on_a_kat_is_rejected(tmp_path: Path) -> None:
+    src = _kat("", deco="@pytest.mark.xfail")
+    _expect(tmp_path, src, "a bare xfail mark")
+
+
+# A real UTF-8 alias is not a foreign encoding.
+def test_a_utf8_alias_cookie_stays_clean(tmp_path: Path) -> None:
+    path = tmp_path / "tests" / "test_k_case.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"# coding: utf8\n" + _kat("").encode("utf-8"))
+    r = _lint(path)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+# Item 10a: discovery walks without following links, and the floor guard's ban
+# on links is what keeps a linked folder from hiding a KAT. Pin the ban.
+def test_the_floor_guard_refuses_a_link_the_kat_walk_would_not_follow(
+    tmp_path: Path,
+) -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import floor_guard
+
+    (tmp_path / "real").mkdir()
+    try:
+        (tmp_path / "tests").symlink_to(tmp_path / "real", target_is_directory=True)
+    except OSError:
+        pytest.skip("this host cannot create a symbolic link")
+    found = floor_guard.symlink_violations(tmp_path)
+    assert any("symlink tests" in f for f in found), found
