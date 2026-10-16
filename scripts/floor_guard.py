@@ -1540,7 +1540,9 @@ def xfail_strict_violations(root: Path) -> list[str]:
             for kw in node.keywords:
                 if kw.arg is None or (
                     kw.arg == "strict"
-                    and not (isinstance(kw.value, ast.Constant) and kw.value.value is True)
+                    and not (
+                        isinstance(kw.value, ast.Constant) and kw.value.value is True
+                    )
                 ):
                     found.append(
                         f"{rel}: an xfail mark sets strict to something other than "

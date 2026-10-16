@@ -66,11 +66,11 @@
     },
     {
       "path": "scripts/floor_guard.py",
-      "sha256": "12ef9d85c7544eead530d13d426f1022b493fdadf904ad8fade76c6a44bc79c7"
+      "sha256": "484537a046a675de5606d2e10f45433b08ddd0030c22d35b9abbc6c18b421f38"
     },
     {
       "path": "scripts/kat_lint.py",
-      "sha256": "041a6d67d0368babc620836de9d24fcd3356f63ea2a89dc891d4115707620c98"
+      "sha256": "7b5f35adc5691b86b3f71e3f1c59a8f173acd1f2e7cf644e5881a00d9857f1f9"
     },
     {
       "path": "scripts/leak_denylist_scan.py",
@@ -86,11 +86,11 @@
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "83efa67216fe48b35d2688cd91164127e66752c7879657c41a387cdd47d4dc93"
+      "sha256": "0d16ae40e397dee391df000c8d27cf3e0c48e18a2261146a10261148d07b7dd0"
     },
     {
       "path": "tests/test_kat_lint.py",
-      "sha256": "2dfa9a177e2fb09095ce907d246ddbc17ef3817be2ad6db8e7a94172b129529a"
+      "sha256": "273d4d2d36b8a6efdc06ec77f1e345cbee7b5d05bcec0a152ac0c33e7a7f75d7"
     },
     {
       "path": "tests/test_public_text_paths.py",

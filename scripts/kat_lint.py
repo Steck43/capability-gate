@@ -9,10 +9,16 @@ known decision. Shapes that look like that and prove nothing:
 * a test that never reaches the gate, or returns before it does, and only
   checks that a receipt file exists.
 
-KAT files are found recursively under tests/ and among top-level test files,
-case-insensitively: names like test_k*.py or containing "kat", any file with a
+KAT files are found among test files: those under tests/ and at the top level
+whose names start with test, and every file pytest itself collects (its
+testpaths, python_files and norecursedirs from pytest.ini, or pytest's
+defaults), so a KAT pytest runs is never skipped. Among them, case-
+insensitively: names like test_k*.py or containing "kat", any file with a
 "# KAT" comment, and any test file that names a receipts/ path. Files named on
 the command line are linted as KATs whatever their name.
+
+Every file is read as Python reads it: a coding cookie other than UTF-8, or
+bytes that are not UTF-8, is a lint problem, never a traceback.
 
 A test reaches the gate when its straight-line path (try, with, and for bodies
 count; if branches, except handlers, and constant-guarded code do not), before
@@ -30,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import codecs
 import io
 import re
 import sys
@@ -77,15 +84,68 @@ def _names_receipts(src: str) -> bool:
     )
 
 
+# pytest's defaults when pytest.ini does not set the key.
+_PYTEST_FILES = ("test_*.py", "*_test.py")
+_PYTEST_NORECURSE = (
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    "{arch}",
+)
+
+
+def _pytest_settings(root: Path) -> tuple[list[Path], list[str], list[str]]:
+    """testpaths, python_files and norecursedirs as pytest reads them from
+    pytest.ini, with pytest's defaults for any key it does not set."""
+    import configparser
+
+    ini = configparser.ConfigParser(interpolation=None)
+    try:
+        ini.read(root / "pytest.ini", encoding="utf-8")
+    except (configparser.Error, UnicodeDecodeError):
+        pass
+    sec = ini["pytest"] if ini.has_section("pytest") else {}
+    paths = [root / x for x in sec.get("testpaths", "").split()] or [root]
+    files = sec.get("python_files", "").split() or list(_PYTEST_FILES)
+    skip = sec.get("norecursedirs", "").split() or list(_PYTEST_NORECURSE)
+    return paths, files, skip
+
+
+def _pytest_collects(root: Path) -> set[Path]:
+    """Every file pytest would collect from root with no arguments."""
+    import fnmatch
+    import os
+
+    paths, files, skip = _pytest_settings(root)
+    out: set[Path] = set()
+    for base in paths:
+        if base.is_file():
+            out.add(base)
+            continue
+        for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+            dirnames[:] = [
+                d for d in dirnames if not any(fnmatch.fnmatch(d, s) for s in skip)
+            ]
+            for name in filenames:
+                if any(fnmatch.fnmatch(name, pat) for pat in files):
+                    out.add(Path(dirpath) / name)
+    return out
+
+
 def discover(root: Path) -> list[Path]:
-    candidates = [
+    candidates = {
         p
         for p in (*root.joinpath("tests").rglob("*.py"), *root.glob("*.py"))
         if p.name.lower().startswith("test") and p.is_file()
-    ]
+    } | {p for p in _pytest_collects(root) if p.suffix == ".py" and p.is_file()}
     found = []
-    for p in candidates:
-        src = p.read_text(encoding="utf-8", errors="replace")
+    for p in sorted(candidates):
+        src = p.read_bytes().decode("utf-8", errors="replace")
         if _has_marker(src):
             found.append(p)
         elif p.relative_to(root).as_posix() in EXEMPT:
@@ -314,6 +374,24 @@ def lint_source(src: str, label: str) -> list[str]:
     return problems
 
 
+def _source(path: Path) -> tuple[str | None, str | None]:
+    """The file's text as Python reads it, or the problem that stops it. A
+    coding cookie other than UTF-8 makes Python read different text than the
+    lint would, so it is refused rather than followed."""
+    data = path.read_bytes()
+    lines = iter(data.splitlines(keepends=True))
+    try:
+        encoding, _ = tokenize.detect_encoding(lambda: next(lines, b""))
+    except SyntaxError:
+        return None, "declares a source encoding Python does not know"
+    if codecs.lookup(encoding).name not in ("utf-8", "utf-8-sig"):
+        return None, f"declares a source encoding other than UTF-8 ({encoding})"
+    try:
+        return data.decode(encoding), None
+    except UnicodeDecodeError:
+        return None, "is not valid UTF-8"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("files", nargs="*", type=Path)
@@ -323,8 +401,12 @@ def main(argv: list[str] | None = None) -> int:
 
     problems = []
     for path in files:
+        src, why = _source(path)
+        if src is None:
+            problems.append(f"{path.as_posix()}:1: {why}")
+            continue
         try:
-            problems += lint_source(path.read_text(encoding="utf-8"), path.as_posix())
+            problems += lint_source(src, path.as_posix())
         except SyntaxError as exc:
             print(f"kat lint: {path}: does not parse: {exc}", file=sys.stderr)
             return 2

@@ -3328,7 +3328,9 @@ _NOT_RUN = {
     ),
     "word-as-a-function-attribute": (
         "tests/test_b.py",
-        "import pytest\n\ndef test_zqxwvk():\n" + _BAIL + "\ntest_zqxwvk.xfail = True\n",
+        "import pytest\n\ndef test_zqxwvk():\n"
+        + _BAIL
+        + "\ntest_zqxwvk.xfail = True\n",
     ),
     "word-as-a-folder-name": (
         "tests/xfail/test_b.py",
