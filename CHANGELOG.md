@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adapter extracts every path argument. A notes path plus `target=/etc/passwd` is denied.
 
 ### Changed
+- `tests/test_kill_switch.py` holds only tests that assert the gate's verdict. The log test and the tamper test now assert the verdicts they depend on (an allow before the throw, denies after it), and the double-throw test, which pins the marker and the THROWN row and asks the gate for no decision, moves to `tests/test_halt_marker.py`. `tests/test_verdict_asserts.py` fails when a test in the known-answer file asserts no gate verdict by identity. The fault-injection tests (an unreadable or locked marker) stay: they assert the deny the gate returns.
 
 - CI now pins `zizmorcore/zizmor-action` at v0.6.4 (`cc914d7`) so workflow analysis runs against the reviewed release while checkout credentials remain disabled.
 - CI checks out `aegis-atoms` at `41b6e83` (merge of aegis-atoms #51, decision digest and box ticket) and `isolation-layer` at `a27c8ee` (merge of isolation-layer #24, `box_entry` bind). `test_one_write_needs_three_receipts` is a normal test. Clearing it in CI is a receipt contract, not a jailer proof. `always_invoked` stays false.
