@@ -228,3 +228,127 @@ def test_discovery_is_recursive_case_insensitive_and_reads_receipt_paths(
 def test_this_repo_kats_pass() -> None:
     r = _lint()
     assert r.returncode == 0, r.stdout
+
+
+# --- F1: a source is read as Python reads it; F2: KAT files are found the way
+# --- pytest finds test files.
+
+_FIAT_KAT = "import pytest\n\n\ndef test_k_case():\n    pytest.fail('zqxwvk')\n"
+
+
+def _clean_kat() -> str:
+    return REAL_GATE_CALL.format(root=str(ROOT))
+
+
+def _tree(tmp_path: Path, files: dict[str, str]) -> Path:
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("head", "tail", "expect"),
+    [
+        pytest.param(
+            b"# -*- coding: latin-1 -*-\n",
+            b"",
+            "declares a source encoding other than UTF-8",
+            id="latin-1-cookie",
+        ),
+        pytest.param(
+            b"# vim: set fileencoding=cp1252 :\n",
+            b"",
+            "declares a source encoding other than UTF-8",
+            id="cp1252-cookie",
+        ),
+        pytest.param(
+            b"# -*- coding: zqxwvk -*-\n",
+            b"",
+            "declares a source encoding Python does not know",
+            id="unknown-cookie",
+        ),
+        pytest.param(b"", b"\n# \xff\xfe\n", "is not valid UTF-8", id="invalid-bytes"),
+    ],
+)
+def test_a_source_that_is_not_utf8_is_a_lint_problem(
+    tmp_path: Path, head: bytes, tail: bytes, expect: str
+) -> None:
+    path = tmp_path / "tests" / "test_k_case.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(head + _clean_kat().encode("utf-8") + tail)
+    r = _lint(path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert expect in r.stdout, r.stdout
+    assert "Traceback" not in r.stderr, r.stderr
+
+
+@pytest.mark.parametrize(
+    "cookie",
+    [
+        pytest.param(b"# -*- coding: utf-8 -*-\n", id="utf-8"),
+        pytest.param(b"# coding: utf8\n", id="utf8-alias"),
+        pytest.param(b"\xef\xbb\xbf", id="bom"),
+    ],
+)
+def test_a_utf8_source_stays_clean(tmp_path: Path, cookie: bytes) -> None:
+    path = tmp_path / "tests" / "test_k_case.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(cookie + _clean_kat().encode("utf-8"))
+    r = _lint(path)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize(
+    ("files", "kat"),
+    [
+        pytest.param(
+            {"harness/test_k_case.py": _FIAT_KAT},
+            "harness/test_k_case.py",
+            id="outside-tests",
+        ),
+        pytest.param(
+            {"tests/k_case_kat_test.py": _FIAT_KAT},
+            "tests/k_case_kat_test.py",
+            id="suffix-name",
+        ),
+        pytest.param(
+            {
+                "pytest.ini": "[pytest]\npython_files = check_*.py\n",
+                "tests/check_kat.py": _FIAT_KAT,
+            },
+            "tests/check_kat.py",
+            id="python-files-setting",
+        ),
+        pytest.param(
+            {
+                "pytest.ini": "[pytest]\ntestpaths = suite\n",
+                "suite/deep/test_k_case.py": _FIAT_KAT,
+            },
+            "suite/deep/test_k_case.py",
+            id="testpaths-setting",
+        ),
+    ],
+)
+def test_a_kat_file_pytest_collects_is_never_skipped(
+    tmp_path: Path, files: dict[str, str], kat: str
+) -> None:
+    root = _tree(tmp_path, files)
+    r = _lint("--root", root)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "fails by fiat" in r.stdout, r.stdout
+    assert kat in r.stdout.replace("\\", "/"), r.stdout
+
+
+def test_a_folder_pytest_does_not_recurse_into_is_not_linted(tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path,
+        {
+            "pytest.ini": "[pytest]\nnorecursedirs = .* design\n",
+            "design/test_k_case.py": _FIAT_KAT,
+            "tests/test_k_clean.py": _clean_kat(),
+        },
+    )
+    r = _lint("--root", root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "in 1 KAT file(s)" in r.stdout, r.stdout
