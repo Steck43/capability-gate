@@ -171,7 +171,14 @@ patches it (a store on ``Verdict`` is a gate patch). A store that rebinds
 the name through an object (this module reached through ``sys.modules``, an
 attribute named ``Verdict``, a module ``__dict__``, ``globals()``, an
 ``update`` of one, a function's ``__globals__``) counts too, and the gate
-class is judged the same way under every name the file imports it as. The gate
+class is judged the same way under every name the file imports it as. Every
+write into a mapping is read one way (a subscript store or delete, ``|=``, a
+write method, ``operator.setitem`` and its kin, ``dict``'s methods called
+unbound, ``monkeypatch.setitem``): through a module namespace, or a name ever
+bound to one, it rebinds the name it writes (any name, when the key cannot be
+folded); through a gate's, the gate class's or a gate module's namespace, it
+patches the gate. The names the gate's own modules are imported under are
+protected too. The gate
 class is read only directly (an attribute, called, ``isinstance`` or
 ``issubclass``, ``is`` or ``==``, an annotation, a tracked alias); passed on as
 a value it is refused. Any other dynamic path into the module namespace (a
@@ -2172,8 +2179,19 @@ class _File:
         return expr
 
     def gate_namespace(self, expr: ast.AST, typed: set[str]) -> bool:
-        """The attribute dict of a gate, the Gate class or a gate module."""
+        """The attribute dict of a gate, the Gate class or a gate module, or a
+        name bound to one (in its own function or anywhere in the file)."""
         expr = self.attr_view(expr)
+        if isinstance(expr, ast.Name):
+            scope = self.scope_of(expr)
+            local = _bindings(scope, args=False).get(expr.id, []) if scope else []
+            values = local + [
+                v for kind, v in self.names.binds.get(expr.id, []) if kind == "value"
+            ]
+            return any(
+                v is not None and v is not expr and self.gate_namespace(v, typed)
+                for v in values
+            )
         if isinstance(expr, ast.Attribute) and expr.attr == "__dict__":
             inner = expr.value
         elif (
@@ -2291,6 +2309,13 @@ class _File:
         )
 
     def patch_at(self, node: ast.AST, typed: set[str]) -> bool:
+        # Any write into a gate's, the gate class's or a gate module's
+        # namespace, directly or through a name bound to one.
+        if any(
+            self.gate_namespace(mapping, typed)
+            for mapping, _ in self.namespace_writes(node)
+        ):
+            return True
         if isinstance(node, ast.Call):
             f = node.func
             if isinstance(f, ast.Attribute):
@@ -2298,23 +2323,7 @@ class _File:
                     self.gate_target(f.value, typed) or self.gate_type(f.value, typed)
                 ):
                     return True
-                if f.attr in (
-                    "update",
-                    "__setitem__",
-                    "__delitem__",
-                    "setdefault",
-                    "pop",
-                    "popitem",
-                    "clear",
-                ) and self.gate_namespace(f.value, typed):
-                    return True
-                # monkeypatch.setitem / delitem on a gate's namespace.
-                if (
-                    f.attr in ("setitem", "delitem")
-                    and node.args
-                    and self.gate_namespace(node.args[0], typed)
-                ):
-                    return True
+                pass
             spelled = ast.unparse(f)
             resolved = {n or "" for n in self.names.resolve(f)}
             setter = (
@@ -2343,11 +2352,6 @@ class _File:
         if isinstance(node, (ast.Assign, ast.Delete)):
             for t in node.targets:
                 for a in ast.walk(t):
-                    if isinstance(a, ast.Subscript) and isinstance(
-                        a.ctx, (ast.Store, ast.Del)
-                    ):
-                        if self.gate_namespace(a.value, typed):
-                            return True
                     if isinstance(a, ast.Attribute) and isinstance(
                         a.ctx, (ast.Store, ast.Del)
                     ):
@@ -2863,12 +2867,59 @@ class _File:
             )
         return self._gate_class_real
 
+    def namespace_writes(self, node: ast.AST) -> list[tuple[ast.AST, ast.AST | None]]:
+        """(the mapping written, the key, or None when the write may touch any
+        key) for each way node writes into a mapping: a subscript store or
+        delete, ``|=``, a write method on it, operator's setitem, delitem and
+        ior, dict's methods called unbound, and monkeypatch.setitem/delitem."""
+        out: list[tuple[ast.AST, ast.AST | None]] = []
+        if isinstance(node, (ast.Assign, ast.Delete, ast.AugAssign, ast.AnnAssign)):
+            targets = (
+                node.targets
+                if isinstance(node, (ast.Assign, ast.Delete))
+                else [node.target]
+            )
+            for t in targets:
+                for x in ast.walk(t):
+                    if isinstance(x, ast.Subscript) and isinstance(
+                        x.ctx, (ast.Store, ast.Del)
+                    ):
+                        out.append((x.value, x.slice))
+            if isinstance(node, ast.AugAssign) and isinstance(node.op, ast.BitOr):
+                out.append((node.target, None))
+        if isinstance(node, ast.Call):
+            f, args = node.func, node.args
+            if isinstance(f, ast.Attribute) and f.attr in _WRITE_METHODS:
+                key = args[0] if f.attr in _KEYED_WRITES and args else None
+                out.append((f.value, key))
+            resolved = {r for r in self.names.resolve(f) if r}
+            if resolved & _WRITE_FUNCS and args:
+                name = next(iter(resolved & _WRITE_FUNCS)).rsplit(".", 1)[-1]
+                keyed = name.strip("_") in {k.strip("_") for k in _KEYED_WRITES}
+                out.append((args[0], args[1] if keyed and len(args) > 1 else None))
+            if (
+                isinstance(f, ast.Attribute)
+                and f.attr in ("setitem", "delitem")
+                and args
+            ):
+                out.append((args[0], args[1] if len(args) > 1 else None))
+        return out
+
     def _local_names(self, real: str) -> set[str]:
-        """The names this file imports real under."""
+        """The names this file imports real under, and the names it imports
+        the gate's own modules under (rebinding one swaps everything read
+        through it)."""
         return {
             name
             for name, entries in self.names.binds.items()
-            if any(kind == "import" and _canon(str(v)) == real for kind, v in entries)
+            if any(
+                kind == "import"
+                and (
+                    _canon(str(v)) == real
+                    or ("." not in str(v) and str(v) in REAL_ROOTS)
+                )
+                for kind, v in entries
+            )
         }
 
     def _rebound_through_an_object(self, protected: set[str]) -> bool:
@@ -2884,17 +2935,17 @@ class _File:
                 targets = list(n.targets)
             elif isinstance(n, (ast.AugAssign, ast.AnnAssign)):
                 targets = [n.target]
-            if isinstance(n, ast.AugAssign) and (
-                self._namespace_obj(n.target)
-                or (
-                    isinstance(n.target, ast.Name)
-                    and any(
-                        kind == "value" and self._namespace_obj(v)
-                        for kind, v in self.names.binds.get(n.target.id, [])
-                    )
-                )
-            ):
-                return True
+            for mapping, key in self.namespace_writes(n):
+                if not self._namespace_obj(mapping):
+                    continue
+                if key is None:
+                    return True
+                kind, folded = self.fold.fold(key, self.fold.at(n))
+                if (
+                    not (kind == "value" and isinstance(folded, str))
+                    or folded in protected
+                ):
+                    return True
             for t in targets:
                 for x in ast.walk(t):
                     if (
@@ -2915,9 +2966,7 @@ class _File:
                     if isinstance(x, ast.Subscript) and isinstance(
                         x.ctx, (ast.Store, ast.Del)
                     ):
-                        if self._sys_modules(x.value) or self._namespace_key(
-                            x, protected
-                        ):
+                        if self._sys_modules(x.value):
                             return True
             if isinstance(n, ast.Call):
                 f = n.func
@@ -2937,13 +2986,6 @@ class _File:
                             and self._namespace_holder(first)
                         ):
                             return True
-                if (
-                    isinstance(f, ast.Attribute)
-                    and f.attr
-                    in ("update", "setdefault", "__setitem__", "__ior__", "__or__")
-                    and self._namespace_obj(f.value)
-                ):
-                    return True
                 if isinstance(f, ast.Attribute):
                     if f.attr in ("setitem", "delitem") and first is not None:
                         if self._sys_modules(first):
@@ -3001,17 +3043,17 @@ class _File:
             if node.func.id in ("globals", "locals"):
                 return True
             if node.func.id == "vars":
-                return not node.args
+                return not node.args or self._module_obj(node.args[0])
         if isinstance(node, ast.Attribute) and node.attr == "__dict__":
             return self._module_obj(node.value)
         # A function's globals are its module's namespace.
         if isinstance(node, ast.Attribute) and node.attr == "__globals__":
             return True
         if isinstance(node, ast.Name):
-            vals = self.names.binds.get(node.id, [])
-            return bool(vals) and all(
+            # Tainted: any binding of the name to a namespace object.
+            return any(
                 kind == "value" and self._namespace_obj(v, depth + 1)
-                for kind, v in vals
+                for kind, v in self.names.binds.get(node.id, [])
             )
         return False
 
@@ -3689,6 +3731,35 @@ def _plain_literal(node: ast.AST) -> bool:
 # Imperative outcomes: a test that calls one stops there.
 _ENDS_THE_TEST = frozenset(
     {"pytest.xfail", "pytest.skip", "pytest.fail", "pytest.exit"}
+)
+# Ways to write into a mapping by calling it: its own methods, operator's
+# functions, and dict's methods called unbound.
+_WRITE_METHODS = frozenset(
+    {
+        "update",
+        "setdefault",
+        "pop",
+        "popitem",
+        "clear",
+        "__setitem__",
+        "__delitem__",
+        "__ior__",
+    }
+)
+_WRITE_FUNCS = frozenset(
+    {
+        "operator.setitem",
+        "operator.delitem",
+        "operator.ior",
+        "operator.__setitem__",
+        "operator.__delitem__",
+        "operator.__ior__",
+        *(f"builtins.dict.{m}" for m in _WRITE_METHODS),
+    }
+)
+# Of those, the ones whose key is an argument.
+_KEYED_WRITES = frozenset(
+    {"setdefault", "pop", "__setitem__", "__delitem__", "setitem", "delitem"}
 )
 # Statements with a body of their own.
 _COMPOUND = (

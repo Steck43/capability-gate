@@ -5036,7 +5036,9 @@ def test_a_write_through_any_namespace_object_rebinds_the_gate_class(
 
 GATE_NAMESPACE_WRITES = {
     "ior-on-the-instance-dict": "gate.__dict__ |= {'evaluate': lambda *a, **kw: _Fake()}",
-    "ior-on-vars-of-the-instance": "vars(gate) |= {'evaluate': lambda *a, **kw: _Fake()}",
+    # vars(x) |= ... does not parse (a call is no augmented target); these are
+    # the same write in the forms that do.
+    "ior-on-vars-of-the-instance": "vars(gate).__ior__({'evaluate': lambda *a, **kw: _Fake()})",
     "ior-through-an-alias": "ns = vars(gate)\nns |= {'evaluate': lambda *a, **kw: _Fake()}",
     "store-through-an-alias": "ns = gate.__dict__\nns['evaluate'] = lambda *a, **kw: _Fake()",
     "update-through-an-alias": "ns = vars(gate)\nns.update(evaluate=lambda *a, **kw: _Fake())",
@@ -5057,7 +5059,9 @@ def test_a_write_through_the_gate_instances_namespace_patches_the_gate(
 
 
 GATE_MODULE_WRITES = {
-    "ior-on-vars-of-the-module": "vars(capability_gate) |= {'_decide': None}",
+    "ior-on-vars-of-the-module": (
+        "import operator\noperator.ior(vars(capability_gate), {'_decide': None})"
+    ),
     "ior-through-an-alias": "ns = vars(capability_gate)\nns |= {'_decide': None}",
     "store-through-an-alias": "ns = capability_gate.__dict__\nns['_decide'] = None",
 }
@@ -5086,3 +5090,55 @@ def test_the_gate_module_name_rebound_through_this_modules_object_is_rejected(
         "d = g.evaluate('s', 'read_file', ['zqxwvk'])\nassert d.verdict is Verdict.DENY"
     )
     _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, "", body))))
+
+
+# At module level, so only the namespace rule can refuse it: a write under a
+# key the lint cannot fold may be Verdict.
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(
+            "globals()[os.environ.get('ZQXWVK', 'Verdict')] = _NS", id="store"
+        ),
+        pytest.param(
+            "globals().setdefault(os.environ.get('ZQXWVK', 'Verdict'), _NS)",
+            id="setdefault",
+        ),
+    ],
+)
+def test_a_module_level_namespace_write_under_an_unknown_key_is_rejected(
+    tmp_path: Path, line: str
+) -> None:
+    prelude = _NS + "\n\n\n" + line
+    body = f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    _rejected(_lint(_write(tmp_path, "test_k_case.py", _src(prelude, "gate", body))))
+
+
+# A write into a module namespace under a constant key that names nothing the
+# test relies on leaves Verdict and the gate class real.
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param("globals().setdefault('zqxwvk_other', 1)", id="setdefault"),
+        pytest.param(
+            "import operator\noperator.setitem(globals(), 'zqxwvk_other', 1)",
+            id="operator-setitem",
+        ),
+    ],
+)
+def test_a_namespace_write_under_an_unrelated_key_stays_clean(
+    tmp_path: Path, line: str
+) -> None:
+    body = f"{line}\nd = {_CALL}\nassert d.verdict is Verdict.DENY"
+    r = _lint(_write(tmp_path, "test_k_case.py", _src("", "gate", body)))
+    assert r.returncode == 0, r.stdout
+
+
+def test_monkeypatch_setitem_on_the_gate_instances_namespace_patches_the_gate(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "monkeypatch.setitem(vars(gate), 'evaluate', lambda *a, **kw: _Fake())\n"
+        f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+    )
+    _expect(tmp_path, _src(_FAKE, "gate, monkeypatch", body), "patches the gate")
