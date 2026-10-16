@@ -3309,3 +3309,117 @@ def test_a_marked_expected_failure_still_ran(tmp_path: Path) -> None:
     assert _run_pytest(root, record).returncode == 0
     check = _run_check(root, record)
     assert check.returncode == 0, check.stdout + check.stderr
+
+
+# --- a test runs when its own call reached past an imperative outcome, whatever --
+# --- words sit in its keywords ---------------------------------------------------
+
+_BAIL = "    pytest.xfail('x')\n    assert False\n"
+_NOT_RUN = {
+    "word-in-a-class-name": (
+        "tests/test_b.py",
+        "import pytest\n\nclass TestXfail:\n    def test_zqxwvk(self):\n"
+        "        pytest.xfail('x')\n        assert False\n",
+    ),
+    "word-as-a-parametrize-id": (
+        "tests/test_b.py",
+        "import pytest\n\n@pytest.mark.parametrize('v', [1], ids=['xfail'])\n"
+        "def test_zqxwvk(v):\n" + _BAIL,
+    ),
+    "word-as-a-function-attribute": (
+        "tests/test_b.py",
+        "import pytest\n\ndef test_zqxwvk():\n" + _BAIL + "\ntest_zqxwvk.xfail = True\n",
+    ),
+    "word-as-a-folder-name": (
+        "tests/xfail/test_b.py",
+        "import pytest\n\ndef test_zqxwvk():\n" + _BAIL,
+    ),
+    "keyword-set-by-a-fixture": (
+        "tests/test_b.py",
+        "import pytest\n\n@pytest.fixture(autouse=True)\ndef zqxwvk_kw(request):\n"
+        "    request.node.keywords['xfail'] = True\n\n"
+        "def test_zqxwvk():\n" + _BAIL,
+    ),
+    "mark-added-at-run-time": (
+        "tests/test_b.py",
+        "import pytest\n\ndef test_zqxwvk(request):\n"
+        "    request.node.add_marker(pytest.mark.xfail(strict=True, reason='x'))\n"
+        + _BAIL,
+    ),
+    "real-mark-then-imperative-xfail": (
+        "tests/test_b.py",
+        "import pytest\n\n@pytest.mark.xfail(strict=True, reason='x')\n"
+        "def test_zqxwvk():\n" + _BAIL,
+    ),
+    "module-mark-then-imperative-xfail": (
+        "tests/test_b.py",
+        "import pytest\n\npytestmark = pytest.mark.xfail(strict=True, reason='x')\n\n"
+        "def test_zqxwvk():\n" + _BAIL,
+    ),
+    "raises-mark-matched-by-its-own-raise": (
+        "tests/test_b.py",
+        "import pytest\n\n"
+        "@pytest.mark.xfail(raises=ValueError, strict=True, reason='x')\n"
+        "def test_zqxwvk():\n    raise ValueError('x')\n    assert False\n",
+    ),
+    "raises-mark-matched-by-a-raise-in-a-same-file-helper": (
+        "tests/test_b.py",
+        "import pytest\n\ndef _zqxwvk_bail():\n    raise ValueError('x')\n\n"
+        "@pytest.mark.xfail(raises=ValueError, strict=True, reason='x')\n"
+        "def test_zqxwvk():\n    _zqxwvk_bail()\n    assert False\n",
+    ),
+    "inactive-mark-then-imperative-xfail": (
+        "tests/test_b.py",
+        "import pytest\n\n@pytest.mark.xfail(False, strict=True, reason='x')\n"
+        "def test_zqxwvk():\n" + _BAIL,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_NOT_RUN))
+def test_an_expected_failure_that_ended_before_its_asserts_is_not_a_run(
+    tmp_path: Path, case: str
+) -> None:
+    rel, module = _NOT_RUN[case]
+    root = _pytest_tree(tmp_path, {"tests/test_a.py": _PASSING, rel: module})
+    record = tmp_path / "run.json"
+    r = _run_pytest(root, record)
+    assert r.returncode == 0, r.stdout + r.stderr
+    check = _run_check(root, record)
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert f"{rel}: no test in it ran" in check.stdout, check.stdout
+
+
+_STILL_RAN = {
+    # An assert that fails, including an AssertionError subclass the test raises
+    # as its pinned miss, is the body reaching its check.
+    "marked-assert-fails": "import pytest\n\n"
+    "@pytest.mark.xfail(strict=True, reason='x')\ndef test_zqxwvk():\n"
+    "    assert False\n",
+    "pinned-miss-raised-in-the-body": "import pytest\n\n"
+    "class ZqxwvkMiss(AssertionError):\n    pass\n\n"
+    "@pytest.mark.xfail(raises=ZqxwvkMiss, strict=True, reason='x')\n"
+    "def test_zqxwvk():\n    raise ZqxwvkMiss('x')\n",
+    # Code under test raising, or a name it does not have yet, is the red half of
+    # a red-first test.
+    "raises-mark-matched-by-the-code-under-test": "import pytest\n\n"
+    "@pytest.mark.xfail(raises=ValueError, strict=True, reason='x')\n"
+    "def test_zqxwvk():\n    int('zqxwvk')\n",
+    "missing-attribute-on-the-code-under-test": "import os\nimport pytest\n\n"
+    "@pytest.mark.xfail(strict=True, reason='x')\ndef test_zqxwvk():\n"
+    "    os.zqxwvk()\n",
+}
+
+
+@pytest.mark.parametrize("case", sorted(_STILL_RAN))
+def test_an_expected_failure_that_reached_its_check_still_ran(
+    tmp_path: Path, case: str
+) -> None:
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": _STILL_RAN[case]}
+    )
+    record = tmp_path / "run.json"
+    r = _run_pytest(root, record)
+    assert r.returncode == 0, r.stdout + r.stderr
+    check = _run_check(root, record)
+    assert check.returncode == 0, check.stdout + check.stderr
