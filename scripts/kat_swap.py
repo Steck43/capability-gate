@@ -15,9 +15,10 @@ in every copy:
 
 The substitute sits in the module file of the copy, so every way a test
 reaches the gate (an import, a reload, a hook started as a subprocess) runs
-it, and no code in the test file decides whether it is there. Each substitute
-and mutant appends a beacon row (column, pid, argv[0]) whenever evaluate runs,
-so a column that never reached the gate is visible.
+it, and no code in the test file decides whether it is there. Every column,
+real included, appends a beacon row (column, pid, argv[0]) whenever evaluate
+runs, so a column that never reached the gate is visible, unless the test
+writes a row itself or another test in the same file reaches the gate.
 
 Verdict per test, exactly one:
 
@@ -30,8 +31,9 @@ Verdict per test, exactly one:
            nor deny-all failed it, or (with mutants) it killed no mutant
   real     passed under the real gate and none of the above
 
-Only a reported failure counts against a column: an error, a skip or a
-missing test never makes a test real. A mutant no KAT kills is listed as an
+Only a reported test failure, from any exception in the test body, counts
+against a column: an error, a skip, a missing test or a missing report never
+makes a test real. A mutant no KAT kills is listed as an
 uncovered branch; it fails the run only with --strict-branches, since it says
 a branch has no KAT, not that a KAT is hollow.
 
@@ -42,9 +44,16 @@ them.
 Strip condition: --strip allow|deny|invert|mutants|all installs nothing in
 that column. Stripping any column must turn real tests hollow.
 
-Known gaps: a test that reads the gate module and branches on what it finds;
-a report rewritten by a conftest hook; a branch no KAT reaches (listed, not
-failed); see CHANGELOG.
+Known gaps (each can read real without testing the gate):
+- G1 beacon rows can be written by the test itself; reach is per file, not per test.
+- G2 the copy's column is detectable from its gate module (.kat-swap-gate, `_KAT_SWAP_MODE`, the mode string in the beacon call).
+- G3 only the root conftest.py and pytest.ini are hashed; a nested conftest hook can rewrite reports.
+- G4 any failure under a column counts as a kill, so a test that fails for the wrong reason, or raises after the gate call, reads real; one such test kills every mutant and hides every uncovered branch.
+- G5 each column runs once; a test whose outcome varies gets an unstable verdict.
+- G6 not-run passes the run; a KAT file wholly skipped or of non-strict xfails exits 0.
+- G7 a test that relabels Verdict members reads as the relabel, not the gate.
+- G8 a test that reads the gate module and branches on what it finds.
+- G9 a branch no KAT reaches is listed, not failed (--strict-branches fails it).
 
 Usage: python -I scripts/kat_swap.py [--only FILE ...] [--strip MODE ...]
        [--no-mutants] [--strict-branches] [--json OUT]
@@ -257,7 +266,9 @@ def make_copies(
             or mode in strip
             or (mode.startswith("mut:") and "mutants" in strip)
         )
-        if mode == "real" or stripped:
+        if mode == "real":
+            text = gate_src + _BEACON + _MUTANT_TAIL.format(mode="real")
+        elif stripped:
             text = gate_src
         elif mode in FIXED:
             text = gate_src + _BEACON + _SUBSTITUTE.format(mode=mode)
@@ -336,17 +347,24 @@ def run_file(root: Path, kat: Path) -> tuple[dict[str, str], list[list[str]]]:
     )
     tampered = _tree_hash(root) != before
     outcomes: dict[str, str] = {}
-    if report.exists():
+    if not report.exists():
+        outcomes["<module>"] = "no-report"
+    else:
         for case in ET.parse(report).getroot().iter("testcase"):
+            cls = case.get("classname", "").rsplit(".", 1)[-1]
+            cls = cls if cls[:1].isupper() else ""
+            tid = f"{cls}::{case.get('name')}" if cls else case.get("name")
             kinds = {c.tag for c in case}
-            if "error" in kinds:
-                outcomes[case.get("name")] = "error"
+            if tid in outcomes:
+                outcomes[tid] = "duplicate"
+            elif "error" in kinds:
+                outcomes[tid] = "error"
             elif "failure" in kinds:
-                outcomes[case.get("name")] = "failed"
+                outcomes[tid] = "failed"
             elif "skipped" in kinds:
-                outcomes[case.get("name")] = "skipped"
+                outcomes[tid] = "skipped"
             else:
-                outcomes[case.get("name")] = "passed"
+                outcomes[tid] = "passed"
     if tampered:
         outcomes = {k: "tamper" for k in outcomes} or {"<module>": "tamper"}
     rows = [ln.split("\t") for ln in beacon.read_text("utf-8").splitlines() if ln]
@@ -356,10 +374,17 @@ def run_file(root: Path, kat: Path) -> tuple[dict[str, str], list[list[str]]]:
 def _verdict(o: dict[str, str], kills: list[str], reach: dict, mutants: list[str]):
     if any(v == "tamper" for v in o.values()):
         return "tamper", "the gate module, an adapter or the pytest config changed"
+    if any(v == "no-report" for v in o.values()):
+        cols = sorted(m for m, v in o.items() if v == "no-report")
+        return "broken", f"no junit report under {', '.join(cols)}"
+    if any(v == "duplicate" for v in o.values()):
+        return "broken", "duplicate test id in the junit report"
     if o["real"] == "skipped":
         return "not-run", "skipped under the real gate"
     if o["real"] != "passed":
         return "broken", f"{o['real']} under the real gate"
+    if reach["real"]["lines"] == 0:
+        return "hollow", "the real gate was never reached"
     if any(reach[m]["lines"] == 0 for m in FIXED[1:]):
         return "hollow", "a substitute column never reached the gate"
     if o["invert"] != "failed":
@@ -392,6 +417,8 @@ def judge(kat: Path, copies: dict[str, Path], modes: list[str]) -> dict:
         tests.append(
             {"id": tid, "outcomes": o, "kills": kills, "verdict": verdict, "why": why}
         )
+    if any("<module>" in per_mode[m] for m in modes):
+        tests = [t for t in tests if t["id"] == "<module>"][:1]
     return {"file": kat.name, "tests": tests, "reach": reach}
 
 

@@ -192,3 +192,70 @@ def test_children_get_a_clean_environment(swap, tmp_path, monkeypatch):
     assert env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
     assert env["KAT_SWAP_BEACON"] == str(tmp_path / "beacon.tsv")
     assert Path(env["TMPDIR"]).is_relative_to(tmp_path)
+
+
+DUP_CLASS = (
+    HEAD
+    + """
+class TestA:
+    def test_same(self, gate):
+        d = gate.evaluate("s", "write_file", ["x"])
+        assert d.verdict is Verdict.DENY
+
+
+class TestB:
+    def test_same(self, gate):
+        assert gate is not None
+"""
+)
+
+NO_REPORT = (
+    HEAD
+    + """
+import os
+
+
+def test_exits_before_report(gate):
+    d = gate.evaluate("s", "write_file", ["x"])
+    assert d.verdict is Verdict.DENY
+    os._exit(0)
+"""
+)
+
+
+def _all(swap, copies_modes, tmp_path, name, src):
+    kat = tmp_path / name
+    kat.write_text(src, encoding="utf-8")
+    copies, modes = copies_modes
+    return {t["id"]: t for t in swap.judge(kat, copies, modes)["tests"]}
+
+
+def test_same_named_tests_in_two_classes_get_two_rows(swap, fixed, tmp_path):
+    rows = _all(swap, fixed, tmp_path, "test_k_dup.py", DUP_CLASS)
+    assert len(rows) == 2, rows
+    assert {r["verdict"] for r in rows.values()} == {"real", "hollow"}, rows
+    assert all(i.split("::")[0] for i in rows), rows
+
+
+def test_a_child_with_no_junit_report_is_broken(swap, fixed, tmp_path):
+    rows = _all(swap, fixed, tmp_path, "test_k_noreport.py", NO_REPORT)
+    assert rows["<module>"]["verdict"] == "broken", rows
+    assert "no junit report" in rows["<module>"]["why"], rows
+    assert list(rows) == ["<module>"], rows
+
+
+def test_the_real_column_beacons(swap, fixed, tmp_path):
+    kat = tmp_path / "test_k_honest.py"
+    kat.write_text(HONEST, encoding="utf-8")
+    copies, modes = fixed
+    assert swap.judge(kat, copies, modes)["reach"]["real"]["lines"] >= 1
+
+
+def test_duplicate_ids_are_broken(swap):
+    o = {m: "failed" for m in swap.FIXED}
+    o["real"] = "passed"
+    o[swap.FIXED[-1]] = "duplicate"
+    reach = {m: {"lines": 1} for m in swap.FIXED}
+    verdict, why = swap._verdict(o, [], reach, [])
+    assert verdict == "broken"
+    assert why == "duplicate test id in the junit report"
