@@ -3449,3 +3449,70 @@ def test_an_expected_failure_that_reached_its_check_still_ran(
     assert r.returncode == 0, r.stdout + r.stderr
     check = _run_check(root, record)
     assert check.returncode == 0, check.stdout + check.stderr
+
+
+# --- an xfail mark cannot switch strictness off for one test --------------------
+# pytest.ini sets xfail_strict = true, but a mark's own strict= wins over it, so a
+# test marked strict=False that passes stays green under its xfail.
+
+_LOOSE_XFAIL = {
+    "decorator-false": "@pytest.mark.xfail(strict=False, reason='x')\n"
+    "def test_zqxwvk():\n    assert True\n",
+    "decorator-falsy-constant": "@pytest.mark.xfail(strict=0, reason='x')\n"
+    "def test_zqxwvk():\n    assert True\n",
+    "decorator-name": "LOOSE = False\n\n@pytest.mark.xfail(strict=LOOSE, reason='x')\n"
+    "def test_zqxwvk():\n    assert True\n",
+    "decorator-splat": "KW = {'strict': False}\n\n@pytest.mark.xfail(reason='x', **KW)\n"
+    "def test_zqxwvk():\n    assert True\n",
+    "module-mark": "pytestmark = pytest.mark.xfail(strict=False, reason='x')\n\n"
+    "def test_zqxwvk():\n    assert True\n",
+    "param-mark": "@pytest.mark.parametrize('v', [pytest.param(1, "
+    "marks=pytest.mark.xfail(strict=False, reason='x'))])\n"
+    "def test_zqxwvk(v):\n    assert v\n",
+    "applied-at-run-time": "def test_zqxwvk(request):\n"
+    "    request.applymarker(pytest.mark.xfail(strict=False, reason='x'))\n"
+    "    assert True\n",
+    "with-args": "@pytest.mark.xfail.with_args(strict=False, reason='x')\n"
+    "def test_zqxwvk():\n    assert True\n",
+    "mark-alias": "from pytest import mark as zqxwvk_mark\n\n"
+    "@zqxwvk_mark.xfail(strict=False, reason='x')\ndef test_zqxwvk():\n    assert True\n",
+    "bound-alias": "LOOSE = pytest.mark.xfail\n\n@LOOSE(strict=False, reason='x')\n"
+    "def test_zqxwvk():\n    assert True\n",
+}
+
+
+@pytest.mark.parametrize("case", sorted(_LOOSE_XFAIL))
+def test_an_xfail_mark_that_is_not_strict_is_a_violation(
+    tmp_path: Path, case: str
+) -> None:
+    root = _copy_tree(tmp_path)
+    rel = "tests/test_zqxwvk.py"
+    (root / rel).write_text("import pytest\n\n" + _LOOSE_XFAIL[case], encoding="utf-8")
+    found = _repin(root)
+    assert any(f"{rel}: an xfail mark sets strict" in f for f in found), found
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            "@pytest.mark.xfail(strict=True, reason='x')\n"
+            "def test_zqxwvk():\n    assert False\n",
+            id="strict-true",
+        ),
+        pytest.param(
+            "@pytest.mark.xfail(reason='x')\ndef test_zqxwvk():\n    assert False\n",
+            id="strict-from-the-ini",
+        ),
+        pytest.param(
+            "def test_zqxwvk():\n    assert list(zip([1], [2], strict=False))\n",
+            id="strict-of-another-call",
+        ),
+    ],
+)
+def test_a_strict_xfail_mark_is_not_a_violation(tmp_path: Path, text: str) -> None:
+    root = _copy_tree(tmp_path)
+    rel = "tests/test_zqxwvk.py"
+    (root / rel).write_text("import pytest\n\n" + text, encoding="utf-8")
+    found = _repin(root)
+    assert not any("an xfail mark sets strict" in f for f in found), found
