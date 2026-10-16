@@ -35,6 +35,7 @@ does not exist here, not because it is listed.
 
 from __future__ import annotations
 
+import ast
 import codecs
 import hashlib
 import html
@@ -66,7 +67,10 @@ _FORGES = ("gitlab.com", "bitbucket.org", "codeberg.org", "git.sr.ht", "gitea.co
 # confusables.txt 18.0.0 (UTS #39, (c) Unicode, Inc., Unicode License v3) whose
 # skeleton is one of those letters, as isolation-layer's public surface scan
 # folds them (its capital-I look-alikes fold to I), less the code points NFKC
-# already turns into ASCII. A test pins the list.
+# already turns into ASCII. A test pins the list. The upstream file: Version
+# 18.0.0, Date 2026-08-06, sha256
+# 6ed3ee967c9dfdf6677d563c9985182fbc50a2efb7d6059cd57b2e2ce18f5b92; it rebuilds
+# isolation-layer's 1,582-pair table exactly.
 _FOLDER_CONFUSABLES = (
     "A1:i FE:p 131:i 196:I 1A6:R 1BD:s 1BF:p 1C0:I 1DD:e 24C:R 268:i 269:i "
     "26A:i 27D:r 27E:r 280:r 395:E 399:I 3A1:P 3A4:T 3B5:e 3B9:i 3C1:p 3F1:p "
@@ -103,9 +107,8 @@ _FOLD = str.maketrans(
 # part becomes this marker, which no checkout path can hold (it starts with ..).
 _RUNTIME = "../runtime"
 _FOLDER = "rece" + "ipts"
-_JOIN_CALL = re.compile(
-    r"(?:(?:os\.path|posixpath|ntpath)\.join|\.joinpath)\(((?:[^()]|\([^()]*\))*)\)"
-)
+_JOIN_HEAD = re.compile(r"(?:(?:os\.path|posixpath|ntpath)\.join|\.joinpath)\(")
+_PATH_JOIN_HEAD = re.compile(r"((?:os\.path|posixpath|ntpath)\.join)\(")
 # A Path "/" operator, or a "+", whose left operand is a name, attribute, call,
 # subscript or anything closed by a bracket, and whose right operand is a
 # literal that reaches the folder name.
@@ -121,19 +124,56 @@ _LITERAL_PLUS = re.compile(r"""(["'])\s*\+\s*(["'])""")
 _PREFIX = re.compile(r"""(?<![\w"'])[rRbBuUfF]{1,2}(?=["'])""")
 _BRACKETED = re.compile(r"""(?<![\w)\]])\(\s*((["'])[^"'\n]*\2)\s*\)""")
 _LITERAL_SLASH = re.compile(r"""(["'])([^"'\n]*)\1\s*/\s*(["'])([^"'\n]*)\3""")
-_PATH_JOIN = re.compile(
-    r"((?:os\.path|posixpath|ntpath)\.join)\(((?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)"
-)
+
+
+def _close(text: str, start: int) -> int | None:
+    """Index of the bracket that closes the one opened just before start, read
+    at any depth and past brackets inside string literals."""
+    depth, quote, i = 1, "", start
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 1
+            elif ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def _sub_calls(text: str, head: re.Pattern[str], fn) -> str:
+    """Each call whose opening matches head replaced by fn(match, arguments),
+    the innermost first, so a call nested at any depth is read whole. Calls are
+    taken right to left, so a replacement never moves a call still to come."""
+    for m in reversed(list(head.finditer(text))):
+        end = _close(text, m.end())
+        if end is not None:
+            text = text[: m.start()] + fn(m, text[m.end() : end]) + text[end + 1 :]
+    return text
+
 
 # A left operand anchored to this checkout: this file's own path (Path(__file__)
-# or os.path.dirname of it, with .resolve(), .parent and .parents[n]), ROOT, or
-# a name the same file binds once to one of those. Its literal tail is judged
-# against ROOT the way any relative path is; an anchor that climbs above the
-# checkout is a runtime value.
-_FILE_ANCHOR = (
-    r"(?:Path\(\s*__file__\s*\)|(?:os\.path\.(?:dirname|abspath|realpath)\(\s*)+"
-    r"__file__\s*\)+)(?:\.resolve\(\)|\.absolute\(\)|\.parent\b|\.parents\[\d+\])*"
-)
+# or os.path.dirname of it, with .resolve(), .parent and .parents[n]), or a name
+# the same file binds exactly once, as NAME = <anchor>, counting every binding
+# form. Its literal tail is judged against ROOT the way any relative path is; an
+# anchor that climbs above the checkout is a runtime value. This file's own path
+# counts only while the file never binds __file__, and Path or os only while
+# each is bound once, by its import.
+_PATH_ANCHOR = r"Path\(\s*__file__\s*\)"
+_OS_ANCHOR = r"(?:os\.path\.(?:dirname|abspath|realpath)\(\s*)+__file__\s*\)+"
+_STEPS = r"(?:\.resolve\(\)|\.absolute\(\)|\.parent\b|\.parents\[\d+\])*"
+# Keys in a names table that are not names: which spellings of this file's own
+# path may be trusted.
+_TRUST_PATH, _TRUST_OS = "<Path>", "<os>"
+_LINE_TRUST: dict[str, str | None] = {_TRUST_PATH: "", _TRUST_OS: ""}
 _DEFAULT_REL = "tests/test_x.py"
 _OUTSIDE = "outside_checkout"
 
@@ -148,9 +188,19 @@ def _anchor_tail(expr: str, rel: str) -> str | None:
     return "" if level >= 0 else None
 
 
-def _anchors(names: dict[str, str | None]) -> re.Pattern[str]:
-    alts = [_FILE_ANCHOR] + [rf"\b{re.escape(n)}\b(?![\w.(\[])" for n in names]
-    return re.compile("(" + "|".join(alts) + ")")
+def _anchors(
+    names: dict[str, str | None], before_call: bool = False
+) -> re.Pattern[str]:
+    """Every anchor spelling the table trusts. A name followed by an attribute
+    is not an anchor, except before .joinpath (before_call)."""
+    alts = []
+    if _TRUST_PATH in names:
+        alts.append(_PATH_ANCHOR + _STEPS)
+    if _TRUST_OS in names:
+        alts.append(_OS_ANCHOR + _STEPS)
+    after = r"(?![\w(\[])" if before_call else r"(?![\w.(\[])"
+    alts += [rf"\b{re.escape(n)}\b{after}" for n in names if not n.startswith("<")]
+    return re.compile("(" + "|".join(alts or ["(?!)"]) + ")")
 
 
 def _resolve(expr: str, names: dict[str, str | None], rel: str) -> str | None:
@@ -174,9 +224,9 @@ def _anchored(text: str, names: dict[str, str | None], rel: str) -> str:
             return _OUTSIDE + ".joinpath("
         return f'os.path.join("{tail}", ' if tail else "os.path.join("
 
-    def join_args(m: re.Match[str]) -> str:
+    def join_args(m: re.Match[str], inner: str) -> str:
         kept = []
-        for arg in _args(m.group(2)):
+        for arg in _args(inner):
             if rx.fullmatch(arg):
                 tail = _resolve(arg, names, rel)
                 if tail is None:
@@ -188,53 +238,130 @@ def _anchored(text: str, names: dict[str, str | None], rel: str) -> str:
         return m.group(1) + "(" + ", ".join(kept) + ")"
 
     text = re.sub(rx.pattern + r"(\s*/\s*)(?=[\"'])", slash, text)
-    text = re.sub(rx.pattern + r"\.joinpath\(", joinpath, text)
-    return _PATH_JOIN.sub(join_args, text)
+    text = re.sub(
+        _anchors(names, before_call=True).pattern + r"\.joinpath\(", joinpath, text
+    )
+    return _sub_calls(text, _PATH_JOIN_HEAD, join_args)
 
 
-_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*)\s*(?::[^=]*)?=(?!=)\s*(.*?)\s*$")
-# Any place a name is bound: assignment and annotation, walrus, for and with
-# targets, imports, global and nonlocal, def and class.
-_BOUND = re.compile(
-    r"(?:^|[;,(]|\bfor|\bas|\bglobal|\bnonlocal|\bdef|\bclass|\bimport)\s*"
-    r"([A-Za-z_]\w*)\s*(?::[^=\n]*)?(?:=(?!=)|:=|\bin\b|[,)(:]|$)"
-)
 _TAIL = re.compile(r"""\s*/\s*["']([^"']*)["']""")
 
 
-def _bindings(text: str, rel: str) -> dict[str, str | None]:
-    """Names the file binds exactly once, by plain assignment, to an anchored
-    path and an optional literal tail, mapped to that tail (None above the
-    checkout). ROOT is the checkout root unless the file binds it otherwise."""
-    lines = [_plain(line) for line in text.split("\n")]
+def _binding_counts(tree: ast.AST) -> dict[str, int] | None:
+    """How many times the file binds each name, in every form: an assignment,
+    annotation, augmented assignment, unpacking, walrus, for or with target,
+    delete, import or from-import, parameter (positional, keyword-only, star or
+    lambda), def or class, global or nonlocal, except or match capture, and a
+    globals(), vars() or locals() store. None when such a store's key cannot be
+    read, since it may bind any name."""
     count: dict[str, int] = {}
-    for line in lines:
-        for name in _BOUND.findall(line):
-            count[name] = count.get(name, 0) + 1
-    names: dict[str, str | None] = {"ROOT": ""}
+
+    def add(name: str) -> None:
+        count[name] = count.get(name, 0) + 1
+
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            add(n.id)
+        elif isinstance(n, ast.alias):
+            add((n.asname or n.name).split(".")[0])
+        elif isinstance(n, ast.arg):
+            add(n.arg)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            add(n.name)
+        elif isinstance(n, (ast.Global, ast.Nonlocal)):
+            for name in n.names:
+                add(name)
+        elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
+            add(n.name)
+        elif isinstance(n, ast.MatchMapping) and n.rest:
+            add(n.rest)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            add(n.name)
+        elif (
+            isinstance(n, ast.Subscript)
+            and isinstance(n.ctx, (ast.Store, ast.Del))
+            and isinstance(n.value, ast.Call)
+            and isinstance(n.value.func, ast.Name)
+            and n.value.func.id in ("globals", "vars", "locals")
+        ):
+            key = n.slice
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                return None
+            add(key.value)
+    return count
+
+
+def _imported_once(
+    tree: ast.AST, count: dict[str, int], name: str, module: str
+) -> bool:
+    """name is bound once in the file, by importing it from module (or, for a
+    module, by importing the module itself)."""
+    if count.get(name) != 1:
+        return False
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom) and n.module == module and not n.level:
+            if any(a.name == name and (a.asname or a.name) == name for a in n.names):
+                return True
+        if isinstance(n, ast.Import) and name == module:
+            if any(a.name == module and not a.asname for a in n.names):
+                return True
+    return False
+
+
+def _bindings(text: str, rel: str) -> dict[str, str | None]:
+    """The anchors a Python file can be trusted with: this file's own path
+    spellings, and the names it binds exactly once, as NAME = <anchor> plus an
+    optional literal tail, mapped to that tail (None above the checkout). Any
+    other file, or one that does not parse, trusts none."""
+    if not rel.endswith(".py"):
+        return {}
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return {}
+    count = _binding_counts(tree)
+    if count is None or count.get("__file__"):
+        return {}
+    names: dict[str, str | None] = {}
+    if _imported_once(tree, count, "Path", "pathlib"):
+        names[_TRUST_PATH] = ""
+    if _imported_once(tree, count, "os", "os"):
+        names[_TRUST_OS] = ""
+    plain = [
+        (n.targets[0] if isinstance(n, ast.Assign) else n.target, n.value)
+        for n in ast.walk(tree)
+        if (
+            isinstance(n, ast.Assign)
+            and len(n.targets) == 1
+            and isinstance(n.targets[0], ast.Name)
+        )
+        or (
+            isinstance(n, ast.AnnAssign)
+            and n.value is not None
+            and isinstance(n.target, ast.Name)
+        )
+    ]
+    plain = [(t.id, v) for t, v in plain if count.get(t.id) == 1]
     for _ in range(5):
         changed = False
         rx = _anchors(names)
-        for line in lines:
-            m = _ASSIGN.match(line)
-            if not m:
+        for name, value in plain:
+            if name in names:
                 continue
-            name, rhs = m.groups()
+            rhs = _plain(ast.get_source_segment(text, value) or "")
             head = rx.match(rhs)
-            rest = rhs[head.end() :] if head else rhs
-            once = count.get(name, 0) == 1
-            only_literals = "".join(m.group(0) for m in _TAIL.finditer(rest)) == rest
-            if head is None or not once or not only_literals:
-                if name in names:
-                    del names[name]
-                    changed = True
+            if head is None:
+                continue
+            rest = rhs[head.end() :]
+            if "".join(m.group(0) for m in _TAIL.finditer(rest)) != rest:
                 continue
             base = _resolve(head.group(1), names, rel)
-            parts = [base, *_TAIL.findall(rest)] if base is not None else None
-            tail = None if parts is None else "/".join(x for x in parts if x)
-            if names.get(name, "?") != tail:
-                names[name] = tail
-                changed = True
+            names[name] = (
+                None
+                if base is None
+                else "/".join(x for x in [base, *_TAIL.findall(rest)] if x)
+            )
+            changed = True
         if not changed:
             break
     return names
@@ -259,9 +386,9 @@ def _args(text: str) -> list[str]:
     return [a.strip() for a in [*out, cur] if a.strip()]
 
 
-def _joined(match: re.Match[str]) -> str:
+def _joined(match: re.Match[str], inner: str) -> str:
     parts = [_RUNTIME] if match.group(0).startswith(".joinpath") else []
-    for arg in _args(match.group(1)):
+    for arg in _args(inner):
         literal = _LITERAL.fullmatch(arg)
         parts.append(literal.group(1) if literal else _RUNTIME)
     return '"' + "/".join(parts) + '"'
@@ -299,7 +426,7 @@ def _visible(text: str) -> str:
 def _decoded(
     line: str, names: dict[str, str | None] | None = None, rel: str = _DEFAULT_REL
 ) -> str:
-    names = {"ROOT": ""} if names is None else names
+    names = _LINE_TRUST if names is None else names
     text = line
     for _ in range(6):
         nxt = html.unescape(unquote(text.replace("\\/", "/")))
@@ -312,7 +439,7 @@ def _decoded(
         while (collapsed := _LITERAL_SLASH.sub(r'"\2/\4"', nxt)) != nxt:
             nxt = collapsed
         nxt = _RUNTIME_LEFT.sub(lambda m: m.group(1) + _RUNTIME + "/", nxt)
-        nxt = _LITERAL_PLUS.sub("", _JOIN_CALL.sub(_joined, nxt))
+        nxt = _LITERAL_PLUS.sub("", _sub_calls(nxt, _JOIN_HEAD, _joined))
         if nxt == text:
             break
         text = nxt
@@ -802,7 +929,6 @@ _ANCHORED_HOME = [
     ),
     pytest.param(f'Path(__file__).parents[1] / "{_R}" / "X.md"', id="file-parents"),
     pytest.param(f'Path(__file__).resolve().parent / "{_R}"', id="file-resolve-parent"),
-    pytest.param(f'ROOT / "{_R}" / "x.md"', id="root"),
     pytest.param(
         f'os.path.join(os.path.dirname(__file__), "{_R}", "y.md")',
         id="join-dirname-file",
@@ -820,6 +946,7 @@ def test_a_path_anchored_to_this_checkout_is_home(line: str) -> None:
 
 def test_a_name_bound_to_this_checkout_in_the_same_file_is_home() -> None:
     text = (
+        "from pathlib import Path\n"
         "HERE = Path(__file__).resolve().parents[1]\n"
         "TOP: Path = HERE\n"
         f"a = HERE / '{_R}' / 'y.md'\n"
@@ -830,6 +957,7 @@ def test_a_name_bound_to_this_checkout_in_the_same_file_is_home() -> None:
 
 def test_a_bound_name_keeps_its_tail_and_a_rebound_name_is_not_an_anchor() -> None:
     text = (
+        "from pathlib import Path\n"
         "HERE = Path(__file__).resolve().parents[1]\n"
         "DOCS = HERE / 'docs'\n"
         f"a = DOCS / '{_R}'\n"
@@ -843,7 +971,7 @@ def test_a_bound_name_keeps_its_tail_and_a_rebound_name_is_not_an_anchor() -> No
         "with mount() as OPENED:\n"
         f"    d = OPENED / '{_R}'\n"
     )
-    assert _hits(text, "tests/test_zqxwvk.py") == [3, 6, 9, 12]
+    assert _hits(text, "tests/test_zqxwvk.py") == [4, 7, 10, 13]
 
 
 def test_a_name_bound_to_a_runtime_value_stays_foreign() -> None:
@@ -1028,3 +1156,17 @@ FOLDER_CONFUSABLE_PAIRS = 182
 FOLDER_CONFUSABLES_SHA256 = (
     "ab0abcd7b3b4811670700e74e0df9862ab6e2800bed3dceca752dc001e2fea1c"
 )
+
+
+def test_a_namespace_store_under_an_unread_key_trusts_no_anchor() -> None:
+    text = _ONCE + "globals()[name] = get_root()\n" + f"x = ROOT / '{_R}' / 'y.md'\n"
+    assert _hits(text, "tests/test_zqxwvk.py") == [5]
+
+
+def test_a_file_that_is_not_python_trusts_no_anchor() -> None:
+    text = _ONCE + f"x = ROOT / '{_R}' / 'y.md'\n"
+    assert _hits(text, "docs/notes.txt") == [4]
+
+
+def test_a_join_nested_in_a_join_is_read_from_the_inside() -> None:
+    assert not _foreign(f'os.path.join(os.path.join("."), "{_R}", "y.md")')
