@@ -5,7 +5,7 @@ A KAT that passes whatever the gate decides is not testing the gate. This
 copies the tree into a scratch folder once per column and runs each KAT file
 in every copy:
 
-  real     the tree as it is
+  real     the tree as it is, with the beacon wrapper added (decision logic unchanged)
   allow    Gate.evaluate replaced in the module file: every call is ALLOW
   deny     the same, every call is DENY
   invert   Gate.evaluate wrapped: the real decision with ALLOW and DENY
@@ -23,12 +23,14 @@ writes a row itself or another test in the same file reaches the gate.
 Verdict per test, exactly one:
 
   not-run  skipped under the real gate (a strict xfail, a skip mark)
-  broken   failed or errored under the real gate
+  broken   failed, errored or missing under the real gate, or a column wrote
+           no junit report, or a duplicate test id (one <module> row on no report)
   tamper   the gate module, an adapter, conftest.py or pytest.ini changed on
            disk during a run (each copy is restored before every run)
-  hollow   passed under the real gate, and a substitute column has no beacon
-           row, or the inverted gate did not fail it, or neither allow-all
-           nor deny-all failed it, or (with mutants) it killed no mutant
+  hollow   passed under the real gate, and the real column or a substitute
+           column has no beacon row, or the inverted gate did not fail it, or
+           neither allow-all nor deny-all failed it, or (with mutants) it
+           killed no mutant
   real     passed under the real gate and none of the above
 
 Only a reported test failure, from any exception in the test body, counts
@@ -47,13 +49,15 @@ that column. Stripping any column must turn real tests hollow.
 Known gaps (each can read real without testing the gate):
 - G1 beacon rows can be written by the test itself; reach is per file, not per test.
 - G2 the copy's column is detectable from its gate module (.kat-swap-gate, `_KAT_SWAP_MODE`, the mode string in the beacon call).
-- G3 only the root conftest.py and pytest.ini are hashed; a nested conftest hook can rewrite reports.
+- G3 only the root conftest.py and pytest.ini are hashed; a report hook added by a nested conftest, or registered mid-run from a test (request.config.pluginmanager.register), can rewrite reports.
 - G4 any failure under a column counts as a kill, so a test that fails for the wrong reason, or raises after the gate call, reads real; one such test kills every mutant and hides every uncovered branch.
 - G5 each column runs once; a test whose outcome varies gets an unstable verdict.
 - G6 not-run passes the run; a KAT file wholly skipped or of non-strict xfails exits 0.
 - G7 a test that relabels Verdict members reads as the relabel, not the gate.
 - G8 a test that reads the gate module and branches on what it finds.
 - G9 a branch no KAT reaches is listed, not failed (--strict-branches fails it).
+
+Advisory only: kat-swap must not become a required check until G1, G2, G3 and G4 are fixed, because until then a hollow KAT can read real.
 
 Usage: python -I scripts/kat_swap.py [--only FILE ...] [--strip MODE ...]
        [--no-mutants] [--strict-branches] [--json OUT]
