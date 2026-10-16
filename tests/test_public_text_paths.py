@@ -943,6 +943,87 @@ def test_the_fold_covers_every_confusable_of_the_folder_letters() -> None:
     assert missing == []
 
 
+# --- an anchor name is trusted only when the file binds it exactly once, as
+# --- NAME = <anchor>, counting every binding form Python has ------------------
+
+_ONCE = "from pathlib import Path\n\nROOT = Path(__file__).resolve().parents[1]\n"
+
+_REBINDS = {
+    "from-import": "from elsewhere import ROOT\n",
+    "import-as": "import elsewhere as ROOT\n",
+    "parameter": "def f(ROOT):\n    pass\n",
+    "parameter-with-default": "def f(ROOT=None):\n    pass\n",
+    "keyword-only-parameter": "def f(*, ROOT=None):\n    pass\n",
+    "lambda-parameter": "g = lambda ROOT: ROOT\n",
+    "for-target": "for ROOT in dirs:\n    pass\n",
+    "with-as": "with mount() as ROOT:\n    pass\n",
+    "walrus": "if (ROOT := get_root()):\n    pass\n",
+    "tuple-unpacking": "ROOT, other = get_root(), 1\n",
+    "augmented-assignment": "ROOT /= '..'\n",
+    "globals-store": "globals()['ROOT'] = get_root()\n",
+    "match-capture": "match get_root():\n    case ROOT:\n        pass\n",
+    "except-as": "try:\n    pass\nexcept Exception as ROOT:\n    pass\n",
+    "delete": "del ROOT\n",
+    "def-name": "def ROOT():\n    pass\n",
+    "second-assignment": "ROOT = get_root()\n",
+}
+
+
+@pytest.mark.parametrize("form", sorted(_REBINDS))
+def test_an_anchor_bound_more_than_once_in_any_form_is_not_trusted(form: str) -> None:
+    text = _ONCE + _REBINDS[form] + f"x = ROOT / '{_R}' / 'y.md'\n"
+    last = text.count("\n")
+    assert last in _hits(text, "tests/test_zqxwvk.py")
+
+
+def test_a_parameter_that_shadows_a_once_bound_anchor_is_not_trusted() -> None:
+    text = _ONCE + f"def f(ROOT):\n    return ROOT / '{_R}'\n"
+    assert _hits(text, "tests/test_zqxwvk.py") != []
+
+
+def test_an_unbound_root_is_not_trusted() -> None:
+    assert _hits(f"x = ROOT / '{_R}' / 'y.md'\n", "tests/test_zqxwvk.py") == [1]
+
+
+def test_a_rebound_path_or_file_name_is_not_an_anchor() -> None:
+    line = f"x = Path(__file__).parent / '{_R}'\n"
+    assert _hits("Path = get_path()\n" + line, "tests/test_zqxwvk.py") == [2]
+    text = "from pathlib import Path\n__file__ = get_path()\n" + line
+    assert _hits(text, "tests/test_zqxwvk.py") == [3]
+
+
+def test_an_anchor_bound_exactly_once_is_home() -> None:
+    text = (
+        _ONCE
+        + "HERE = ROOT / 'tests'\n"
+        + f"x = ROOT / '{_R}' / 'y.md'\n"
+        + f"y = ROOT.joinpath('{_R}', 'y.md')\n"
+        + f"z = Path(__file__).parents[1] / '{_R}'\n"
+    )
+    assert _hits(text, "tests/test_zqxwvk.py") == []
+
+
+# --- nested calls are read to their matching bracket, at any depth -------------
+
+_DIRNAME3 = "os.path.dirname(os.path.dirname(os.path.dirname(__file__)))"
+_DIRNAME2 = "os.path.dirname(os.path.dirname(__file__))"
+
+
+def test_three_nested_dirnames_climb_out_of_the_checkout() -> None:
+    text = f"import os\n\nx = os.path.join({_DIRNAME3}, '{_R}', 'y.md')\n"
+    assert _hits(text, "tests/test_zqxwvk.py") == [3]
+
+
+def test_two_nested_dirnames_stay_in_the_checkout() -> None:
+    text = f"import os\n\nx = os.path.join({_DIRNAME2}, '{_R}', 'y.md')\n"
+    assert _hits(text, "tests/test_zqxwvk.py") == []
+
+
+def test_a_runtime_argument_nested_three_deep_is_still_runtime() -> None:
+    assert _foreign(f"os.path.join(f(g(h(x))), '{_R}', 'y.md')")
+    assert _foreign(f"root.joinpath(f(g(h(x))), '{_R}')")
+
+
 FOLDER_CONFUSABLE_PAIRS = 182
 FOLDER_CONFUSABLES_SHA256 = (
     "ab0abcd7b3b4811670700e74e0df9862ab6e2800bed3dceca752dc001e2fea1c"
