@@ -3411,12 +3411,38 @@ _STILL_RAN = {
 }
 
 
+# A raise statement in another module is the code under test raising.
+def test_a_test_that_fails_outright_still_ran(tmp_path: Path) -> None:
+    module = "def test_zqxwvk():\n    raise ValueError('x')\n"
+    root = _pytest_tree(
+        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": module}
+    )
+    record = tmp_path / "run.json"
+    assert _run_pytest(root, record).returncode == 1
+    check = _run_check(root, record)
+    assert "exit status 1" in check.stdout, check.stdout
+    assert "no test in it ran" not in check.stdout, check.stdout
+
+
+_CODE_UNDER_TEST = "def zqxwvk_check():\n    raise ValueError('x')\n"
+_STILL_RAN["raises-mark-matched-by-a-raise-in-another-module"] = (
+    "import pytest\nfrom zqxwvk_code import zqxwvk_check\n\n"
+    "@pytest.mark.xfail(raises=ValueError, strict=True, reason='x')\n"
+    "def test_zqxwvk():\n    zqxwvk_check()\n"
+)
+
+
 @pytest.mark.parametrize("case", sorted(_STILL_RAN))
 def test_an_expected_failure_that_reached_its_check_still_ran(
     tmp_path: Path, case: str
 ) -> None:
     root = _pytest_tree(
-        tmp_path, {"tests/test_a.py": _PASSING, "tests/test_b.py": _STILL_RAN[case]}
+        tmp_path,
+        {
+            "tests/test_a.py": _PASSING,
+            "tests/test_b.py": _STILL_RAN[case],
+            "tests/zqxwvk_code.py": _CODE_UNDER_TEST,
+        },
     )
     record = tmp_path / "run.json"
     r = _run_pytest(root, record)

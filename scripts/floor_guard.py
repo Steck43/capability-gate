@@ -118,7 +118,7 @@ GUARD_GLOBS = (
 # plugin that registers during collection and writes the run record. Changing
 # it is a change to this file, which base pins catch.
 FLOOR_CONFTEST_SHA256 = (
-    "a709e973d51742df2d3c4429f666ff51fecd3774cdfa28f1cacb735680c8cc0f"
+    "45795ef6e04b4e937e4485d270a60bed18041759be8541af5205921752f8d986"
 )
 
 ALLOWED_COMMANDS = frozenset(
