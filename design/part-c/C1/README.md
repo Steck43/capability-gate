@@ -2,9 +2,9 @@
 
 Target roof: `capability-gate`. Hermes source pin: `ccd8deaa67`.
 
-State: SCAFFOLD. This branch reserves C1 without implementing or measuring it.
-The exact acceptance criterion remains owned by the Paper Master Plan, which
-this branch does not edit or paraphrase into a new requirement.
+State: IMPLEMENTED IN THE GATE ROOF. `open_authorized_read` binds policy
+evaluation and the host action to one Linux file descriptor. The pinned Hermes
+host does not consume that primitive yet, so this is not a live-runtime claim.
 
 ## Pre-code contract
 
@@ -15,9 +15,13 @@ this branch does not edit or paraphrase into a new requirement.
 
 ## Dependency
 
-No gate decision-path code changes here. If C1 later changes that path, its PR
-must be the dependency base for any simultaneous Part C decision-path work.
+Hermes `ccd8deaa6705bd6ca1890584d8f4055fe61227b5` still resolves a name in
+`read_file_tool`, then passes that name to `ShellFileOperations.read_file`.
+Host integration must consume `open_authorized_read.stream` instead of
+reopening the request path.
 
 ## NOT measured
 
-No runtime, benchmark, Hermes, box, judge, B7, Zenodo, release, or tag action.
+The CI scaffold runs 100 deterministic swaps. The 10,000-iteration T-ADV-04
+campaign, live Hermes integration, box, judge, B7, Zenodo, release, and tag
+actions remain unmeasured.

@@ -66,7 +66,7 @@
     },
     {
       "path": "scripts/floor_guard.py",
-      "sha256": "02ed2c64dc5fac46c6f25f6720171cce6769ed71fc9c79382c67bef000be58aa"
+      "sha256": "840bff73559d7136704dfee8b108d379692985cc2956726a5fb026e36a659cd4"
     },
     {
       "path": "scripts/kat_lint.py",
