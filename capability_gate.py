@@ -593,8 +593,10 @@ def _glob_to_regex(glob: str) -> re.Pattern:
         else:
             out.append(re.escape(c))
         i += 1
-    out.append("$")
-    return re.compile("".join(out))
+    # \Z, not $: $ also matches before a final newline, and a POSIX name can
+    # end in one. DOTALL lets ** cross a newline inside a name too.
+    out.append(r"\Z")
+    return re.compile("".join(out), re.DOTALL)
 
 
 def _real_glob(glob: str) -> str:

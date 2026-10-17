@@ -58,7 +58,7 @@
     },
     {
       "path": "requirements-ci.lock",
-      "sha256": "20a6896f87d24cbff404229424daefb467439df5cd9c9a6a86bdd847c4de1c21"
+      "sha256": "c77230216f03a4ff43fa1d7fc71126fea651bf9cdef102dfc82b07508668d930"
     },
     {
       "path": "ruff.toml",
