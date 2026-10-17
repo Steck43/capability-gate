@@ -1815,6 +1815,8 @@ NOQA_INVENTORY: dict[str, int] = {
     "tests/test_floor_fixes.py:E402": 1,
     "tests/test_gate_boundary.py:E402": 1,
     "tests/test_gate_files.py:E402": 1,
+    "tests/test_glob_regex.py:E402": 1,
+    "tests/test_glob_separators.py:E402": 1,
     "tests/test_halt_marker.py:E402": 1,
     "tests/test_harness_tally.py:E402": 1,
     "tests/test_hook_behavior.py:E402": 1,
