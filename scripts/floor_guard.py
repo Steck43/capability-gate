@@ -1820,6 +1820,7 @@ NOQA_INVENTORY: dict[str, int] = {
     "tests/test_hook_behavior.py:E402": 1,
     "tests/test_issue33_shapes.py:E402": 1,
     "tests/test_kill_switch.py:E402": 1,
+    "tests/test_path_escapes_hook.py:E402": 2,
     "tests/test_receipt_paths.py:E402": 1,
     "tests/test_s1_distinguish.py:E402": 2,
     "tests/test_secondary_path_key.py:E402": 1,
