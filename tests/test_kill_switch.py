@@ -200,7 +200,7 @@ def test_ks_paths_materialized_once_generator(gate, root):
     paths = (p for p in ["/etc/passwd"])
     d = gate.evaluate("writer", "write_file", paths)
     assert d.verdict is Verdict.DENY
-    assert "outside allowlist" in d.reason or "passwd" in d.reason
+    assert "outside allowlist" in d.reason
     assert d.paths == ("/etc/passwd",)
 
 
