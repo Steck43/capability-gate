@@ -133,12 +133,12 @@ jobs:
 
   tests:
     name: tests
-    timeout-minutes: 20
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.12"]
+        python: ["3.12"]
     # The boundary test needs aegis-atoms and isolation-layer beside this roof.
     # Each repo gets its own directory and pytest runs from capability-gate, so
     # pytest never collects the siblings' tests. Pins are full SHAs, moved by

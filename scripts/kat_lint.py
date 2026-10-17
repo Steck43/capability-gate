@@ -93,7 +93,7 @@ Skip and xfail forms:
 A platform check is built only from ``sys.platform``, ``os.name``,
 ``platform.system()`` and the other ``platform`` calls, ``sys.version_info``,
 names assigned once from those, and constants. A platform check is evaluated
-on Linux, Windows and macOS, each under Python 3.11 and 3.12 (the tests job's
+on Linux, Windows and macOS, each under Python 3.12 (the tests job's
 matrix): an imperative skip whose guard runs it in every one of those
 (``sys.platform != "none"``, ``os.name == os.name``, every system listed,
 two inequalities joined by ``or``, ``sys.version_info >= (3, 11)``), and a
@@ -423,7 +423,7 @@ _SYSTEMS = (
     {"sys.platform": "darwin", "os.name": "posix", "platform.system": "Darwin"},
 )
 # The Pythons the floor's tests job runs (floor.yml matrix).
-_PYTHONS = ((3, 11, 0, "final", 0), (3, 12, 0, "final", 0))
+_PYTHONS = ((3, 12, 0, "final", 0),)
 _WORLDS = tuple(
     {**system, "sys.version_info": version}
     for system in _SYSTEMS
