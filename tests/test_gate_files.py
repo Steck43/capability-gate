@@ -30,7 +30,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from grind01_util import (  # noqa: E402
+from grind01_util import (
     ROOF,
     blocked,
     hermes_home,

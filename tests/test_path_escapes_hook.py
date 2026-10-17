@@ -13,8 +13,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from grind01_util import blocked, hermes_home, load_adapter, register  # noqa: E402
-from test_path_escapes import (  # noqa: E402
+from grind01_util import blocked, hermes_home, load_adapter, register
+from test_path_escapes import (
     ESCAPE,
     IN_GRANT,
     _opened,

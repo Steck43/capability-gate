@@ -119,6 +119,7 @@ def main() -> int:
             [sys.executable, "-m", "pytest", *pytest_args],
             cwd=ROOF,
             env=env,
+            check=False,
         )
         return int(run.returncode)
     finally:

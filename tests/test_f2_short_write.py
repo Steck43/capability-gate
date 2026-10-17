@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
+
 from capability_gate import Gate, load_policy
 
 

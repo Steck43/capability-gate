@@ -18,8 +18,9 @@ ROOF = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOF))
 sys.path.insert(0, str(ROOF / "harness"))
 
-from capability_gate import ENFORCE, Gate, Verdict, load_policy  # noqa: E402
 from lab_insufficiency_harness import POLICY, _s1_symlink  # noqa: E402
+
+from capability_gate import ENFORCE, Gate, Verdict, load_policy  # noqa: E402
 
 
 def test_s1_denied_by_name_and_by_target(tmp_path: Path) -> None:

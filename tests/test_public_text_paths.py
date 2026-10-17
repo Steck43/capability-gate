@@ -472,9 +472,9 @@ def _foreign_url(prefix: str) -> bool | str:
     host = rest.split("/", 1)[0].lower()
     if "github" in host or any(host == f or host.endswith("." + f) for f in _FORGES):
         return True
-    if _FORGE_SHAPE.search("/" + rest.split("/", 1)[-1]):
-        return True  # a self-hosted forge: another repository
-    return False  # another web site: not a repository path
+    # A self-hosted forge is another repository; any other web site is not
+    # a repository path.
+    return bool(_FORGE_SHAPE.search("/" + rest.split("/", 1)[-1]))
 
 
 # A URL scheme or a drive letter with its colon, at the start of the prefix.

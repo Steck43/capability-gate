@@ -16,8 +16,9 @@ ROOF = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOF))
 sys.path.insert(0, str(ROOF / "harness"))
 
-from capability_gate import ENFORCE, Gate, Verdict, load_policy  # noqa: E402
 from lab_insufficiency_harness import POLICY  # noqa: E402
+
+from capability_gate import ENFORCE, Gate, Verdict, load_policy  # noqa: E402
 
 
 def _gate(tmp: Path, grant: Path) -> Gate:

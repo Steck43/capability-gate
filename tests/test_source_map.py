@@ -6,7 +6,6 @@ import ast
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_MAP = ROOT / "TEST-SOURCE-MAP.md"
 PAPER_TEST_ROW = re.compile(
