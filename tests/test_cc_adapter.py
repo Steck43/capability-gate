@@ -424,13 +424,15 @@ def test_never_emits_updated_input(tmp_path, project):
 
 
 @pytest.mark.skipif(
-    os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
-    reason="a read-only folder mode does not stop file creation on Windows or for root",
+    os.name == "nt",
+    reason="a read-only folder mode does not stop file creation on Windows",
 )
 def test_readonly_log_folder_blocks_or_throw_succeeds(tmp_path: Path, project: Path):
     # Once the log and its lock exist, a read-only log folder still lets appends
     # through but stops the kill switch marker from being created. The hook must
     # then deny, because an operator could no longer stop it.
+    if os.geteuid() == 0:
+        pytest.skip("a read-only folder mode does not stop file creation for root")
     root = project.as_posix()
     allow = _policy(
         tmp_path,

@@ -372,7 +372,8 @@ def test_ks_log_folder_and_ancestors_denied(tmp_path, thrown):
         }
     )
     g = Gate(policy, log_path=str(log))
-    g.evaluate("writer", "write_file", [str(tmp_path / "x.md")])
+    first = g.evaluate("writer", "write_file", [str(tmp_path / "x.md")])
+    assert first.verdict is Verdict.ALLOW
     if thrown:
         g.throw("drill")
     for target in (logs, tmp_path, log, str(log) + ".lock", str(log) + ".witness"):
