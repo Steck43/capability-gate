@@ -1,4 +1,4 @@
-# Hash-locked guardrail dependencies (Linux, CPython 3.11 and 3.12).
+# Hash-locked guardrail dependencies (Linux, CPython 3.12).
 # Install with: python -m pip install --require-hashes --no-deps -r requirements-ci.lock
 bashlex==0.18 \
     --hash=sha256:91d73a23a3e51711919c1c899083890cdecffc91d8c088942725ac13e9dcfffa

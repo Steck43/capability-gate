@@ -107,7 +107,7 @@ Known gaps, tracked and not closed by this PR:
   - a protected-jobs table pins each floor job's key, the check names it produces and text its steps must contain, so a renamed job, a decoy that takes a check name, or a protected key reused for a trivial step is caught, and a job missing from the table is a violation;
   - jobs keep only allowlisted conditions and no `needs`, run on `ubuntu-latest` with a 1 to 30 minute timeout and a matrix that expands to at least one run; step conditions and step environment (exact values) are allowlisted;
   - the floor workflow's triggers are exactly its pinned triggers, no workflow file may use a privileged trigger, and a workflow with any write permission may run only on push, dispatch, schedule or branch protection events;
-  - pytest takes only `-q`; every allowlisted script and `ruff` runs with its exact allowlisted arguments; the floor's top-level keys and concurrency are fixed, and every job's timeout is exactly its pinned value (10 minutes, 20 for `tests`), so no value is left to the pins alone;
+  - pytest takes only `-q`; every allowlisted script and `ruff` runs with its exact allowlisted arguments; the floor's top-level keys and concurrency are fixed, and every job's timeout is exactly 10 minutes, so no value is left to the pins alone;
   - python runs only the allowlisted guard scripts, `-m pytest` or `-m pip`; only `git show` may write into the temp directory; the script variables in the craft jobs may name only their listed scripts;
   - every lock entry is a version-pinned, hash-locked requirement; pytest config is only `pytest.ini` with its three allowed keys, strict xfail and SyntaxWarning as an error, a norecursedirs that cannot hide `tests`, and no `conftest.py` or pytest section elsewhere;
   - root and nested `sitecustomize.py`, `usercustomize.py` and `*.pth` files are pinned guard files.
@@ -160,7 +160,7 @@ Known gaps, tracked and not closed by this PR:
 - Adapter extracts every path argument. A notes path plus `target=/etc/passwd` is denied.
 
 ### Changed
-- The `tests` job's timeout is 20 minutes, pinned in `scripts/floor_guard.py` (`JOB_TIMEOUTS`); every other floor job stays at exactly 10. The full suite on Python 3.11 now runs past 10 minutes. `tests/test_floor_config.py` fails when the tests job goes back to 10.
+- The `tests` job runs on Python 3.12 only, the version the README names, and its timeout is back to the floor's 10 minutes, so every floor job is pinned at exactly 10 again. The full suite on Python 3.11 had run past 10 minutes. The floor guard protects the `tests (3.12)` check name, the KAT linter judges version guards under 3.12, and `tests/test_floor_config.py` fails when the matrix names another Python.
 - `tests/test_kill_switch.py` holds only tests that assert the gate's verdict. The log test and the tamper test now assert the verdicts they depend on (an allow before the throw, denies after it), and the double-throw test, which pins the marker and the THROWN row and asks the gate for no decision, moves to `tests/test_halt_marker.py`. `tests/test_verdict_asserts.py` fails when a test in the known-answer file asserts no gate verdict by identity. The fault-injection tests (an unreadable or locked marker) stay: they assert the deny the gate returns.
 
 - CI now pins `zizmorcore/zizmor-action` at v0.6.4 (`cc914d7`) so workflow analysis runs against the reviewed release while checkout credentials remain disabled.

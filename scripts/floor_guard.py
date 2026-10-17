@@ -291,7 +291,7 @@ PROTECTED_JOBS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "kat-lint": (("tests (known-answer tests call the gate)",), ()),
     "kat-swap": (("tests (KAT answers follow the gate, advisory)",), ()),
     "authorship": (("authorship (no AI trailers)",), ()),
-    "tests": (("tests (3.11)", "tests (3.12)"), ()),
+    "tests": (("tests (3.12)",), ()),
     "lint": (("lint (ruff)",), ()),
     "craft-voice": (("craft (voice)",), ()),
     "craft-changelog": (("craft (changelog)",), ()),
@@ -567,8 +567,6 @@ FLOOR_CONCURRENCY = {
     "cancel-in-progress": True,
 }
 JOB_TIMEOUT = 10
-# Jobs pinned to another timeout. The full suite on Python 3.11 runs past 10.
-JOB_TIMEOUTS = {"tests": 20}
 # pytest options a guardrail run may not add: they select, deselect, skip,
 # collect only, change config or root, disable plugins or relax xfail.
 PYTEST_OPTIONS = frozenset({"-q"})
@@ -1334,9 +1332,8 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
             and 1 <= timeout <= MAX_TIMEOUT
         ):
             found.append(f"{where}: timeout is not 1 to {MAX_TIMEOUT} minutes")
-        pinned = JOB_TIMEOUTS.get(key, JOB_TIMEOUT)
-        if timeout != pinned:
-            found.append(f"{where}: timeout is not the pinned {pinned} minutes")
+        if timeout != JOB_TIMEOUT:
+            found.append(f"{where}: timeout is not the pinned {JOB_TIMEOUT} minutes")
         if not _matrix_combos(job):
             found.append(f"{where}: matrix expands to no runs")
         if not shell_ok(((job.get("defaults") or {}).get("run") or {}).get("shell")):

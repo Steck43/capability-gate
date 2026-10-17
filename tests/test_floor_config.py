@@ -211,7 +211,7 @@ TAMPERS = [
     ),
     (
         "T1 matrix",
-        ('python: ["3.11", "3.12"]', 'python: ["3.12"]'),
+        ('python: ["3.12"]', 'python: ["3.13"]'),
         "check names are not",
         False,
     ),
@@ -1284,8 +1284,8 @@ RULE_TAMPERS = [
     (
         "matrix excludes every run",
         (
-            'python: ["3.11", "3.12"]',
-            'python: ["3.11"]\n        exclude:\n          - python: "3.11"',
+            'python: ["3.12"]',
+            'python: ["3.12"]\n        exclude:\n          - python: "3.12"',
         ),
         "job tests: matrix expands to no runs",
     ),
@@ -1916,14 +1916,6 @@ EXACT_TAMPERS = [
         ),
         "timeout is not the pinned 10 minutes",
         id="timeout-inside-the-range",
-    ),
-    pytest.param(
-        (
-            "    name: tests\n    timeout-minutes: 20\n",
-            "    name: tests\n    timeout-minutes: 10\n",
-        ),
-        "job tests: timeout is not the pinned 20 minutes",
-        id="tests-timeout-back-to-the-default",
     ),
 ]
 
