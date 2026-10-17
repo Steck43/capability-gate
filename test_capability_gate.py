@@ -403,7 +403,7 @@ def test_protected_env_and_aegis_paths_denied_inside_a_grant(tmp_path) -> None:
 
 
 def test_protected_symlink_and_hardlink_bypass_denied(tmp_path) -> None:
-    """Forseti #65: deny follows realpath (symlink) and shared inodes (hardlink)."""
+    """Independent review of #65: deny follows realpath (symlink) and shared inodes (hardlink)."""
     home = (tmp_path / "home").resolve()
     home.mkdir()
     (home / ".env").write_text("SECRET=1\n", encoding="utf-8")
