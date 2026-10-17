@@ -503,6 +503,42 @@ def _shared_hardlink(path: str) -> bool:
     return stat.S_ISREG(st.st_mode) and st.st_nlink > 1
 
 
+# A folder bigger than this is denied rather than vetted entry by entry.
+_TREE_VET_LIMIT = 50_000
+
+
+def _tree_escape(folder: str, globs: Sequence[str]) -> str | None:
+    """Why a folder a tool will walk reaches outside the grant, or None.
+
+    A search reads every file under the folder, so each entry must pass the
+    same checks a direct read does: its resolved path matches the grant (a
+    symlink, or a Windows junction the walk descends into, cannot point out),
+    and no regular file shares its inode through a hard link. Links are not
+    followed into folders; their own resolved path is checked. A walk error is
+    a deny, since the unvetted part could hold anything.
+    """
+    errors: list[OSError] = []
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(
+        folder, onerror=errors.append, followlinks=False
+    ):
+        for name in (*dirnames, *filenames):
+            seen += 1
+            if seen > _TREE_VET_LIMIT:
+                return (
+                    f"folder '{folder}' has more than {_TREE_VET_LIMIT} entries; "
+                    "too large to vet"
+                )
+            entry = os.path.join(dirpath, name)
+            if not _path_allowed(entry, globs):
+                return f"'{entry}' under '{folder}' resolves outside the grant"
+            if _shared_hardlink(entry):
+                return f"'{entry}' under '{folder}' has multiple hard links"
+    if errors:
+        return f"could not walk folder '{folder}', failing closed: {errors[0]!r}"
+    return None
+
+
 def _path_allowed(path: str, globs: Iterable[str]) -> bool:
     # Request paths are not expanded. The tool may expand "~" or "$VAR"
     # differently, or not at all, so the gate refuses to guess.
@@ -580,7 +616,12 @@ def _absolute(path: str, base_dir: str | None) -> str | None:
         return path
     if not base_dir or not os.path.isabs(base_dir):
         return None
-    return os.path.normpath(os.path.join(base_dir, path))
+    # Never normpath first: collapsing "link/.." as text names a different file
+    # than a POSIX open, which follows the link before "..". realpath on the
+    # folder part follows links in order; the last part stays as named so the
+    # checks after this still see a symlinked file as a symlink.
+    parent, name = os.path.split(os.path.join(base_dir, path))
+    return os.path.join(os.path.realpath(parent), name)
 
 
 def _decide(
@@ -646,6 +687,10 @@ def _decide(
                 tool,
                 ptuple,
             )
+        if os.path.isdir(p):
+            escape = _tree_escape(p, rule.path_globs)
+            if escape is not None:
+                return Decision(Verdict.DENY, escape, skill, tool, ptuple)
     if tool in policy.require_approval:
         return Decision(
             Verdict.ASK, f"tool '{tool}' requires human approval", skill, tool, ptuple
