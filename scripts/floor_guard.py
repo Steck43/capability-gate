@@ -1824,6 +1824,7 @@ NOQA_INVENTORY: dict[str, int] = {
     "tests/test_receipt_paths.py:E402": 1,
     "tests/test_s1_distinguish.py:E402": 2,
     "tests/test_secondary_path_key.py:E402": 1,
+    "tests/test_witness_tamper.py:E402": 1,
 }
 
 
