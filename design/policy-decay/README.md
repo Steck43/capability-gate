@@ -1,4 +1,4 @@
-# Policy decay — pre-code design (Forseti before implementation)
+# Policy decay: pre-code design (independent review before implementation)
 
 Hermes pin: `ccd8deaa67`. No production code in this folder.
 
@@ -56,7 +56,7 @@ own table). ASK and THROWN remain non-allow; decay does not convert them.
 
 ## Failing tests the implementation PR must commit first
 
-See `FAILING-TESTS.md`. Forseti reviews this design before any of those tests
+See `FAILING-TESTS.md`. Independent review covers this design before any of those tests
 are wired into roof pytest.
 
 ## NOT measured
