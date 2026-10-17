@@ -39,3 +39,8 @@ allowlist.yaml.bak-*
 
 # Per-folder token the gate writes beside its decision log
 .capability-gate-folder
+
+# Lock, witness and anchor files the gate writes beside any decision log
+*.jsonl.lock
+*.jsonl.witness
+*.jsonl.anchor
