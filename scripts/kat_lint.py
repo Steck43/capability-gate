@@ -692,10 +692,7 @@ def _bindings(scope: ast.AST, args: bool = True) -> dict[str, list[ast.expr | No
                 add(name, v)
         elif isinstance(n, ast.NamedExpr):
             add(n.target.id, n.value)
-        elif isinstance(n, ast.AugAssign):
-            for name, _ in _target_pairs(n.target, None):
-                add(name, None)
-        elif isinstance(n, (ast.For, ast.AsyncFor)):
+        elif isinstance(n, (ast.AugAssign, ast.For, ast.AsyncFor)):
             for name, _ in _target_pairs(n.target, None):
                 add(name, None)
         elif isinstance(n, ast.withitem) and n.optional_vars is not None:
@@ -2331,7 +2328,6 @@ class _File:
                     self.gate_target(f.value, typed) or self.gate_type(f.value, typed)
                 ):
                     return True
-                pass
             spelled = ast.unparse(f)
             resolved = {n or "" for n in self.names.resolve(f)}
             setter = (
@@ -2354,9 +2350,7 @@ class _File:
                 return parts[0] in REAL_ROOTS and len(parts) > 1
             if self.gate_target(target, typed):
                 return True
-            if self.real_module(target) and len(node.args) > 1:
-                return True
-            return False
+            return bool(self.real_module(target) and len(node.args) > 1)
         if isinstance(node, (ast.Assign, ast.Delete)):
             for t in node.targets:
                 for a in ast.walk(t):
@@ -3661,16 +3655,17 @@ def _uncaught_raise(f: _File, node: ast.Raise, fn) -> bool:
                 and _irrefutable(p.cases[0].pattern)
             ):
                 return False
-        elif isinstance(p, ast.ExceptHandler):
-            return False
         elif (
-            (isinstance(p, ast.Try) or type(p).__name__ == "TryStar")
-            and child in p.body
-            and any(_may_catch(f, h, raised) for h in p.handlers)
-        ):
-            return False
-        elif isinstance(p, (ast.With, ast.AsyncWith)) and any(
-            f.expected_exception(i) for i in p.items
+            isinstance(p, ast.ExceptHandler)
+            or (
+                (isinstance(p, ast.Try) or type(p).__name__ == "TryStar")
+                and child in p.body
+                and any(_may_catch(f, h, raised) for h in p.handlers)
+            )
+            or (
+                isinstance(p, (ast.With, ast.AsyncWith))
+                and any(f.expected_exception(i) for i in p.items)
+            )
         ):
             return False
         child = p
@@ -4066,9 +4061,9 @@ def _side_truth(f: _File, node: ast.AST, depth: int = 0) -> bool | None:
         kind, v = f.fold.fold(node, f.fold.at(node))
         if kind == "value":
             return bool(v)
-        if isinstance(node, ast.Compare) and isinstance(node.ops[0], ast.NotIn):
-            return False
-        return True
+        return not (
+            isinstance(node, ast.Compare) and isinstance(node.ops[0], ast.NotIn)
+        )
     kind, v = f.fold.fold(node, f.fold.at(node))
     return bool(v) if kind == "value" else None
 

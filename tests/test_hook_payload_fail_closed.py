@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from grind01_util import blocked, hermes_home, load_adapter, register  # noqa: E402
+from grind01_util import blocked, hermes_home, load_adapter, register
 
 ROOF = Path(__file__).resolve().parents[1]
 HOOK = ROOF / "adapters" / "claude_code_hook.py"

@@ -593,7 +593,7 @@ def register(ctx) -> None:
             # H1-1: a crashed check with no log line used to fail open in
             # observe. Block in both modes; observe still does not act on a
             # normal deny Decision, but an unrecorded exception is not that.
-            mode_e, unresolved_e = resolve_capability_gate_mode()
+            _mode_e, unresolved_e = resolve_capability_gate_mode()
             if unresolved_e:
                 _record_failclosed(
                     "enforce", tool_name, unresolved_e, kwargs, task_id, args
