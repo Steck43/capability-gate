@@ -3089,6 +3089,11 @@ def test_an_or_and_that_still_tests_the_answer_refused_by_the_answer_allowlist(
             id="cp1252-cookie",
         ),
         pytest.param(
+            b"# -*- coding: zqxwvk -*-\n" + _kat("").encode("utf-8"),
+            "declares a source encoding Python does not know",
+            id="unknown-cookie",
+        ),
+        pytest.param(
             _kat("").encode("utf-8") + b"\n# \xff\xfe\n",
             "is not valid UTF-8",
             id="invalid-bytes",
@@ -3111,6 +3116,22 @@ def test_a_utf8_cookie_stays_clean(tmp_path: Path) -> None:
     path = tmp_path / "tests" / "test_k_case.py"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"# -*- coding: utf-8 -*-\n" + _kat("").encode("utf-8"))
+    r = _lint(path)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize(
+    "cookie",
+    [
+        pytest.param(b"# -*- coding: utf-8 -*-\n", id="utf-8"),
+        pytest.param(b"# coding: utf8\n", id="utf8-alias"),
+        pytest.param(b"\xef\xbb\xbf", id="bom"),
+    ],
+)
+def test_a_utf8_source_stays_clean(tmp_path: Path, cookie: bytes) -> None:
+    path = tmp_path / "tests" / "test_k_case.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(cookie + _kat("").encode("utf-8"))
     r = _lint(path)
     assert r.returncode == 0, r.stdout + r.stderr
 
@@ -3167,6 +3188,7 @@ def test_a_folder_pytest_does_not_recurse_into_is_not_linted(tmp_path: Path) -> 
     )
     r = _lint("--root", root, "--require-kats")
     assert r.returncode == 0, r.stdout + r.stderr
+    assert "in 1 KAT file(s)" in r.stdout, r.stdout
 
 
 # --- review round on #101, group D: an early return, a reassigned result, the

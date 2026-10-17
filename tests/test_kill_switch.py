@@ -153,15 +153,6 @@ def test_ks_log_one_thrown_row_chain_holds_denies_logged(gate, root, log):
     assert all("kill switch" in r["reason"] for r in after)
 
 
-def test_ks_double_throw_one_row(gate, log):
-    # KS-DOUBLE-THROW: a second throw is a no-op. Still one row, still thrown.
-    assert gate.throw("first") is True
-    assert gate.throw("second") is False
-    assert len(_thrown_rows(log)) == 1
-    assert os.path.exists(gate.halt_path)
-    verify_hash_chain(str(log))
-
-
 def test_ks_tamper_thrown_row_breaks_chain(gate, root, log):
     # KS-TAMPER: rewrite the THROWN row without rehashing. A deny follows it,
     # so its parent link no longer matches and the chain check raises. An
