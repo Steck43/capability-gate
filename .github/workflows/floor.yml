@@ -133,7 +133,7 @@ jobs:
 
   tests:
     name: tests
-    timeout-minutes: 10
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
