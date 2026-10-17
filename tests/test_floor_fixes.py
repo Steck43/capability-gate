@@ -27,7 +27,13 @@ import pytest
 ROOF = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOF))
 
-from capability_gate import ENFORCE, Gate, Verdict, load_policy  # noqa: E402
+from capability_gate import (  # noqa: E402
+    ENFORCE,
+    Gate,
+    Verdict,
+    load_policy,
+    open_authorized_read,
+)
 
 
 def _adapter():
@@ -209,12 +215,7 @@ def test_hardlink_to_off_grant_inode_denied(tmp_path: Path) -> None:
     assert gate.evaluate("*", "read_file", [str(link)]).verdict is Verdict.DENY
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="OPEN: swap between check and open. The gate checks a path and the tool "
-    "opens it later by name; needs the host to open the checked object by fd "
-    "(open with O_NOFOLLOW once, then act through that fd).",
-)
+@pytest.mark.skipif(os.name != "posix", reason="open-by-fd uses Linux /proc identity")
 def test_swap_between_check_and_open_is_caught(tmp_path: Path) -> None:
     grant = _grant(tmp_path)
     target = grant / "notes.md"
@@ -222,12 +223,52 @@ def test_swap_between_check_and_open_is_caught(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     secret = outside / "id_rsa"
-    secret.write_text("x", encoding="utf-8")
+    secret.write_text("secret", encoding="utf-8")
     gate = _gate(tmp_path, _star_policy(grant))
-    decision = gate.evaluate("*", "read_file", [str(target)])
-    assert decision.verdict is Verdict.ALLOW
-    # The swap: after the check, before the tool opens the name it was given.
-    target.unlink()
-    _symlink(secret, target)
-    opened = Path(os.path.realpath(target))
-    assert opened.is_relative_to(grant), f"tool would open {opened}"
+    with open_authorized_read(gate, "*", str(target)) as opened:
+        assert opened.decision.verdict is Verdict.ALLOW
+        assert opened.stream is not None
+        # The host acts on this descriptor after the attacker swaps the name.
+        target.unlink()
+        _symlink(secret, target)
+        assert opened.stream.read() == "x"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="open-by-fd uses Linux /proc identity")
+def test_open_by_fd_refuses_existing_leaf_symlink(tmp_path: Path) -> None:
+    grant = _grant(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "id_rsa"
+    secret.write_text("secret", encoding="utf-8")
+    link = grant / "notes.md"
+    _symlink(secret, link)
+    gate = _gate(tmp_path, _star_policy(grant))
+    with open_authorized_read(gate, "*", str(link)) as opened:
+        assert opened.decision.verdict is Verdict.DENY
+        assert opened.stream is None
+
+
+@pytest.mark.skipif(os.name != "posix", reason="open-by-fd uses Linux /proc identity")
+def test_open_by_fd_authorizes_object_beyond_parent_symlink(tmp_path: Path) -> None:
+    grant = _grant(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "id_rsa"
+    secret.write_text("secret", encoding="utf-8")
+    _symlink(outside, grant / "docs")
+    gate = _gate(tmp_path, _star_policy(grant))
+    with open_authorized_read(gate, "*", str(grant / "docs" / "id_rsa")) as opened:
+        assert opened.decision.verdict is Verdict.DENY
+        assert opened.stream is None
+
+
+@pytest.mark.skipif(os.name == "posix", reason="non-POSIX fail-closed contract")
+def test_open_by_fd_denies_without_linux_identity(tmp_path: Path) -> None:
+    grant = _grant(tmp_path)
+    target = grant / "notes.md"
+    target.write_text("x", encoding="utf-8")
+    gate = _gate(tmp_path, _star_policy(grant))
+    with open_authorized_read(gate, "*", str(target)) as opened:
+        assert opened.decision.verdict is Verdict.DENY
+        assert opened.stream is None

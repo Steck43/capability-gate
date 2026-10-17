@@ -105,6 +105,22 @@ def test_read_inside_allowed(tmp_path, project):
     )  # allow is "no decision": Claude Code's own permissions still apply
 
 
+def test_live_hook_honors_kill_switch_across_invocations(tmp_path, project):
+    """C3: a halt marker blocks the next independently started live hook."""
+    env = _env(tmp_path, _policy(tmp_path, _grant_read(project)))
+    allowed = _call("Read", {"file_path": str(project / "notes" / "a.txt")}, project)
+    assert _run(allowed, env).returncode == 0
+
+    marker = Path(env["CG_CC_LOG"] + ".halt")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("operator halt\n", encoding="utf-8")
+
+    denied = _run(allowed, env)
+    assert _denied(denied)
+    assert "kill switch" in denied.stderr
+    assert marker.read_text(encoding="utf-8") == "operator halt\n"
+
+
 def test_write_outside_denied(tmp_path, project):
     env = _env(tmp_path, _policy(tmp_path, _grant_read(project)))
     r = _run(
@@ -421,3 +437,105 @@ def test_never_emits_updated_input(tmp_path, project):
         r = _run(_call(tool, ti, project), env)
         assert r.stdout == "", (tool, r.stdout)
         assert "updatedInput" not in r.stderr
+
+
+def _grant_tree(tmp_path: Path, root: Path, tools: str = "Read, Write, Edit") -> Path:
+    return _policy(
+        tmp_path,
+        "skills:\n  UNLABELED:\n"
+        f"    tools: [{tools}]\n"
+        f"    paths: ['{root.as_posix()}/**']\n",
+    )
+
+
+def test_write_to_own_allowlist_denied(tmp_path: Path, project: Path):
+    # A grant broad enough to reach the policy file. Before this guard the
+    # agent could rewrite its own grants with an ordinary Write.
+    allow = _grant_tree(tmp_path, tmp_path)
+    env = _env(tmp_path, allow)
+    r = _run(_call("Write", {"file_path": str(allow), "content": "x"}, project), env)
+    assert _denied(r), (r.returncode, r.stderr)
+
+
+def test_widened_allowlist_does_not_take_effect_via_agent_write(
+    tmp_path: Path, project: Path
+):
+    allow = _grant_tree(tmp_path, tmp_path)
+    env = _env(tmp_path, allow)
+    widened = "skills:\n  UNLABELED:\n    tools: [Read, Write]\n    paths: ['/**']\n"
+    first = _run(
+        _call("Write", {"file_path": str(allow), "content": widened}, project), env
+    )
+    if first.returncode == 0:
+        # The hook allowed it, so Claude Code would now perform the write.
+        allow.write_text(widened, encoding="utf-8")
+    outside = tmp_path.parent / "outside-the-grant.txt"
+    second = _run(
+        _call("Write", {"file_path": str(outside), "content": "x"}, project), env
+    )
+    assert _denied(first), (first.returncode, first.stderr)
+    assert _denied(second), (second.returncode, second.stderr)
+
+
+def test_start_refused_when_grant_covers_allowlist(tmp_path: Path, project: Path):
+    allow = _grant_tree(tmp_path, tmp_path)
+    env = _env(tmp_path, allow)
+    target = project / "notes" / "a.txt"
+    r = _run(_call("Read", {"file_path": str(target)}, project), env)
+    assert _denied(r), (r.returncode, r.stderr)
+    assert "own" in r.stderr
+
+
+def test_write_into_hook_folder_denied(tmp_path: Path, project: Path):
+    allow = _grant_tree(tmp_path, ROOF)
+    env = _env(tmp_path, allow)
+    r = _run(
+        _call(
+            "Edit",
+            {"file_path": str(HOOK), "old_string": "a", "new_string": "b"},
+            project,
+        ),
+        env,
+    )
+    assert _denied(r), (r.returncode, r.stderr)
+
+
+def test_write_grant_clear_of_own_files_still_allows(tmp_path: Path, project: Path):
+    allow = _grant_tree(tmp_path, project)
+    env = _env(tmp_path, allow)
+    target = project / "notes" / "new.txt"
+    r = _run(_call("Write", {"file_path": str(target), "content": "x"}, project), env)
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="a read-only folder mode does not stop file creation on Windows",
+)
+def test_readonly_log_folder_blocks_or_throw_succeeds(tmp_path: Path, project: Path):
+    # Once the log and its lock exist, a read-only log folder still lets appends
+    # through but stops the kill switch marker from being created. The hook must
+    # then deny, because an operator could no longer stop it.
+    if os.geteuid() == 0:
+        pytest.skip("a read-only folder mode does not stop file creation for root")
+    root = project.as_posix()
+    allow = _policy(
+        tmp_path,
+        f"skills:\n  UNLABELED:\n    tools: [Read, Write]\n    paths: ['{root}/**']\n",
+    )
+    env = _env(tmp_path, allow)
+    write = _call(
+        "Write",
+        {"file_path": str(project / "notes" / "b.txt"), "content": "x"},
+        project,
+    )
+    first = _run(write, env)
+    assert first.returncode == 0, first.stderr
+    logdir = tmp_path / "log"
+    os.chmod(logdir, 0o555)
+    try:
+        r = _run(write, env)
+    finally:
+        os.chmod(logdir, 0o755)
+    assert _denied(r), (r.returncode, r.stderr)
+    assert "cannot be thrown" in r.stderr

@@ -7,18 +7,26 @@ with NUL bytes dropped, and UTF-16 when a byte-order mark or a NUL byte says it
 may be). Each line is decoded until it stops changing: HTML entities, URL
 encoding, NFKC, format characters dropped, slash look-alikes and Cyrillic
 letters that look like the folder name's letters folded, backslashes and JSON
-escaped slashes as slashes, os.path.join calls and two adjacent string
-literals joined. Then every receipts folder (any letter case, with or without a
-trailing slash) is judged by the whole path before it:
+escaped slashes as slashes, string prefixes, triple quotes and brackets around
+a lone literal dropped, os.path.join and .joinpath calls, literals joined by a
+Path "/" and two adjacent string literals joined. A left operand anchored to
+this checkout (this file's own path through Path(__file__) or os.path.dirname,
+ROOT, or a name the file binds once to one of those) is replaced by its literal
+tail, judged against ROOT like any relative path; it is a runtime value once it
+climbs above the checkout. Any other name, attribute, call, subscript or
+bracketed expression joined in front of a literal that reaches the folder name
+(by a join call, a Path "/" or a "+") is a runtime value, so the path is not
+one in this checkout. Then every receipts folder (any letter case, with or
+without a trailing slash) is judged by the whole path before it:
 
 - nothing before it, or a folder path that exists inside this checkout: home;
 - a leading slash, a drive letter, or any ".." step: another tree, even when
   it would land on this checkout's own receipts folder;
-- a URL with any scheme but http or https (file, vscode, ssh, ...): a path
-  outside the checkout;
+- a URL with any scheme but http or https (file, vscode, ssh, ...), with or
+  without slashes, and a drive-relative path: a path outside the checkout;
 - a GitHub blob, tree or raw URL: home only when it points into this
-  repository, judged by the path after the ref; any other code forge: another
-  repository;
+  repository, judged by the path after the ref; any other code forge, known by
+  its host or by its URL shape on any host: another repository;
 - any other web URL: not a repository path, not judged.
 
 The file names no private folder: a foreign path is refused because its folder
@@ -27,7 +35,9 @@ does not exist here, not because it is listed.
 
 from __future__ import annotations
 
+import ast
 import codecs
+import hashlib
 import html
 import re
 import subprocess
@@ -52,53 +62,404 @@ _RAW = re.compile(
 # Code forges other than GitHub: this repository lives only on GitHub, so a forge
 # URL that reaches a receipts folder points into another repository.
 _FORGES = ("gitlab.com", "bitbucket.org", "codeberg.org", "git.sr.ht", "gitea.com")
-# Slash look-alikes NFKC keeps, and Cyrillic letters that look like the Latin
-# letters of the folder name.
+# Letters from other scripts that look like the Latin letters of the folder
+# name (r, e, c, i, p, t, s), as HEX:LETTER pairs: every pair in Unicode's
+# confusables.txt 18.0.0 (UTS #39, (c) Unicode, Inc., Unicode License v3) whose
+# skeleton is one of those letters, as isolation-layer's public surface scan
+# folds them (its capital-I look-alikes fold to I), less the code points NFKC
+# already turns into ASCII. A test pins the list. The upstream file: Version
+# 18.0.0, Date 2026-08-06, sha256
+# 6ed3ee967c9dfdf6677d563c9985182fbc50a2efb7d6059cd57b2e2ce18f5b92; it rebuilds
+# isolation-layer's 1,582-pair table exactly.
+_FOLDER_CONFUSABLES = (
+    "A1:i FE:p 131:i 196:I 1A6:R 1BD:s 1BF:p 1C0:I 1DD:e 24C:R 268:i 269:i "
+    "26A:i 27D:r 27E:r 280:r 395:E 399:I 3A1:P 3A4:T 3B5:e 3B9:i 3C1:p 3F1:p "
+    "3F2:c 3F8:p 3F9:C 405:S 406:I 415:E 420:P 421:C 422:T 433:r 435:e 440:p "
+    "441:c 442:t 454:e 455:s 456:i 4BD:e 4C0:I 54F:S 582:i 7E0:T D1F:s 1004:c "
+    "105A:c 10BD:S 10FD:S 13A1:R 13A2:T 13A5:i 13AC:E 13D2:R 13D5:S 13DA:S "
+    "13DF:C 13E2:P 146D:P 1587:R 16C1:I 1C83:c 1CBD:S 1D04:c 1D07:e 1D09:i "
+    "1D18:p 1D1B:t 1D26:r 212E:e 22A4:T 22FF:E 2373:i 2374:p 27D9:T 2C85:r "
+    "2C92:I 2C93:i 2CA2:P 2CA3:p 2CA4:C 2CA5:c 2CA6:T 2CCE:P 2CCF:p 2D39:E "
+    "3112:T 4E05:T A4D1:P A4D4:T A4DA:C A4E2:S A4E3:R A4F0:E A4F2:I A50B:T "
+    "A576:S A5CB:E A647:i A731:s A7AE:I A7FE:I AB32:e AB47:r AB48:r AB75:i "
+    "AB81:r ABAA:s ABAF:c 10286:E 10295:P 10296:S 10297:T 102A2:C 102B1:T "
+    "10302:C 10309:I 10315:T 10415:C 10420:S 1043D:c 10448:s 104B4:R 1051B:C "
+    "10926:I 118A6:E 118AE:E 118BC:T 118C1:s 118C3:i 118E9:C 118F2:C 16A19:r "
+    "16AD6:S 16F0A:T 16F35:R 16F3A:S 1CCD8:C 1CCDA:E 1CCE5:P 1CCE7:R 1CCE8:S "
+    "1CCE9:T 1D134:c 1D216:R 1D373:T 1D6A4:i 1D6AC:E 1D6B8:P 1D6BB:T 1D6CA:i "
+    "1D6D2:p 1D6E0:p 1D6E6:E 1D6F2:P 1D6F5:T 1D704:i 1D70C:p 1D71A:p 1D720:E "
+    "1D72C:P 1D72F:T 1D73E:i 1D746:p 1D754:p 1D75A:E 1D766:P 1D769:T 1D778:i "
+    "1D780:p 1D78E:p 1D794:E 1D7A0:P 1D7A3:T 1D7B2:i 1D7BA:p 1D7C8:p 1DF81:E "
+    "1F74C:C 1F768:T"
+)
+# Look-alikes that table leaves out, and slash look-alikes NFKC keeps.
+_FOLD_EXTRA = "3C4:t 2215:/ 2044:/ 29F8:/"
 _FOLD = str.maketrans(
     {
-        "∕": "/",
-        "⁄": "/",
-        "⧸": "/",
-        "е": "e",
-        "Е": "E",
-        "с": "c",
-        "С": "C",
-        "р": "p",
-        "Р": "P",
-        "і": "i",
-        "І": "I",
-        "ѕ": "s",
-        "Ѕ": "S",
+        chr(int(code, 16)): letter
+        for code, letter in (
+            pair.split(":")
+            for pair in (_FOLDER_CONFUSABLES + " " + _FOLD_EXTRA).split()
+        )
     }
 )
-_JOIN_CALL = re.compile(r"(?:os\.path|posixpath|ntpath)\.join\(([^()]*)\)")
+# A path built from a runtime value is not a path in this checkout. Its unknown
+# part becomes this marker, which no checkout path can hold (it starts with ..).
+_RUNTIME = "../runtime"
+_FOLDER = "rece" + "ipts"
+_JOIN_HEAD = re.compile(r"(?:(?:os\.path|posixpath|ntpath)\.join|\.joinpath)\(")
+_PATH_JOIN_HEAD = re.compile(r"((?:os\.path|posixpath|ntpath)\.join)\(")
+# A Path "/" operator, or a "+", whose left operand is a name, attribute, call,
+# subscript or anything closed by a bracket, and whose right operand is a
+# literal that reaches the folder name.
+_RUNTIME_LEFT = re.compile(
+    r"""(?:[A-Za-z_][\w.]*(?:\[[^\[\]]*\])*|[)\]])\s*[/+]\s*(["'])(?=[^"'\n]*receipts)""",
+    re.I,
+)
 _LITERAL = re.compile(r"""["']([^"']*)["']""")
 _LITERAL_PLUS = re.compile(r"""(["'])\s*\+\s*(["'])""")
+# A string prefix (raw, unicode, bytes, f-string) is dropped, a triple quote reads
+# as one quote, a literal alone in brackets is unwrapped, and literals joined by a
+# Path "/" read as one literal.
+_PREFIX = re.compile(r"""(?<![\w"'])[rRbBuUfF]{1,2}(?=["'])""")
+_BRACKETED = re.compile(r"""(?<![\w)\]])\(\s*((["'])[^"'\n]*\2)\s*\)""")
+_LITERAL_SLASH = re.compile(r"""(["'])([^"'\n]*)\1\s*/\s*(["'])([^"'\n]*)\3""")
 
 
-def _joined(match: re.Match[str]) -> str:
-    return '"' + "/".join(_LITERAL.findall(match.group(1))) + '"'
+def _close(text: str, start: int) -> int | None:
+    """Index of the bracket that closes the one opened just before start, read
+    at any depth and past brackets inside string literals."""
+    depth, quote, i = 1, "", start
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 1
+            elif ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
 
 
-def _decoded(line: str) -> str:
+def _sub_calls(text: str, head: re.Pattern[str], fn) -> str:
+    """Each call whose opening matches head replaced by fn(match, arguments),
+    the innermost first, so a call nested at any depth is read whole. Calls are
+    taken right to left, so a replacement never moves a call still to come."""
+    for m in reversed(list(head.finditer(text))):
+        end = _close(text, m.end())
+        if end is not None:
+            text = text[: m.start()] + fn(m, text[m.end() : end]) + text[end + 1 :]
+    return text
+
+
+# A left operand anchored to this checkout: this file's own path (Path(__file__)
+# or os.path.dirname of it, with .resolve(), .parent and .parents[n]), or a name
+# the same file binds exactly once, as NAME = <anchor>, counting every binding
+# form. Its literal tail is judged against ROOT the way any relative path is; an
+# anchor that climbs above the checkout is a runtime value. This file's own path
+# counts only while the file never binds __file__, and Path or os only while
+# each is bound once, by its import.
+_PATH_ANCHOR = r"Path\(\s*__file__\s*\)"
+_OS_ANCHOR = r"(?:os\.path\.(?:dirname|abspath|realpath)\(\s*)+__file__\s*\)+"
+_STEPS = r"(?:\.resolve\(\)|\.absolute\(\)|\.parent\b|\.parents\[\d+\])*"
+# Keys in a names table that are not names: which spellings of this file's own
+# path may be trusted.
+_TRUST_PATH, _TRUST_OS = "<Path>", "<os>"
+_LINE_TRUST: dict[str, str | None] = {_TRUST_PATH: "", _TRUST_OS: ""}
+_DEFAULT_REL = "tests/test_x.py"
+_OUTSIDE = "outside_checkout"
+
+
+def _anchor_tail(expr: str, rel: str) -> str | None:
+    """ "" for this file's own path while it stays inside the checkout, None once
+    it climbs above it."""
+    level = len(rel.split("/"))
+    level -= expr.count("dirname(")
+    for step in re.findall(r"\.parent\b|\.parents\[(\d+)\]", expr):
+        level -= int(step) + 1 if step else 1
+    return "" if level >= 0 else None
+
+
+def _anchors(
+    names: dict[str, str | None], before_call: bool = False
+) -> re.Pattern[str]:
+    """Every anchor spelling the table trusts. A name followed by an attribute
+    is not an anchor, except before .joinpath (before_call)."""
+    alts = []
+    if _TRUST_PATH in names:
+        alts.append(_PATH_ANCHOR + _STEPS)
+    if _TRUST_OS in names:
+        alts.append(_OS_ANCHOR + _STEPS)
+    after = r"(?![\w(\[])" if before_call else r"(?![\w.(\[])"
+    alts += [rf"\b{re.escape(n)}\b{after}" for n in names if not n.startswith("<")]
+    return re.compile("(" + "|".join(alts or ["(?!)"]) + ")")
+
+
+def _resolve(expr: str, names: dict[str, str | None], rel: str) -> str | None:
+    return names[expr] if expr in names else _anchor_tail(expr, rel)
+
+
+def _anchored(text: str, names: dict[str, str | None], rel: str) -> str:
+    """Each anchored left operand replaced by its tail as a literal, or by a
+    runtime name when it is above the checkout."""
+    rx = _anchors(names)
+
+    def slash(m: re.Match[str]) -> str:
+        tail = _resolve(m.group(1), names, rel)
+        if tail is None:
+            return _OUTSIDE + m.group(2)
+        return f'"{tail}" / ' if tail else ""
+
+    def joinpath(m: re.Match[str]) -> str:
+        tail = _resolve(m.group(1), names, rel)
+        if tail is None:
+            return _OUTSIDE + ".joinpath("
+        return f'os.path.join("{tail}", ' if tail else "os.path.join("
+
+    def join_args(m: re.Match[str], inner: str) -> str:
+        kept = []
+        for arg in _args(inner):
+            if rx.fullmatch(arg):
+                tail = _resolve(arg, names, rel)
+                if tail is None:
+                    kept.append(_OUTSIDE)
+                elif tail:
+                    kept.append(f'"{tail}"')
+                continue
+            kept.append(arg)
+        return m.group(1) + "(" + ", ".join(kept) + ")"
+
+    text = re.sub(rx.pattern + r"(\s*/\s*)(?=[\"'])", slash, text)
+    text = re.sub(
+        _anchors(names, before_call=True).pattern + r"\.joinpath\(", joinpath, text
+    )
+    return _sub_calls(text, _PATH_JOIN_HEAD, join_args)
+
+
+_TAIL = re.compile(r"""\s*/\s*["']([^"']*)["']""")
+
+
+def _binding_counts(tree: ast.AST) -> dict[str, int] | None:
+    """How many times the file binds each name, in every form: an assignment,
+    annotation, augmented assignment, unpacking, walrus, for or with target,
+    delete, import or from-import, parameter (positional, keyword-only, star or
+    lambda), def or class, global or nonlocal, except or match capture, and a
+    globals(), vars() or locals() store. None when such a store's key cannot be
+    read, since it may bind any name."""
+    count: dict[str, int] = {}
+
+    def add(name: str) -> None:
+        count[name] = count.get(name, 0) + 1
+
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            add(n.id)
+        elif isinstance(n, ast.alias):
+            add((n.asname or n.name).split(".")[0])
+        elif isinstance(n, ast.arg):
+            add(n.arg)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            add(n.name)
+        elif isinstance(n, (ast.Global, ast.Nonlocal)):
+            for name in n.names:
+                add(name)
+        elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
+            add(n.name)
+        elif isinstance(n, ast.MatchMapping) and n.rest:
+            add(n.rest)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            add(n.name)
+        elif (
+            isinstance(n, ast.Subscript)
+            and isinstance(n.ctx, (ast.Store, ast.Del))
+            and isinstance(n.value, ast.Call)
+            and isinstance(n.value.func, ast.Name)
+            and n.value.func.id in ("globals", "vars", "locals")
+        ):
+            key = n.slice
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                return None
+            add(key.value)
+    return count
+
+
+def _imported_once(
+    tree: ast.AST, count: dict[str, int], name: str, module: str
+) -> bool:
+    """name is bound once in the file, by importing it from module (or, for a
+    module, by importing the module itself)."""
+    if count.get(name) != 1:
+        return False
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom) and n.module == module and not n.level:
+            if any(a.name == name and (a.asname or a.name) == name for a in n.names):
+                return True
+        if isinstance(n, ast.Import) and name == module:
+            if any(a.name == module and not a.asname for a in n.names):
+                return True
+    return False
+
+
+def _bindings(text: str, rel: str) -> dict[str, str | None]:
+    """The anchors a Python file can be trusted with: this file's own path
+    spellings, and the names it binds exactly once, as NAME = <anchor> plus an
+    optional literal tail, mapped to that tail (None above the checkout). Any
+    other file, or one that does not parse, trusts none."""
+    if not rel.endswith(".py"):
+        return {}
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return {}
+    count = _binding_counts(tree)
+    if count is None or count.get("__file__"):
+        return {}
+    names: dict[str, str | None] = {}
+    if _imported_once(tree, count, "Path", "pathlib"):
+        names[_TRUST_PATH] = ""
+    if _imported_once(tree, count, "os", "os"):
+        names[_TRUST_OS] = ""
+    plain = [
+        (n.targets[0] if isinstance(n, ast.Assign) else n.target, n.value)
+        for n in ast.walk(tree)
+        if (
+            isinstance(n, ast.Assign)
+            and len(n.targets) == 1
+            and isinstance(n.targets[0], ast.Name)
+        )
+        or (
+            isinstance(n, ast.AnnAssign)
+            and n.value is not None
+            and isinstance(n.target, ast.Name)
+        )
+    ]
+    plain = [(t.id, v) for t, v in plain if count.get(t.id) == 1]
+    for _ in range(5):
+        changed = False
+        rx = _anchors(names)
+        for name, value in plain:
+            if name in names:
+                continue
+            rhs = _plain(ast.get_source_segment(text, value) or "")
+            head = rx.match(rhs)
+            if head is None:
+                continue
+            rest = rhs[head.end() :]
+            if "".join(m.group(0) for m in _TAIL.finditer(rest)) != rest:
+                continue
+            base = _resolve(head.group(1), names, rel)
+            names[name] = (
+                None
+                if base is None
+                else "/".join(x for x in [base, *_TAIL.findall(rest)] if x)
+            )
+            changed = True
+        if not changed:
+            break
+    return names
+
+
+def _plain(line: str) -> str:
+    """A line with string prefixes dropped, triple quotes read as one, and the
+    brackets around a lone literal removed."""
+    line = _PREFIX.sub("", line.replace('"' * 3, '"').replace("'" * 3, "'"))
+    return _BRACKETED.sub(r"\1", line)
+
+
+def _args(text: str) -> list[str]:
+    out, depth, cur = [], 0, ""
+    for ch in text:
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+            continue
+        depth += (ch == "(") - (ch == ")")
+        cur += ch
+    return [a.strip() for a in [*out, cur] if a.strip()]
+
+
+def _joined(match: re.Match[str], inner: str) -> str:
+    parts = [_RUNTIME] if match.group(0).startswith(".joinpath") else []
+    for arg in _args(inner):
+        literal = _LITERAL.fullmatch(arg)
+        parts.append(literal.group(1) if literal else _RUNTIME)
+    return '"' + "/".join(parts) + '"'
+
+
+# Default-ignorable code points (Unicode DerivedCoreProperties) that are not
+# format characters: fillers, joiners and selectors that render as nothing.
+_IGNORABLE = (
+    (0x034F, 0x034F),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFFA0, 0xFFA0),
+    (0x1BCA0, 0x1BCA3),
+    (0xE0000, 0xE0FFF),
+)
+
+
+def _visible(text: str) -> str:
+    """Text without format characters, default-ignorables or combining marks,
+    so nothing invisible or stacked on a letter can split the folder name."""
+    out = []
+    for c in unicodedata.normalize("NFD", text):
+        cp = ord(c)
+        if unicodedata.category(c) in ("Cf", "Mn", "Me"):
+            continue
+        if any(lo <= cp <= hi for lo, hi in _IGNORABLE):
+            continue
+        out.append(c)
+    return unicodedata.normalize("NFC", "".join(out))
+
+
+def _decoded(
+    line: str, names: dict[str, str | None] | None = None, rel: str = _DEFAULT_REL
+) -> str:
+    names = _LINE_TRUST if names is None else names
     text = line
     for _ in range(6):
         nxt = html.unescape(unquote(text.replace("\\/", "/")))
-        nxt = unicodedata.normalize("NFKC", nxt)
-        nxt = "".join(c for c in nxt if unicodedata.category(c) != "Cf")
-        nxt = nxt.translate(_FOLD).replace("\\", "/")
-        nxt = _LITERAL_PLUS.sub("", _JOIN_CALL.sub(_joined, nxt))
+        # Folded before NFKC too: NFKC turns some look-alikes (a lunate sigma)
+        # into letters that no longer look like the Latin one.
+        nxt = unicodedata.normalize("NFKC", nxt.translate(_FOLD))
+        nxt = _visible(nxt)
+        nxt = _plain(nxt.translate(_FOLD).replace("\\", "/"))
+        nxt = _anchored(nxt, names, rel)
+        while (collapsed := _LITERAL_SLASH.sub(r'"\2/\4"', nxt)) != nxt:
+            nxt = collapsed
+        nxt = _RUNTIME_LEFT.sub(lambda m: m.group(1) + _RUNTIME + "/", nxt)
+        nxt = _LITERAL_PLUS.sub("", _sub_calls(nxt, _JOIN_HEAD, _joined))
         if nxt == text:
             break
         text = nxt
     return text
 
 
+# Code forge URL shapes on any host: GitLab ("/-/blob/", "/-/tree/", "/-/raw/"),
+# Gitea and Forgejo ("/src/branch/", "/src/commit/", "/src/tag/"), and Bitbucket
+# ("/src/" or "/raw/" followed by a commit).
+_FORGE_SHAPE = re.compile(
+    r"/-/(?:blob|tree|raw)/|/src/(?:branch|commit|tag)/|/(?:src|raw)/[0-9a-f]{7,40}/",
+    re.I,
+)
+
+
 def _foreign_url(prefix: str) -> bool | str:
     """True or False for a URL; the repository path after the ref for a URL
     into this repository on GitHub, to be judged like any other path."""
-    scheme, _, rest = prefix.partition("://")
-    if not rest:
+    scheme, sep, rest = prefix.partition("://")
+    if not sep:
         scheme, rest = "https", prefix
     if scheme.lower() not in ("http", "https"):
         return True  # file, vscode, ssh and the rest: a path outside the checkout
@@ -111,10 +472,18 @@ def _foreign_url(prefix: str) -> bool | str:
     host = rest.split("/", 1)[0].lower()
     if "github" in host or any(host == f or host.endswith("." + f) for f in _FORGES):
         return True
+    if _FORGE_SHAPE.search("/" + rest.split("/", 1)[-1]):
+        return True  # a self-hosted forge: another repository
     return False  # another web site: not a repository path
 
 
+# A URL scheme or a drive letter with its colon, at the start of the prefix.
+_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
 def _foreign_prefix(prefix: str) -> bool:
+    if "://" not in prefix and _SCHEME.match(prefix):
+        return True  # file:, vscode:, a drive-relative C: and the like
     if "://" in prefix or prefix.lower().startswith(("github.com/", "www.github")):
         verdict = _foreign_url(prefix)
         if isinstance(verdict, bool):
@@ -127,13 +496,23 @@ def _foreign_prefix(prefix: str) -> bool:
     parts = [p for p in prefix.split("/") if p not in ("", ".")]
     if ".." in parts:
         return True
-    return not ROOT.joinpath(*parts, "receipts").is_dir()
+    return not ROOT.joinpath(*parts, _FOLDER).is_dir()
 
 
-def _foreign(line: str) -> bool:
+def _foreign(
+    line: str, names: dict[str, str | None] | None = None, rel: str = _DEFAULT_REL
+) -> bool:
     return any(
-        _foreign_prefix(m.group(1)) for m in _BEFORE_RECEIPTS.finditer(_decoded(line))
+        _foreign_prefix(m.group(1))
+        for m in _BEFORE_RECEIPTS.finditer(_decoded(line, names, rel))
     )
+
+
+def _hits(text: str, rel: str) -> list[int]:
+    """Line numbers in one text view of a tracked file that cite a foreign path."""
+    names = _bindings(text, rel)
+    lines = text.split("\n")
+    return [n for n, line in enumerate(lines, 1) if _foreign(line, names, rel)]
 
 
 def _text_views(data: bytes) -> list[str]:
@@ -160,9 +539,7 @@ def test_tracked_text_cites_no_private_repository_path() -> None:
         if not path.is_file():
             continue
         for view in _text_views(path.read_bytes()):
-            for n, line in enumerate(view.split("\n"), 1):
-                if _foreign(line):
-                    found.append(f"{rel}:{n}")
+            found += [f"{rel}:{n}" for n in _hits(view, rel)]
     assert sorted(set(found)) == []
 
 
@@ -352,3 +729,444 @@ def test_a_path_that_lands_on_this_checkouts_receipts_is_still_foreign(
 )
 def test_a_name_only_one_text_view_shows_is_still_read(data: bytes) -> None:
     assert any(_foreign(ln) for v in _text_views(data) for ln in v.split("\n"))
+
+
+# --- look-alike letters in the folder name ------------------------------------
+
+
+def _swap(old: str, new: str) -> str:
+    return _R.replace(old, new)
+
+
+_LOOKALIKE_NAMES = [
+    pytest.param(_swap("r", "ʀ"), id="small-capital-r"),
+    pytest.param(_swap("e", "ᴇ"), id="small-capital-e"),
+    pytest.param(_swap("c", "ᴄ"), id="small-capital-c"),
+    pytest.param(_swap("i", "ɪ"), id="small-capital-i"),
+    pytest.param(_swap("p", "ᴘ"), id="small-capital-p"),
+    pytest.param(_swap("t", "ᴛ"), id="small-capital-t"),
+    pytest.param(_swap("s", "ꜱ"), id="small-capital-s"),
+    pytest.param(_swap("i", "ι"), id="greek-iota"),
+    pytest.param(_swap("p", "ρ"), id="greek-rho"),
+    pytest.param(_swap("e", "ε"), id="greek-epsilon"),
+    pytest.param(_swap("t", "τ"), id="greek-tau"),
+    pytest.param(_R.upper().replace("E", "Ε"), id="greek-capital-epsilon"),
+    pytest.param(_R.upper().replace("I", "Ι"), id="greek-capital-iota"),
+    pytest.param(_R.upper().replace("P", "Ρ"), id="greek-capital-rho"),
+    pytest.param(_R.upper().replace("T", "Τ"), id="greek-capital-tau"),
+    pytest.param(_R.upper().replace("T", "Т"), id="cyrillic-capital-te"),
+]
+
+
+@pytest.mark.parametrize("name", _LOOKALIKE_NAMES)
+def test_a_look_alike_letter_in_the_folder_name_never_hides_it(name: str) -> None:
+    assert _foreign(f"elsewhere/{name}/y.md")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param("ειρηνη is a word", id="greek-word"),
+        pytest.param("ᴇᴄʀ alone", id="small-capitals-alone"),
+    ],
+)
+def test_look_alike_letters_outside_the_folder_name_stay_clean(line: str) -> None:
+    assert not _foreign(line)
+
+
+# --- invisible and combining characters inside the folder name -----------------
+
+_INSIDE = [
+    pytest.param("͏", id="combining-grapheme-joiner"),
+    pytest.param("ㅤ", id="hangul-filler"),
+    pytest.param("ﾠ", id="halfwidth-hangul-filler"),
+    pytest.param("ᅟ", id="hangul-choseong-filler"),
+    pytest.param("ᅠ", id="hangul-jungseong-filler"),
+    pytest.param("̇", id="combining-dot-above"),
+    pytest.param("́", id="combining-acute"),
+    pytest.param("⃝", id="combining-enclosing-circle"),
+    pytest.param("️", id="variation-selector"),
+    pytest.param("᠎", id="mongolian-vowel-separator"),
+]
+
+
+@pytest.mark.parametrize("mark", _INSIDE)
+def test_an_invisible_or_combining_character_inside_the_name_never_hides_it(
+    mark: str,
+) -> None:
+    assert _foreign(f"elsewhere/{_R[:4]}{mark}{_R[4:]}/y.md")
+
+
+def test_a_combining_mark_on_another_word_stays_clean() -> None:
+    assert not _foreign("café and naïve prose")
+
+
+# --- a path built from a runtime value is not a path in this checkout -------------
+
+_RUNTIME_JOINS = [
+    pytest.param(f'base / "{_R}" / "y.md"', id="path-operator-variable"),
+    pytest.param(f'Path(home) / "{_R}"', id="path-operator-call"),
+    pytest.param(f'cfg.root / "{_R}/y.md"', id="path-operator-attribute"),
+    pytest.param(f'os.path.join(base, "{_R}", "y.md")', id="os-path-join-variable"),
+    pytest.param(
+        f'os.path.join("docs", base, "{_R}")', id="os-path-join-middle-variable"
+    ),
+    pytest.param(f'os.path.join(get_root(), "{_R}")', id="os-path-join-call"),
+    pytest.param(f'root.joinpath("{_R}", "y.md")', id="joinpath-variable"),
+    pytest.param(f'base + "{_R}/y.md"', id="concat-variable-first"),
+    pytest.param(f'"/x/" + base + "{_R}/y.md"', id="concat-variable-middle"),
+]
+
+
+@pytest.mark.parametrize("line", _RUNTIME_JOINS)
+def test_a_receipt_path_joined_onto_a_runtime_value_is_foreign(line: str) -> None:
+    assert _foreign(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(f'os.path.join("{_R}", "y.md")', id="join-starting-at-the-folder"),
+        pytest.param(f'"{_R}/" + name', id="variable-after-the-folder"),
+        pytest.param("total = a / b + c", id="arithmetic"),
+    ],
+)
+def test_a_join_that_starts_at_this_checkouts_folder_stays_clean(line: str) -> None:
+    assert not _foreign(line)
+
+
+# --- a self-hosted forge is known by its URL shape, not its host -------------------
+
+_FORGE_SHAPES = [
+    pytest.param(
+        f"https://git.example.invalid/team/repo/-/blob/main/{_R}/y.md", id="gitlab-blob"
+    ),
+    pytest.param(
+        f"https://git.example.invalid/team/repo/-/tree/main/{_R}", id="gitlab-tree"
+    ),
+    pytest.param(
+        f"https://git.example.invalid/team/repo/-/raw/main/{_R}/y.md", id="gitlab-raw"
+    ),
+    pytest.param(
+        f"https://code.example.invalid/team/repo/src/branch/main/{_R}/y.md",
+        id="gitea-branch",
+    ),
+    pytest.param(
+        f"https://code.example.invalid/team/repo/src/commit/0123abcd/{_R}/y.md",
+        id="gitea-commit",
+    ),
+    pytest.param(
+        f"https://code.example.invalid/team/repo/src/tag/v1/{_R}/y.md", id="gitea-tag"
+    ),
+    pytest.param(
+        f"https://bb.example.invalid/team/repo/src/0123abcd4567/{_R}/y.md",
+        id="bitbucket-commit",
+    ),
+    pytest.param(
+        f"https://bb.example.invalid/team/repo/raw/0123abcd4567/{_R}/y.md",
+        id="bitbucket-raw",
+    ),
+]
+
+
+@pytest.mark.parametrize("line", _FORGE_SHAPES)
+def test_a_self_hosted_forge_url_points_into_another_repository(line: str) -> None:
+    assert _foreign(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(
+            f"https://docs.example.invalid/src/guide/{_R}/x", id="src-word-on-a-site"
+        ),
+        pytest.param(
+            f"https://example.invalid/blob/{_R}/x", id="blob-word-without-dash"
+        ),
+    ],
+)
+def test_a_web_url_without_a_forge_shape_stays_clean(line: str) -> None:
+    assert not _foreign(line)
+
+
+# --- a scheme right before the folder name is never this checkout -------------------
+
+_SCHEME_FORMS = [
+    pytest.param(f"file:{_R}/y.md", id="file-no-slashes"),
+    pytest.param(f"file:./{_R}/y.md", id="file-dot-slash"),
+    pytest.param(f"vscode://{_R}/y.md", id="vscode-folder-first"),
+    pytest.param(f"file://{_R}/y.md", id="file-folder-as-host"),
+    pytest.param(f"vscode:{_R}/y.md", id="vscode-no-slashes"),
+    pytest.param(f"C:{_R}/y.md", id="drive-relative"),
+]
+
+
+@pytest.mark.parametrize("line", _SCHEME_FORMS)
+def test_a_scheme_right_before_the_folder_name_is_foreign(line: str) -> None:
+    assert _foreign(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(
+            f"note: {_R}/A1-KILL-SWITCH-2026-10-09.md", id="label-colon-space"
+        ),
+        pytest.param(f"https://example.invalid/{_R}/x", id="web-url"),
+    ],
+)
+def test_a_colon_label_before_this_checkouts_folder_stays_clean(line: str) -> None:
+    assert not _foreign(line)
+
+
+# --- a left operand anchored to this checkout is home; any other runtime value ----
+# --- is foreign, however the literal after it is spelled ---------------------------
+
+_ANCHORED_HOME = [
+    pytest.param(
+        f'assert (Path(__file__).parent / "{_R}" / "K94.md").is_file()',
+        id="file-parent",
+    ),
+    pytest.param(f'Path(__file__).parents[1] / "{_R}" / "X.md"', id="file-parents"),
+    pytest.param(f'Path(__file__).resolve().parent / "{_R}"', id="file-resolve-parent"),
+    pytest.param(
+        f'os.path.join(os.path.dirname(__file__), "{_R}", "y.md")',
+        id="join-dirname-file",
+    ),
+    pytest.param(
+        f'Path(__file__).parent.joinpath("{_R}", "y.md")', id="joinpath-on-file"
+    ),
+]
+
+
+@pytest.mark.parametrize("line", _ANCHORED_HOME)
+def test_a_path_anchored_to_this_checkout_is_home(line: str) -> None:
+    assert not _foreign(line)
+
+
+def test_a_name_bound_to_this_checkout_in_the_same_file_is_home() -> None:
+    text = (
+        "from pathlib import Path\n"
+        "HERE = Path(__file__).resolve().parents[1]\n"
+        "TOP: Path = HERE\n"
+        f"a = HERE / '{_R}' / 'y.md'\n"
+        f"b = TOP / '{_R}' / 'y.md'\n"
+    )
+    assert _hits(text, "tests/test_zqxwvk.py") == []
+
+
+def test_a_bound_name_keeps_its_tail_and_a_rebound_name_is_not_an_anchor() -> None:
+    text = (
+        "from pathlib import Path\n"
+        "HERE = Path(__file__).resolve().parents[1]\n"
+        "DOCS = HERE / 'docs'\n"
+        f"a = DOCS / '{_R}'\n"
+        "TWICE = Path(__file__).parent\n"
+        "TWICE = get_root()\n"
+        f"b = TWICE / '{_R}'\n"
+        "LOOPED = Path(__file__).parent\n"
+        "for LOOPED in dirs:\n"
+        f"    c = LOOPED / '{_R}'\n"
+        "OPENED = Path(__file__).parent\n"
+        "with mount() as OPENED:\n"
+        f"    d = OPENED / '{_R}'\n"
+    )
+    assert _hits(text, "tests/test_zqxwvk.py") == [4, 7, 10, 13]
+
+
+def test_a_name_bound_to_a_runtime_value_stays_foreign() -> None:
+    text = f"HERE = get_root()\na = HERE / '{_R}' / 'y.md'\n"
+    assert _hits(text, "tests/test_zqxwvk.py") == [2]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(f'Path(__file__).parents[5] / "{_R}"', id="parents-above-root"),
+        pytest.param(
+            f'Path(__file__).parent.parent.parent / "{_R}"',
+            id="parent-chain-above-root",
+        ),
+        pytest.param(f'ROOT / ".." / "{_R}"', id="root-then-parent-step"),
+        pytest.param(f'ROOT / "elsewhere" / "{_R}"', id="root-then-missing-folder"),
+    ],
+)
+def test_an_anchor_that_leaves_the_checkout_is_foreign(line: str) -> None:
+    assert _hits(line + "\n", "tests/test_zqxwvk.py") == [1]
+
+
+_RUNTIME_SHAPES = [
+    pytest.param(f'base / "x" / "{_R}" / "y.md"', id="through-an-intermediate-literal"),
+    pytest.param(f'base / "x/{_R}/y.md"', id="literal-holding-the-folder-later"),
+    pytest.param(
+        f'base / "./{_R}/y.md"', id="literal-that-names-this-checkouts-folder"
+    ),
+    pytest.param(f'base / r"{_R}"', id="raw-literal"),
+    pytest.param(f'base / u"{_R}"', id="unicode-literal"),
+    pytest.param(f'base / b"{_R}"', id="bytes-literal"),
+    pytest.param(f'base / rb"{_R}"', id="raw-bytes-literal"),
+    pytest.param(f'base / f"{_R}/{{name}}"', id="f-string"),
+    pytest.param(f'base / """{_R}"""', id="triple-quoted"),
+    pytest.param(f"base / '''{_R}'''", id="triple-single-quoted"),
+    pytest.param(f'base / ("{_R}")', id="parenthesised-literal"),
+    pytest.param(f'dirs[0] / "{_R}"', id="subscript-left"),
+    pytest.param(f'cfg["root"] / "{_R}"', id="string-subscript-left"),
+    pytest.param(f'(a or b) / "{_R}"', id="parenthesised-left"),
+    pytest.param(f'get_root(cfg(x)) / "{_R}"', id="nested-call-left"),
+    pytest.param(f'base + r"{_R}/y.md"', id="concat-raw-literal"),
+]
+
+
+@pytest.mark.parametrize("line", _RUNTIME_SHAPES)
+def test_every_join_shape_onto_a_runtime_value_is_foreign(line: str) -> None:
+    assert _foreign(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(f'r"{_R}/y.md"', id="raw-literal-alone"),
+        pytest.param(f'("{_R}") / name', id="parenthesised-folder-first"),
+        pytest.param("x = rows[0] / 2", id="subscript-arithmetic"),
+    ],
+)
+def test_a_literal_that_starts_at_this_checkouts_folder_stays_clean(line: str) -> None:
+    assert not _foreign(line)
+
+
+# --- every look-alike Unicode's confusables data gives for the folder's letters ---
+
+_MORE_LOOKALIKES = [
+    pytest.param(_swap("c", "ϲ"), id="greek-lunate-sigma"),
+    pytest.param(_R.upper().replace("C", "Ϲ"), id="greek-capital-lunate-sigma"),
+    pytest.param(_swap("i", "ɩ"), id="latin-iota"),
+    pytest.param(_swap("t", "т"), id="cyrillic-te"),
+    pytest.param(_swap("r", "ɽ"), id="r-with-tail"),
+    pytest.param(_swap("r", "ɾ"), id="r-with-fishhook"),
+    pytest.param(_swap("e", "ǝ"), id="turned-e"),
+    pytest.param(_swap("e", "є"), id="cyrillic-ukrainian-ie"),
+    pytest.param(_R.upper().replace("R", "Ꭱ"), id="cherokee-letter-e"),
+]
+
+
+@pytest.mark.parametrize("name", _MORE_LOOKALIKES)
+def test_every_confusable_for_the_folder_letters_is_folded(name: str) -> None:
+    assert _foreign(f"elsewhere/{name}/y.md")
+
+
+def test_the_fold_covers_every_confusable_of_the_folder_letters() -> None:
+    pairs = [p.split(":") for p in _FOLDER_CONFUSABLES.split()]
+    assert len(pairs) == FOLDER_CONFUSABLE_PAIRS
+    digest = hashlib.sha256(_FOLDER_CONFUSABLES.encode()).hexdigest()
+    assert digest == FOLDER_CONFUSABLES_SHA256, digest
+    # Read the way _decoded reads a line: folded, NFKC, folded again.
+    missing = [
+        code
+        for code, letter in pairs
+        if unicodedata.normalize("NFKC", chr(int(code, 16)).translate(_FOLD))
+        .translate(_FOLD)
+        .casefold()
+        != letter.casefold()
+    ]
+    assert missing == []
+
+
+# --- an anchor name is trusted only when the file binds it exactly once, as
+# --- NAME = <anchor>, counting every binding form Python has ------------------
+
+_ONCE = "from pathlib import Path\n\nROOT = Path(__file__).resolve().parents[1]\n"
+
+_REBINDS = {
+    "from-import": "from elsewhere import ROOT\n",
+    "import-as": "import elsewhere as ROOT\n",
+    "parameter": "def f(ROOT):\n    pass\n",
+    "parameter-with-default": "def f(ROOT=None):\n    pass\n",
+    "keyword-only-parameter": "def f(*, ROOT=None):\n    pass\n",
+    "lambda-parameter": "g = lambda ROOT: ROOT\n",
+    "for-target": "for ROOT in dirs:\n    pass\n",
+    "with-as": "with mount() as ROOT:\n    pass\n",
+    "walrus": "if (ROOT := get_root()):\n    pass\n",
+    "tuple-unpacking": "ROOT, other = get_root(), 1\n",
+    "augmented-assignment": "ROOT /= '..'\n",
+    "globals-store": "globals()['ROOT'] = get_root()\n",
+    "match-capture": "match get_root():\n    case ROOT:\n        pass\n",
+    "except-as": "try:\n    pass\nexcept Exception as ROOT:\n    pass\n",
+    "delete": "del ROOT\n",
+    "def-name": "def ROOT():\n    pass\n",
+    "second-assignment": "ROOT = get_root()\n",
+}
+
+
+@pytest.mark.parametrize("form", sorted(_REBINDS))
+def test_an_anchor_bound_more_than_once_in_any_form_is_not_trusted(form: str) -> None:
+    text = _ONCE + _REBINDS[form] + f"x = ROOT / '{_R}' / 'y.md'\n"
+    last = text.count("\n")
+    assert last in _hits(text, "tests/test_zqxwvk.py")
+
+
+def test_a_parameter_that_shadows_a_once_bound_anchor_is_not_trusted() -> None:
+    text = _ONCE + f"def f(ROOT):\n    return ROOT / '{_R}'\n"
+    assert _hits(text, "tests/test_zqxwvk.py") != []
+
+
+def test_an_unbound_root_is_not_trusted() -> None:
+    assert _hits(f"x = ROOT / '{_R}' / 'y.md'\n", "tests/test_zqxwvk.py") == [1]
+
+
+def test_a_rebound_path_or_file_name_is_not_an_anchor() -> None:
+    line = f"x = Path(__file__).parent / '{_R}'\n"
+    assert _hits("Path = get_path()\n" + line, "tests/test_zqxwvk.py") == [2]
+    text = "from pathlib import Path\n__file__ = get_path()\n" + line
+    assert _hits(text, "tests/test_zqxwvk.py") == [3]
+
+
+def test_an_anchor_bound_exactly_once_is_home() -> None:
+    text = (
+        _ONCE
+        + "HERE = ROOT / 'tests'\n"
+        + f"x = ROOT / '{_R}' / 'y.md'\n"
+        + f"y = ROOT.joinpath('{_R}', 'y.md')\n"
+        + f"z = Path(__file__).parents[1] / '{_R}'\n"
+    )
+    assert _hits(text, "tests/test_zqxwvk.py") == []
+
+
+# --- nested calls are read to their matching bracket, at any depth -------------
+
+_DIRNAME3 = "os.path.dirname(os.path.dirname(os.path.dirname(__file__)))"
+_DIRNAME2 = "os.path.dirname(os.path.dirname(__file__))"
+
+
+def test_three_nested_dirnames_climb_out_of_the_checkout() -> None:
+    text = f"import os\n\nx = os.path.join({_DIRNAME3}, '{_R}', 'y.md')\n"
+    assert _hits(text, "tests/test_zqxwvk.py") == [3]
+
+
+def test_two_nested_dirnames_stay_in_the_checkout() -> None:
+    text = f"import os\n\nx = os.path.join({_DIRNAME2}, '{_R}', 'y.md')\n"
+    assert _hits(text, "tests/test_zqxwvk.py") == []
+
+
+def test_a_runtime_argument_nested_three_deep_is_still_runtime() -> None:
+    assert _foreign(f"os.path.join(f(g(h(x))), '{_R}', 'y.md')")
+    assert _foreign(f"root.joinpath(f(g(h(x))), '{_R}')")
+
+
+FOLDER_CONFUSABLE_PAIRS = 182
+FOLDER_CONFUSABLES_SHA256 = (
+    "ab0abcd7b3b4811670700e74e0df9862ab6e2800bed3dceca752dc001e2fea1c"
+)
+
+
+def test_a_namespace_store_under_an_unread_key_trusts_no_anchor() -> None:
+    text = _ONCE + "globals()[name] = get_root()\n" + f"x = ROOT / '{_R}' / 'y.md'\n"
+    assert _hits(text, "tests/test_zqxwvk.py") == [5]
+
+
+def test_a_file_that_is_not_python_trusts_no_anchor() -> None:
+    text = _ONCE + f"x = ROOT / '{_R}' / 'y.md'\n"
+    assert _hits(text, "docs/notes.txt") == [4]
+
+
+def test_a_join_nested_in_a_join_is_read_from_the_inside() -> None:
+    assert not _foreign(f'os.path.join(os.path.join("."), "{_R}", "y.md")')

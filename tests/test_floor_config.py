@@ -1917,6 +1917,14 @@ EXACT_TAMPERS = [
         "timeout is not the pinned 10 minutes",
         id="timeout-inside-the-range",
     ),
+    pytest.param(
+        (
+            "    name: tests\n    timeout-minutes: 20\n",
+            "    name: tests\n    timeout-minutes: 10\n",
+        ),
+        "job tests: timeout is not the pinned 20 minutes",
+        id="tests-timeout-back-to-the-default",
+    ),
 ]
 
 

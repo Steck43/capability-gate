@@ -142,10 +142,25 @@ def _straight(stmts: list[ast.stmt]) -> tuple[list[ast.stmt], bool]:
                 if ended:
                     return out, True
                 continue
+        if isinstance(s, ast.Match) and _only_wildcard(s):
+            out.append(s)
+            inner, ended = _straight(s.cases[0].body)
+            out += inner
+            if ended:
+                return out, True
+            continue
         out.append(s)
         if _terminates(s):
             return out, True
     return out, False
+
+
+def _only_wildcard(s: ast.Match) -> bool:
+    """A match with one unguarded `case _:` always runs that case."""
+    if len(s.cases) != 1 or s.cases[0].guard is not None:
+        return False
+    pattern = s.cases[0].pattern
+    return isinstance(pattern, ast.MatchAs) and pattern.pattern is None
 
 
 def _shallow_calls(s: ast.stmt) -> list[ast.Call]:
@@ -188,32 +203,126 @@ def _ends(stmts: list[ast.stmt]) -> bool:
     return _straight(stmts)[1]
 
 
-def _entry(entry: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
-    rel, func = entry.split("::")
-    tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"), filename=rel)
+def _entry_in(
+    tree: ast.Module, func: str, label: str
+) -> ast.FunctionDef | ast.AsyncFunctionDef:
     defs = [
         n
         for n in ast.walk(tree)
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func
     ]
-    assert defs, f"entry point {entry} not found"
-    assert len(defs) == 1, f"entry point {entry} is defined {len(defs)} times"
+    assert defs, f"entry point {label} not found"
+    assert len(defs) == 1, f"entry point {label} is defined {len(defs)} times"
     return defs[0]
 
 
-def _name_matches(call: ast.Call, name: str) -> bool:
-    d = _dotted(call.func)
-    return d is not None and (d == name or d.endswith("." + name))
+def _entry(entry: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    rel, func = entry.split("::")
+    tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"), filename=rel)
+    return _entry_in(tree, func, entry)
 
 
-def _matches(call: ast.Call, spec: str) -> bool:
-    if "(" not in spec:
-        return _name_matches(call, spec)
-    want = ast.parse(spec, mode="eval").body
-    assert isinstance(want, ast.Call), spec
-    return _name_matches(call, _dotted(want.func) or "") and [
-        ast.dump(a) for a in call.args
-    ] == [ast.dump(a) for a in want.args]
+class _Names:
+    """What a call in one function stands for, through the refactors a reader sees.
+
+    A local name bound to another name or attribute (``ev = gate.evaluate``,
+    ``g = gate``), ``getattr(x, "attr")`` with a constant name, the gate class
+    under an import alias (``_G.evaluate(gate, ...)``), and a same-module helper
+    whose straight-line path returns the call (one level of arguments mapped to
+    its parameters, up to three helpers deep).
+    """
+
+    def __init__(
+        self,
+        tree: ast.Module,
+        fn: ast.FunctionDef | ast.AsyncFunctionDef,
+        bound: dict[str, str] | None = None,
+        depth: int = 0,
+    ) -> None:
+        self.tree = tree
+        self.depth = depth
+        self.helpers = {
+            n.name: n
+            for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self.gate_class = {"Gate"} | {
+            a.asname or a.name
+            for n in ast.walk(tree)
+            if isinstance(n, ast.ImportFrom)
+            for a in n.names
+            if a.name == "Gate"
+        }
+        self.alias = dict(bound or {})
+        for n in ast.walk(fn):
+            if (
+                isinstance(n, ast.Assign)
+                and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)
+                and isinstance(n.value, (ast.Name, ast.Attribute))
+                and (d := _dotted(n.value))
+            ):
+                self.alias[n.targets[0].id] = d
+
+    def resolve(self, dotted: str) -> str:
+        for _ in range(5):
+            head, dot, rest = dotted.partition(".")
+            if head not in self.alias:
+                break
+            dotted = self.alias[head] + dot + rest
+        return dotted
+
+    def of(self, call: ast.Call) -> set[str]:
+        f = call.func
+        if (
+            isinstance(f, ast.Call)
+            and isinstance(f.func, ast.Name)
+            and f.func.id == "getattr"
+            and len(f.args) == 2
+            and isinstance(f.args[1], ast.Constant)
+            and isinstance(f.args[1].value, str)
+            and (target := _dotted(f.args[0]))
+        ):
+            d: str | None = f"{target}.{f.args[1].value}"
+        else:
+            d = _dotted(f)
+        out: set[str] = set()
+        if d:
+            d = self.resolve(d)
+            out.add(d)
+            head, _, rest = d.partition(".")
+            if head in self.gate_class and rest and call.args:
+                receiver = _dotted(call.args[0])
+                if receiver:
+                    out.add(f"{self.resolve(receiver)}.{rest}")
+        if isinstance(f, ast.Name) and f.id in self.helpers and self.depth < 3:
+            out |= self._through_helper(self.helpers[f.id], call)
+        return out
+
+    def _through_helper(self, helper: ast.FunctionDef, call: ast.Call) -> set[str]:
+        bound = {}
+        for param, arg in zip(helper.args.args, call.args):
+            if (d := _dotted(arg)) is not None:
+                bound[param.arg] = self.resolve(d)
+        inner = _Names(self.tree, helper, bound, self.depth + 1)
+        straight, _ = _straight(helper.body)
+        out: set[str] = set()
+        for s in straight:
+            if isinstance(s, ast.Return) and isinstance(s.value, ast.Call):
+                out |= inner.of(s.value)
+        return out
+
+    def matches_name(self, call: ast.Call, name: str) -> bool:
+        return any(d == name or d.endswith("." + name) for d in self.of(call))
+
+    def matches(self, call: ast.Call, spec: str) -> bool:
+        if "(" not in spec:
+            return self.matches_name(call, spec)
+        want = ast.parse(spec, mode="eval").body
+        assert isinstance(want, ast.Call), spec
+        return self.matches_name(call, _dotted(want.func) or "") and [
+            ast.dump(a) for a in call.args
+        ] == [ast.dump(a) for a in want.args]
 
 
 def _verdict_checked(stmts: list[ast.stmt], name: str) -> bool:
@@ -230,9 +339,12 @@ def _verdict_checked(stmts: list[ast.stmt], name: str) -> bool:
     return False
 
 
-def _has(fn: ast.FunctionDef | ast.AsyncFunctionDef, spec: str) -> bool:
+def _has(
+    tree: ast.Module, fn: ast.FunctionDef | ast.AsyncFunctionDef, spec: str
+) -> bool:
+    names = _Names(tree, fn)
     if spec.startswith("any:"):
-        return any(_matches(c, spec[4:]) for c in _all_live_calls(fn.body))
+        return any(names.matches(c, spec[4:]) for c in _all_live_calls(fn.body))
     straight, _ = _straight(fn.body)
     if spec.startswith("verdict:"):
         name = spec[len("verdict:") :]
@@ -242,17 +354,25 @@ def _has(fn: ast.FunctionDef | ast.AsyncFunctionDef, spec: str) -> bool:
                 and len(s.targets) == 1
                 and isinstance(s.targets[0], ast.Name)
                 and isinstance(s.value, ast.Call)
-                and _name_matches(s.value, name)
+                and names.matches_name(s.value, name)
                 and _verdict_checked(straight[i + 1 :], s.targets[0].id)
             ):
                 return True
         return False
-    return any(_matches(c, spec) for s in straight for c in _shallow_calls(s))
+    return any(names.matches(c, spec) for s in straight for c in _shallow_calls(s))
 
 
 def _missing(entry: str, specs: list[str]) -> list[str]:
-    fn = _entry(entry)
-    return [spec for spec in specs if not _has(fn, spec)]
+    rel, func = entry.split("::")
+    tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"), filename=rel)
+    fn = _entry_in(tree, func, entry)
+    return [spec for spec in specs if not _has(tree, fn, spec)]
+
+
+def _missing_src(src: str, func: str, specs: list[str]) -> list[str]:
+    tree = ast.parse(src)
+    fn = _entry_in(tree, func, func)
+    return [spec for spec in specs if not _has(tree, fn, spec)]
 
 
 def test_manifest_is_not_empty() -> None:
@@ -292,3 +412,238 @@ def test_read_binding_not_silently_dropped() -> None:
 @pytest.mark.parametrize("entry", sorted(PENDING))
 def test_entry_point_binds_read_to_checked_object(entry: str) -> None:
     assert _missing(entry, PENDING[entry]) == []
+
+
+# Shapes of a hook body, checked against the same "verdict:gate.evaluate" spec
+# the real hooks carry. Correct refactors must pass; unwired look-alikes must not.
+_PRELUDE = """
+import contextlib
+import os
+
+from capability_gate import Gate as _G
+from capability_gate import Verdict
+
+
+def _deny(reason):
+    os._exit(2)
+
+
+def _check(g, *a):
+    return g.evaluate(*a)
+
+
+def _other(g, *a):
+    return None
+
+
+def _early(g, *a):
+    return None
+    return g.evaluate(*a)
+
+
+def _discard(g, *a):
+    g.evaluate(*a)
+    return None
+
+"""
+_TAIL = """
+    if decision.verdict is not Verdict.ALLOW:
+        _deny("blocked")
+    os._exit(0)
+"""
+_HEAD = "def _pre(event):\n    gate = _G({})\n"
+
+CORRECT_SHAPES = {
+    "method alias": "    ev = gate.evaluate\n    decision = ev('s', 't', [])\n",
+    "class alias": "    decision = _G.evaluate(gate, 's', 't', [])\n",
+    "getattr": "    decision = getattr(gate, 'evaluate')('s', 't', [])\n",
+    "helper": "    decision = _check(gate, 's', 't', [])\n",
+    "local rebinding": "    _gate = gate\n    decision = _gate.evaluate('s', 't', [])\n",
+    "match wildcard": (
+        "    match event:\n        case _:\n"
+        "            decision = gate.evaluate('s', 't', [])\n"
+    ),
+}
+
+UNWIRED_SHAPES = {
+    "alias never called": "    ev = gate.evaluate\n    decision = _other(gate)\n",
+    "getattr of another method": "    decision = getattr(gate, 'throw')('s')\n",
+    "helper that never calls the gate": "    decision = _other(gate, 's', 't', [])\n",
+    "helper that returns first": "    decision = _early(gate, 's', 't', [])\n",
+    "helper that discards the decision": "    decision = _discard(gate, 's', 't', [])\n",
+    "match on a specific case": (
+        "    match event:\n        case 'Read':\n"
+        "            decision = gate.evaluate('s', 't', [])\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(CORRECT_SHAPES))
+def test_correct_refactor_shapes_pass(shape: str) -> None:
+    src = _PRELUDE + _HEAD + CORRECT_SHAPES[shape] + _TAIL
+    assert _missing_src(src, "_pre", ["verdict:gate.evaluate"]) == []
+
+
+@pytest.mark.parametrize("shape", sorted(UNWIRED_SHAPES))
+def test_unwired_look_alikes_fail(shape: str) -> None:
+    src = _PRELUDE + _HEAD + UNWIRED_SHAPES[shape] + _TAIL
+    assert _missing_src(src, "_pre", ["verdict:gate.evaluate"]) == [
+        "verdict:gate.evaluate"
+    ]
+
+
+_ALLOW_EXITS = {"os._exit", "sys.exit", "_exit", "exit"}
+_TOOL_NAMES = {"tool", "tool_name"}
+
+
+def _allows(node: ast.AST) -> bool:
+    """A statement that ends a hook with an allow: exit code 0, or returning None."""
+    if isinstance(node, ast.Return):
+        return node.value is None or (
+            isinstance(node.value, ast.Constant) and node.value.value is None
+        )
+    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+        if _dotted(node.value.func) in _ALLOW_EXITS:
+            args = node.value.args
+            return not args or (
+                isinstance(args[0], ast.Constant) and args[0].value in (0, None)
+            )
+    return False
+
+
+def _kind(test: ast.expr) -> str:
+    text = ast.unparse(test)
+    names = {n.id for n in ast.walk(test) if isinstance(n, ast.Name)}
+    if "environ" in text or "getenv" in text:
+        return "env-gated"
+    if names & _TOOL_NAMES:
+        return "tool-specific"
+    return "conditional"
+
+
+def _early_allows(tree: ast.Module, fn: ast.FunctionDef) -> list[str]:
+    """Branches that allow before the gate decides: each one is a bypass."""
+    names = _Names(tree, fn)
+    straight, _ = _straight(fn.body)
+    end = next(
+        (
+            i
+            for i, s in enumerate(straight)
+            if isinstance(s, ast.Assign)
+            and isinstance(s.value, ast.Call)
+            and names.matches_name(s.value, "gate.evaluate")
+        ),
+        len(straight),
+    )
+    found = []
+    for s in straight[:end]:
+        if not isinstance(s, (ast.If, ast.While, ast.For, ast.With)):
+            continue
+        test = getattr(s, "test", None)
+        for n in ast.walk(s):
+            if _allows(n):
+                kind = _kind(test) if test is not None else "conditional"
+                found.append(f"{kind} early allow at line {n.lineno}")
+    return found
+
+
+@pytest.mark.parametrize("hook", HOOKS)
+def test_no_branch_allows_before_the_gate(hook: str) -> None:
+    rel, func = hook.split("::")
+    tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"), filename=rel)
+    assert _early_allows(tree, _entry_in(tree, func, hook)) == []
+
+
+EARLY_EXIT_SHAPES = {
+    "tool-specific": "    if tool == 'Grep':\n        os._exit(0)\n",
+    "env-gated": "    if os.environ.get('FAST_PATH'):\n        return None\n",
+    "conditional": "    if event.get('trusted'):\n        return\n",
+}
+HARMLESS_EARLY_EXITS = {
+    "deny": "    if tool == 'Grep':\n        _deny('no')\n",
+    "block result": "    if tool == 'Grep':\n        return {'action': 'block'}\n",
+    "raise": "    if tool == 'Grep':\n        raise ValueError('no')\n",
+}
+
+
+def _early_src(prefix: str) -> str:
+    return (
+        _PRELUDE
+        + "def _pre(event):\n    tool = event['tool']\n    gate = _G({})\n"
+        + prefix
+        + "    decision = gate.evaluate('s', tool, [])\n"
+        + _TAIL
+    )
+
+
+@pytest.mark.parametrize("kind", sorted(EARLY_EXIT_SHAPES))
+def test_early_allow_shapes_are_flagged(kind: str) -> None:
+    tree = ast.parse(_early_src(EARLY_EXIT_SHAPES[kind]))
+    found = _early_allows(tree, _entry_in(tree, "_pre", "_pre"))
+    assert found and found[0].startswith(kind), found
+
+
+@pytest.mark.parametrize("shape", sorted(HARMLESS_EARLY_EXITS))
+def test_early_deny_shapes_are_not_flagged(shape: str) -> None:
+    tree = ast.parse(_early_src(HARMLESS_EARLY_EXITS[shape]))
+    assert _early_allows(tree, _entry_in(tree, "_pre", "_pre")) == []
+
+
+# Every environment variable each hook module may read. A new read, anywhere in
+# the module, has to be added here in the same review, because a branch on an
+# environment variable is how a bypass hides from tests that never set it.
+ALLOWED_ENV = {
+    "adapters/claude_code_hook.py": {
+        "CG_CC_DEADLINE_S",
+        "CG_CC_ALLOWLIST",
+        "CG_CC_LOG",
+    },
+    "__init__.py": {"HERMES_HOME"},
+}
+
+
+def _env_reads(tree: ast.Module) -> list[tuple[int, str | None]]:
+    """(line, key) per environment read; key None when it is not a constant."""
+    out = []
+    for n in ast.walk(tree):
+        key_node = None
+        if isinstance(n, ast.Call):
+            d = _dotted(n.func) or ""
+            if d in ("os.getenv", "getenv") or (
+                d.startswith("os.environ.") and d != "os.environ.copy"
+            ):
+                key_node = n.args[0] if n.args else None
+                out.append((n.lineno, _const_key(key_node)))
+        elif isinstance(n, ast.Subscript) and _dotted(n.value) == "os.environ":
+            out.append((n.lineno, _const_key(n.slice)))
+        elif isinstance(n, ast.Compare) and any(
+            _dotted(c) == "os.environ" for c in n.comparators
+        ):
+            out.append((n.lineno, _const_key(n.left)))
+    return out
+
+
+def _const_key(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+@pytest.mark.parametrize("rel", sorted(ALLOWED_ENV))
+def test_hook_modules_read_only_listed_environment_variables(rel: str) -> None:
+    tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"), filename=rel)
+    bad = [(line, key) for line, key in _env_reads(tree) if key not in ALLOWED_ENV[rel]]
+    assert bad == [], bad
+
+
+def test_env_read_rule_sees_each_read_form() -> None:
+    src = (
+        "import os\n"
+        "a = os.environ.get('X')\n"
+        "b = os.getenv('Y')\n"
+        "c = os.environ['Z']\n"
+        "d = 'W' in os.environ\n"
+        "e = os.environ.get(name)\n"
+    )
+    keys = [key for _, key in _env_reads(ast.parse(src))]
+    assert keys == ["X", "Y", "Z", "W", None]

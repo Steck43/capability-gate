@@ -567,6 +567,8 @@ FLOOR_CONCURRENCY = {
     "cancel-in-progress": True,
 }
 JOB_TIMEOUT = 10
+# Jobs pinned to another timeout. The full suite on Python 3.11 runs past 10.
+JOB_TIMEOUTS = {"tests": 20}
 # pytest options a guardrail run may not add: they select, deselect, skip,
 # collect only, change config or root, disable plugins or relax xfail.
 PYTEST_OPTIONS = frozenset({"-q"})
@@ -1332,8 +1334,9 @@ def job_violations(wf: dict, extra_workflows: list[dict] = ()) -> list[str]:
             and 1 <= timeout <= MAX_TIMEOUT
         ):
             found.append(f"{where}: timeout is not 1 to {MAX_TIMEOUT} minutes")
-        if timeout != JOB_TIMEOUT:
-            found.append(f"{where}: timeout is not the pinned {JOB_TIMEOUT} minutes")
+        pinned = JOB_TIMEOUTS.get(key, JOB_TIMEOUT)
+        if timeout != pinned:
+            found.append(f"{where}: timeout is not the pinned {pinned} minutes")
         if not _matrix_combos(job):
             found.append(f"{where}: matrix expands to no runs")
         if not shell_ok(((job.get("defaults") or {}).get("run") or {}).get("shell")):
@@ -1803,6 +1806,7 @@ _FILE_EXEMPTION = re.compile(r"(?i)^#\s*(?:ruff|flake8)\s*:\s*noqa\b")
 # base pins catch.
 NOQA_INVENTORY: dict[str, int] = {
     "harness/d15_hermes_faithful.py:E402": 1,
+    "harness/t_adv_04_open_by_fd.py:E402": 1,
     "scripts/floor_guard.py:S506": 1,
     "test_e2_mode_staleness.py:F401": 1,
     "tests/grind01_util.py:E402": 1,
@@ -1815,14 +1819,19 @@ NOQA_INVENTORY: dict[str, int] = {
     "tests/test_floor_fixes.py:E402": 1,
     "tests/test_gate_boundary.py:E402": 1,
     "tests/test_gate_files.py:E402": 1,
+    "tests/test_glob_regex.py:E402": 1,
+    "tests/test_glob_separators.py:E402": 1,
     "tests/test_halt_marker.py:E402": 1,
     "tests/test_harness_tally.py:E402": 1,
     "tests/test_hook_behavior.py:E402": 1,
+    "tests/test_hook_payload_fail_closed.py:E402": 1,
     "tests/test_issue33_shapes.py:E402": 1,
     "tests/test_kill_switch.py:E402": 1,
+    "tests/test_path_escapes_hook.py:E402": 2,
     "tests/test_receipt_paths.py:E402": 1,
     "tests/test_s1_distinguish.py:E402": 2,
     "tests/test_secondary_path_key.py:E402": 1,
+    "tests/test_witness_tamper.py:E402": 1,
 }
 
 
