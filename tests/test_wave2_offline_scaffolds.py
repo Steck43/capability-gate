@@ -2,7 +2,7 @@
 
 These tests deliberately begin red. They pin the paper-facing oracle and
 adapter boundary before implementation. They do not claim a live Hermes,
-AgentDojo, or aegisbox run.
+AgentDojo, or test box run.
 """
 
 from __future__ import annotations

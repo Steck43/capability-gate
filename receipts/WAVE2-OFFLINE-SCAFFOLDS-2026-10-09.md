@@ -13,7 +13,7 @@ Hermes runtime pin: `ccd8deaa6705bd6ca1890584d8f4055fe61227b5`
 | T-FAIL-04 | Fresh Gate instance denies 20/20 calls with the existing marker; one THROWN row | Hermes/plugin restart `NOT measured` |
 | T-ADV-02 | Adapter mapping strips output-carried privilege metadata | Live induced calls `NOT measured` |
 | T-ADV-03 | Five outside-set Glob parent canaries now classify as climb attempts | Live CC/Hermes matching and Windows rows `NOT measured` |
-| B1 | `REPRODUCE-PAPER.md` names offline commands and boundaries | Vör cold reproduction `NOT measured` |
+| B1 | `REPRODUCE-PAPER.md` names offline commands and boundaries | Independent cold reproduction `NOT measured` |
 
 Failing-first commit: `8d7d3e5` (missing adapter/module/table). The T-ADV-03 canaries then failed 5/5 before the classifier repair.
 
