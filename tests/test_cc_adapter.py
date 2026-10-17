@@ -421,3 +421,36 @@ def test_never_emits_updated_input(tmp_path, project):
         r = _run(_call(tool, ti, project), env)
         assert r.stdout == "", (tool, r.stdout)
         assert "updatedInput" not in r.stderr
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="a read-only folder mode does not stop file creation on Windows",
+)
+def test_readonly_log_folder_blocks_or_throw_succeeds(tmp_path: Path, project: Path):
+    # Once the log and its lock exist, a read-only log folder still lets appends
+    # through but stops the kill switch marker from being created. The hook must
+    # then deny, because an operator could no longer stop it.
+    if os.geteuid() == 0:
+        pytest.skip("a read-only folder mode does not stop file creation for root")
+    root = project.as_posix()
+    allow = _policy(
+        tmp_path,
+        f"skills:\n  UNLABELED:\n    tools: [Read, Write]\n    paths: ['{root}/**']\n",
+    )
+    env = _env(tmp_path, allow)
+    write = _call(
+        "Write",
+        {"file_path": str(project / "notes" / "b.txt"), "content": "x"},
+        project,
+    )
+    first = _run(write, env)
+    assert first.returncode == 0, first.stderr
+    logdir = tmp_path / "log"
+    os.chmod(logdir, 0o555)
+    try:
+        r = _run(write, env)
+    finally:
+        os.chmod(logdir, 0o755)
+    assert _denied(r), (r.returncode, r.stderr)
+    assert "cannot be thrown" in r.stderr
