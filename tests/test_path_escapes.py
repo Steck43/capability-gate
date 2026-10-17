@@ -5,7 +5,8 @@
 The gate must judge the file the operating system will open, not the string it
 was handed. Each case builds a link layout, reads what the OS actually opens,
 and requires the gate to deny exactly when that file is outside the grant.
-Both the gate and the registered Hermes hook are driven.
+The registered Hermes hook is driven over the same layout in
+tests/test_path_escapes_hook.py.
 """
 
 # KAT
@@ -13,19 +14,12 @@ Both the gate and the registered Hermes hook are driven.
 from __future__ import annotations
 
 import os
-import sys
 import types
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from grind01_util import blocked, hermes_home, load_adapter, register  # noqa: E402
-
-from capability_gate import Gate, Verdict, load_policy  # noqa: E402
-
-HERMES_MODULE = "tools.file_tools"
+from capability_gate import Gate, Verdict, load_policy
 
 
 @pytest.fixture
@@ -69,46 +63,28 @@ ESCAPE = os.path.join("sl", "..", "secret.txt")
 IN_GRANT = os.path.join("a", "..", "b.txt")
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="Windows collapses .. before it follows the link"
+)
 def test_symlink_then_dotdot_relative_denied(layout, gate) -> None:
     # On POSIX the OS resolves sl before "..", so this opens outside/secret.txt.
-    # On Windows the path is collapsed as text first, so it opens the decoy.
-    opened = _opened(layout, ESCAPE)
-    if os.name != "nt":
-        assert opened == "SECRET", "layout does not reproduce the escape"
+    assert _opened(layout, ESCAPE) == "SECRET", "layout does not reproduce the escape"
     d = gate.evaluate("s", "read_file", [ESCAPE], base_dir=str(layout.granted))
-    expected = Verdict.DENY if opened == "SECRET" else Verdict.ALLOW
-    assert d.verdict is expected, (opened, d.reason)
+    assert d.verdict is Verdict.DENY, d.reason
+
+
+@pytest.mark.skipif(os.name != "nt", reason="POSIX follows the link before ..")
+def test_symlink_then_dotdot_opens_the_decoy_on_windows_and_allows(
+    layout, gate
+) -> None:
+    # On Windows the path is collapsed as text first, so it opens the decoy
+    # inside the grant, and the gate allows it.
+    assert _opened(layout, ESCAPE) == "DECOY"
+    d = gate.evaluate("s", "read_file", [ESCAPE], base_dir=str(layout.granted))
+    assert d.verdict is Verdict.ALLOW, d.reason
 
 
 def test_dotdot_inside_the_grant_still_allows(layout, gate) -> None:
     assert _opened(layout, IN_GRANT) == "IN"
     d = gate.evaluate("s", "read_file", [IN_GRANT], base_dir=str(layout.granted))
     assert d.verdict is Verdict.ALLOW, d.reason
-
-
-@pytest.fixture
-def pre_tool_call(layout, monkeypatch):
-    def _resolve_base_dir(task_id="default", *, container_paths=None):
-        return Path(os.environ["TERMINAL_CWD"])
-
-    mod = types.ModuleType(HERMES_MODULE)
-    mod._resolve_base_dir = _resolve_base_dir
-    monkeypatch.setitem(sys.modules, HERMES_MODULE, mod)
-    monkeypatch.setenv("TERMINAL_CWD", str(layout.granted))
-    home = hermes_home(layout.root, monkeypatch)
-    skills = {
-        "UNLABELED": {"tools": ["read_file"], "paths": [str(layout.granted / "**")]}
-    }
-    return register(load_adapter("escapes"), home, skills)
-
-
-def test_symlink_then_dotdot_relative_denied_through_the_hook(
-    layout, pre_tool_call
-) -> None:
-    opened = _opened(layout, ESCAPE)
-    out = pre_tool_call("read_file", {"path": ESCAPE}, "t")
-    assert blocked(out) is (opened == "SECRET"), (opened, out)
-
-
-def test_dotdot_inside_the_grant_allows_through_the_hook(layout, pre_tool_call) -> None:
-    assert pre_tool_call("read_file", {"path": IN_GRANT}, "t") is None
