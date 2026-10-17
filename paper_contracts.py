@@ -38,6 +38,19 @@ def decision_digest(decision: Any) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def atoms_result_digest(atoms_result: Any) -> str:
+    """Recompute the digest shape used by the atoms-to-box contract."""
+    body = json.dumps(
+        [
+            _field(atoms_result, "block_message"),
+            _field(atoms_result, "winning_effect"),
+            _field(atoms_result, "decision_digest"),
+            _field(atoms_result, "box_ticket"),
+        ]
+    )
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
 def receipt_digests_match(
     receipt: Mapping[str, Any],
     expected_gate_digest: str,
@@ -50,4 +63,17 @@ def receipt_digests_match(
         return False
     return hmac.compare_digest(gate, expected_gate_digest) and hmac.compare_digest(
         atoms, expected_atoms_digest
+    )
+
+
+def accept_bound_receipt(
+    receipt: Mapping[str, Any],
+    decision: Any,
+    atoms_result: Any,
+) -> bool:
+    """Accept only digests recomputed from the source decision and atoms result."""
+    return receipt_digests_match(
+        receipt,
+        decision_digest(decision),
+        atoms_result_digest(atoms_result),
     )

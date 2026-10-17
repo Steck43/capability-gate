@@ -49,12 +49,14 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import stat
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from typing import IO, Iterator
 
 import yaml
 from yaml.constructor import ConstructorError
@@ -229,10 +231,35 @@ def _write_witness(witness_path: str, head: str, count: int) -> None:
         os.close(fd)
 
 
-def _verify_log(log_path: str) -> tuple[str, int]:
-    """Return (head hash, record count). Check parent links and the witness."""
+def _anchor_path(log_path: str) -> str:
+    """Default anchor location: beside the log. An operator can set another."""
+    return f"{log_path}.anchor"
+
+
+_REANCHOR = "an operator must re-anchor (python capability_gate.py reanchor)"
+
+
+def _read_anchor(anchor_path: str) -> dict | None:
+    if not os.path.lexists(anchor_path):
+        return None
+    try:
+        return _read_witness(anchor_path)
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"audit log anchor unreadable, failing closed: {exc!r}"
+        ) from exc
+
+
+def _verify_log(log_path: str, anchor_path: str | None = None) -> tuple[str, int]:
+    """Return (head hash, record count). Check parent links, witness, and anchor.
+
+    The anchor holds the same head and count as the witness, written on every
+    append. Once it exists, a missing log, a missing witness, or a chain that
+    does not reach the anchored head and count is tamper, not a first run.
+    """
     witness_path = _witness_path(log_path)
     witness = _read_witness(witness_path) if os.path.exists(witness_path) else None
+    anchor = _read_anchor(anchor_path or _anchor_path(log_path))
 
     prev = _GENESIS
     count = 0
@@ -241,6 +268,11 @@ def _verify_log(log_path: str) -> tuple[str, int]:
             witness["count"] != 0 or witness["head"] != _GENESIS
         ):
             raise ValueError("audit log missing but witness present")
+        if anchor is not None and (anchor["count"] != 0 or anchor["head"] != _GENESIS):
+            raise ValueError(
+                f"audit log missing but its anchor records {anchor['count']} "
+                f"row(s); {_REANCHOR}"
+            )
         return _GENESIS, 0
 
     with open(log_path, encoding="utf-8") as fh:
@@ -254,21 +286,51 @@ def _verify_log(log_path: str) -> tuple[str, int]:
             prev = _hash_log_line(line)
             count += 1
 
+    if witness is None and anchor is not None and count > 0:
+        raise ValueError(f"audit log witness missing; {_REANCHOR}")
     if witness is not None and (witness["count"] != count or witness["head"] != prev):
         raise ValueError("audit log witness mismatch")
+    if anchor is not None and (anchor["count"] != count or anchor["head"] != prev):
+        raise ValueError(
+            "audit log does not match its anchor (shortened, rewritten, or "
+            f"replaced); {_REANCHOR}"
+        )
     return prev, count
 
 
-def verify_hash_chain(log_path: str) -> str:
+def verify_hash_chain(log_path: str, anchor_path: str | None = None) -> str:
     """Return the hash of the last JSONL line, or genesis if none exist.
 
     Each record's parent is the hash of the previous line. A sibling witness
-    file stores the head hash and record count so truncation and whole-log
-    deletion fail closed the same way a rewrite does. Fail closed instead of
-    appending onto a broken chain.
+    file and an anchor (beside the log unless an operator sets another
+    location) store the head hash and record count, so truncation, deletion,
+    and a recomputed witness fail closed the same way a rewrite does. Fail
+    closed instead of appending onto a broken chain.
     """
-    head, _count = _verify_log(log_path)
+    head, _count = _verify_log(log_path, anchor_path)
     return head
+
+
+def reanchor_audit_log(log_path: str, anchor_path: str | None = None) -> list[str]:
+    """Operator action: retire the current log, witness, and anchor.
+
+    Nothing is deleted. Each file present is renamed with a ``.retired-<time>``
+    suffix, so the damaged record stays available to inspect, and the next
+    decision starts a new chain and a new anchor. The gate never does this on
+    its own. Returns the retired paths.
+    """
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    retired = []
+    for path in (
+        log_path,
+        _witness_path(log_path),
+        anchor_path or _anchor_path(log_path),
+    ):
+        if os.path.lexists(path):
+            target = f"{path}.retired-{stamp}"
+            os.replace(path, target)
+            retired.append(target)
+    return retired
 
 
 _PATH_LIKE_KEYS = frozenset(
@@ -360,6 +422,64 @@ def _same_file_name(a: str, b: str) -> bool:
     return os.path.normcase(os.path.realpath(a)) == os.path.normcase(
         os.path.realpath(b)
     )
+
+
+def _canon_path(p: str) -> str:
+    return os.path.normcase(os.path.realpath(p))
+
+
+def _is_same_or_ancestor(path: str, folder: str) -> bool:
+    """True when path is folder or a folder that contains it."""
+    a, f = _canon_path(path), _canon_path(folder)
+    return a == f or f.startswith(a.rstrip(os.sep) + os.sep)
+
+
+FOLDER_TOKEN_NAME = ".capability-gate-folder"
+
+
+def _folder_token(folder: str, create: bool = False) -> str | None:
+    """The random token that names this log folder, or None when it is gone.
+
+    Created once, by the first gate to use the folder, and only read after
+    that. A folder that was removed and made again has no token or a new one,
+    which an inode number cannot show: filesystems reuse inode numbers.
+    """
+    path = os.path.join(folder, FOLDER_TOKEN_NAME)
+    if create:
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            try:
+                os.write(fd, secrets.token_hex(16).encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+    try:
+        with open(path, encoding="ascii") as f:
+            return f.read().strip() or None
+    except (OSError, UnicodeError):
+        return None
+
+
+def _can_create_in(folder: str) -> bool:
+    """Whether a marker could be made at folder, creating missing parents first.
+
+    The nearest existing ancestor decides: it must be a folder this process can
+    write, as os.makedirs would need.
+    """
+    folder = os.path.abspath(folder)
+    while not os.path.lexists(folder):
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            return False
+        folder = parent
+    return os.path.isdir(folder) and os.access(folder, os.W_OK | os.X_OK)
+
+
+class KillSwitchUnthrowable(RuntimeError):
+    """No halt location could take the marker; the switch is not thrown."""
 
 
 @dataclass(frozen=True)
@@ -462,12 +582,14 @@ def _glob_to_regex(glob: str) -> re.Pattern:
             if i + 1 < n and glob[i + 1] == "*":
                 out.append(".*")  # ** crosses separators
                 i += 2
-                if i < n and glob[i] == "/":
-                    i += 1  # collapse the slash after **
+                if i < n and glob[i] in "/\\":
+                    i += 1  # collapse the separator after **
                 continue
-            out.append("[^/]*")  # * stays within a segment
+            # * and ? stay within one segment. Both separators count, because a
+            # Windows path is spelled with backslashes.
+            out.append(r"[^/\\]*")
         elif c == "?":
-            out.append("[^/]")
+            out.append(r"[^/\\]")
         else:
             out.append(re.escape(c))
         i += 1
@@ -501,6 +623,42 @@ def _shared_hardlink(path: str) -> bool:
     except OSError:
         return False
     return stat.S_ISREG(st.st_mode) and st.st_nlink > 1
+
+
+# A folder bigger than this is denied rather than vetted entry by entry.
+_TREE_VET_LIMIT = 50_000
+
+
+def _tree_escape(folder: str, globs: Sequence[str]) -> str | None:
+    """Why a folder a tool will walk reaches outside the grant, or None.
+
+    A search reads every file under the folder, so each entry must pass the
+    same checks a direct read does: its resolved path matches the grant (a
+    symlink, or a Windows junction the walk descends into, cannot point out),
+    and no regular file shares its inode through a hard link. Links are not
+    followed into folders; their own resolved path is checked. A walk error is
+    a deny, since the unvetted part could hold anything.
+    """
+    errors: list[OSError] = []
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(
+        folder, onerror=errors.append, followlinks=False
+    ):
+        for name in (*dirnames, *filenames):
+            seen += 1
+            if seen > _TREE_VET_LIMIT:
+                return (
+                    f"folder '{folder}' has more than {_TREE_VET_LIMIT} entries; "
+                    "too large to vet"
+                )
+            entry = os.path.join(dirpath, name)
+            if not _path_allowed(entry, globs):
+                return f"'{entry}' under '{folder}' resolves outside the grant"
+            if _shared_hardlink(entry):
+                return f"'{entry}' under '{folder}' has multiple hard links"
+    if errors:
+        return f"could not walk folder '{folder}', failing closed: {errors[0]!r}"
+    return None
 
 
 def _path_allowed(path: str, globs: Iterable[str]) -> bool:
@@ -580,7 +738,12 @@ def _absolute(path: str, base_dir: str | None) -> str | None:
         return path
     if not base_dir or not os.path.isabs(base_dir):
         return None
-    return os.path.normpath(os.path.join(base_dir, path))
+    # Never normpath first: collapsing "link/.." as text names a different file
+    # than a POSIX open, which follows the link before "..". realpath on the
+    # folder part follows links in order; the last part stays as named so the
+    # checks after this still see a symlinked file as a symlink.
+    parent, name = os.path.split(os.path.join(base_dir, path))
+    return os.path.join(os.path.realpath(parent), name)
 
 
 def _decide(
@@ -646,6 +809,10 @@ def _decide(
                 tool,
                 ptuple,
             )
+        if os.path.isdir(p):
+            escape = _tree_escape(p, rule.path_globs)
+            if escape is not None:
+                return Decision(Verdict.DENY, escape, skill, tool, ptuple)
     if tool in policy.require_approval:
         return Decision(
             Verdict.ASK, f"tool '{tool}' requires human approval", skill, tool, ptuple
@@ -663,6 +830,8 @@ class Gate:
         mode: str = ENFORCE,
         *,
         halt_path: str | None = None,
+        fallback_halt_path: str | None = None,
+        anchor_path: str | None = None,
     ):
         if mode not in (ENFORCE, OBSERVE):
             raise ValueError(f"mode must be '{ENFORCE}' or '{OBSERVE}', got {mode!r}")
@@ -670,8 +839,24 @@ class Gate:
         # Absolute paths so a relative HERMES_HOME does not move the marker
         # when the process cwd changes (independent review R2-3).
         self._log_path = os.path.abspath(log_path)
-        raw_halt = halt_path if halt_path else halt_marker_path(self._log_path)
-        self._halt_path = os.path.abspath(raw_halt)
+        beside_log = halt_marker_path(self._log_path)
+        self._halt_path = os.path.abspath(halt_path or beside_log)
+        # An operator-set marker location falls back to the one beside the log,
+        # so one unwritable folder cannot make the switch unthrowable.
+        fallback = fallback_halt_path or (beside_log if halt_path else None)
+        self._halt_paths = tuple(
+            dict.fromkeys(os.path.abspath(p) for p in (self._halt_path, fallback) if p)
+        )
+        # The log folder exists from here on, and this gate remembers which
+        # folder it is. Its removal or replacement later is tamper, not a first
+        # run: the gate denies and does not re-create it.
+        log_dir = os.path.dirname(self._log_path) or "."
+        os.makedirs(log_dir, exist_ok=True)
+        self._log_dir_token = _folder_token(log_dir, create=True)
+        self._log_folder_lost = False
+        # An anchor outside the agent's tree survives deletion of the log
+        # folder; the default beside the log survives deletion of the log.
+        self._anchor_path = os.path.abspath(anchor_path or _anchor_path(self._log_path))
         self._mode = mode
 
     @property
@@ -688,18 +873,43 @@ class Gate:
     def halt_path(self) -> str:
         return self._halt_path
 
+    @property
+    def halt_paths(self) -> tuple[str, ...]:
+        """Every marker location, primary first; a marker at any of them is thrown."""
+        return self._halt_paths
+
     def throw(self, reason: str = "") -> bool:
         """Throw the kill switch. True if this call threw it, False if already thrown.
 
-        The marker goes down before the THROWN row. If the log write then fails,
-        the switch is still thrown and the error is raised.
+        The marker goes in the first location that takes it. If none does, this
+        raises KillSwitchUnthrowable rather than returning as if it worked; the
+        gate already denies every call in that state. The marker goes down before
+        the THROWN row. If the log write then fails, the switch is still thrown
+        and the error is raised.
         """
-        os.makedirs(os.path.dirname(self._halt_path) or ".", exist_ok=True)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        try:
-            fd = os.open(self._halt_path, flags, 0o600)
-        except FileExistsError:
+        if any(os.path.lexists(p) for p in self._halt_paths):
             return False
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        failures = []
+        for path in self._halt_paths:
+            try:
+                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            except OSError as exc:
+                failures.append(f"{path}: {exc!r}")
+                continue
+            try:
+                fd = os.open(path, flags, 0o600)
+            except FileExistsError:
+                return False
+            except OSError as exc:
+                failures.append(f"{path}: {exc!r}")
+                continue
+            break
+        else:
+            raise KillSwitchUnthrowable(
+                "kill switch NOT thrown, no halt location took the marker: "
+                + "; ".join(failures)
+            )
         try:
             os.write(fd, f"thrown at {time.time()}: {reason}\n".encode())
             os.fsync(fd)
@@ -710,37 +920,75 @@ class Gate:
             f"kill switch thrown: {reason or 'no reason given'}",
             "",
             "",
-            (self._halt_path,),
+            (path,),
             enforced=True,
         )
         record_decision(self._log_path, self._mode, decision)
         return True
 
     def _halt_state(self) -> str | None:
-        """Deny reason from the marker, or None when it is not there.
+        """Deny reason from the switch, or None when calls may proceed.
 
-        Read on every call and never cached. Only FileNotFoundError means not
-        thrown. Any other error reading the marker is a deny.
+        Read on every call and never cached. Only FileNotFoundError means a
+        marker is absent; any other error reading one is a deny. A switch that
+        could not be thrown (no marker location writable) and a missing log
+        folder are both denies: the operator would have no way to stop the gate.
         """
-        try:
-            os.lstat(self._halt_path)
-        except FileNotFoundError:
-            return None
-        except Exception as exc:
-            return f"kill switch state unreadable, failing closed: {exc!r}"
-        return f"kill switch thrown: {self._halt_path} exists; a human removes it"
+        for path in self._halt_paths:
+            try:
+                os.lstat(path)
+            except (FileNotFoundError, NotADirectoryError):
+                # Not there, or a parent is a file so it can never be there.
+                continue
+            except Exception as exc:
+                return f"kill switch state unreadable, failing closed: {exc!r}"
+            return f"kill switch thrown: {path} exists; a human removes it"
+        log_dir = os.path.dirname(self._log_path) or "."
+        if self._log_dir_token is None or _folder_token(log_dir) != self._log_dir_token:
+            # Writing a row now would re-create the folder and start a fresh
+            # chain, so this denial is returned without a log row.
+            self._log_folder_lost = True
+            return (
+                f"decision log folder {log_dir} was removed or replaced, failing closed"
+            )
+        if not any(_can_create_in(os.path.dirname(p) or ".") for p in self._halt_paths):
+            return (
+                "kill switch cannot be thrown (no halt location is writable), "
+                "failing closed"
+            )
+        return None
+
+    def _guarded_name(self, p: str, a: str) -> str | None:
+        """Why a tool path would reach the switch or the log, or None."""
+        log = self._log_path
+        if any(_same_file_name(a, h) for h in self._halt_paths):
+            return f"path '{p}' is the kill switch marker"
+        if _same_file_name(a, self._anchor_path):
+            return f"path '{p}' is the audit log anchor"
+        token = os.path.join(os.path.dirname(log), FOLDER_TOKEN_NAME)
+        own = (log, log + ".lock", log + ".witness", token)
+        if any(_same_file_name(a, f) for f in own):
+            return f"path '{p}' is the gate's own decision log file"
+        folders = {os.path.dirname(h) for h in self._halt_paths}
+        folders.add(os.path.dirname(log))
+        for folder in folders:
+            if _is_same_or_ancestor(a, folder):
+                return f"path '{p}' holds the kill switch or decision log folder"
+        return None
 
     def _kill_switch(
         self, skill: str, tool: str, paths: Sequence[str], base_dir: str | None
     ) -> Decision | None:
         reason = self._halt_state()
         if reason is None:
-            # The agent must not clear or throw the switch through a tool path.
+            # The agent must not clear or throw the switch through a tool path,
+            # nor remove the folder that holds it or the log.
             for p in paths:
                 a = _absolute(p, base_dir)
-                if a is not None and _same_file_name(a, self._halt_path):
-                    reason = f"path '{p}' is the kill switch marker"
-                    break
+                if a is not None:
+                    reason = self._guarded_name(p, a)
+                    if reason is not None:
+                        break
         if reason is None:
             return None
         return Decision(Verdict.DENY, reason, skill, tool, tuple(paths))
@@ -792,7 +1040,8 @@ class Gate:
                 )
             # observe mode records the true verdict but does not act on it
             decision = replace(decision, enforced=(self._mode == ENFORCE))
-            self._log(decision, trace=norm_trace, arg_summary=arg_summary)
+            if not self._log_folder_lost:
+                self._log(decision, trace=norm_trace, arg_summary=arg_summary)
             return decision
         except Exception as exc:  # any failure is a denial, on purpose
             decision = Decision(
@@ -826,7 +1075,86 @@ class Gate:
             decision,
             trace=trace,
             arg_summary=arg_summary,
+            anchor_path=self._anchor_path,
         )
+
+
+@dataclass(frozen=True)
+class AuthorizedRead:
+    """One gate decision bound to the file object the host must consume."""
+
+    decision: Decision
+    stream: IO[str] | None
+    opened_path: str | None
+
+
+@contextmanager
+def open_authorized_read(
+    gate: Gate,
+    skill: str,
+    path: str,
+    *,
+    tool: str = "read_file",
+    trace: Mapping[str, str] | None = None,
+    args: Mapping | None = None,
+    base_dir: str | None = None,
+    encoding: str = "utf-8",
+) -> Iterator[AuthorizedRead]:
+    """Open once, authorize the opened object, and keep that descriptor bound.
+
+    Linux exposes the opened object through ``/proc/self/fd``. The gate checks
+    that object rather than re-resolving the caller's name, and the host reads
+    from the same descriptor. A platform without this identity surface denies
+    instead of falling back to a check-then-open sequence.
+    """
+
+    fd = -1
+    stream: IO[str] | None = None
+    opened_path: str | None = None
+    decision_args = args if args is not None else {"path": path}
+    absolute = _absolute(path, base_dir)
+    refuse: str | None = None
+    try:
+        if absolute is None:
+            refuse = "open-by-fd requires an absolute path or a trusted base directory"
+        elif os.name != "posix" or not os.path.isdir("/proc/self/fd"):
+            refuse = "open-by-fd requires the Linux /proc/self/fd identity surface"
+        elif not hasattr(os, "O_NOFOLLOW"):
+            refuse = "open-by-fd requires O_NOFOLLOW"
+        else:
+            flags = os.O_RDONLY | os.O_NOFOLLOW
+            flags |= getattr(os, "O_CLOEXEC", 0)
+            try:
+                fd = os.open(absolute, flags)
+                opened = os.fstat(fd)
+                if not stat.S_ISREG(opened.st_mode):
+                    refuse = "opened object is not a regular file"
+                else:
+                    opened_path = os.path.realpath(f"/proc/self/fd/{fd}")
+            except OSError as exc:
+                refuse = f"descriptor open failed: {exc.strerror or exc!s}"
+
+        checked_paths = [opened_path] if opened_path is not None else [path]
+        decision = gate.evaluate(
+            skill,
+            tool,
+            checked_paths,
+            trace=trace,
+            args=decision_args,
+            refuse=refuse,
+            base_dir=base_dir if opened_path is None else None,
+        )
+        if decision.verdict is Verdict.ALLOW or not decision.enforced:
+            if fd < 0:
+                raise RuntimeError("descriptor-backed passthrough has no descriptor")
+            stream = os.fdopen(fd, "r", encoding=encoding)
+            fd = -1
+        yield AuthorizedRead(decision, stream, opened_path)
+    finally:
+        if stream is not None:
+            stream.close()
+        if fd >= 0:
+            os.close(fd)
 
 
 def record_decision(
@@ -836,8 +1164,9 @@ def record_decision(
     *,
     trace: Mapping[str, str] | None = None,
     arg_summary: Mapping | None = None,
+    anchor_path: str | None = None,
 ) -> None:
-    """Write one durable decision row with parent link and witness update.
+    """Write one durable decision row with parent link, witness, and anchor update.
 
     Shared by Gate._log and the adapter's fail-closed branches, so a denial that
     never reached evaluate() is still on the record (2026-09-28 incident: nine
@@ -858,7 +1187,7 @@ def record_decision(
         with _audit_lock(log_path):
             # F-3: verify and append under one lock so two processes cannot
             # both parent the same head.
-            head, count = _verify_log(log_path)
+            head, count = _verify_log(log_path, anchor_path)
             record["parent"] = head
             checked = checked_log_record(record)
             body = json.dumps(checked, sort_keys=True)
@@ -882,7 +1211,37 @@ def record_decision(
                 _hash_log_line(body),
                 count + 1,
             )
+            _write_witness(
+                anchor_path or _anchor_path(log_path),
+                _hash_log_line(body),
+                count + 1,
+            )
     except Exception:
         # A gate that cannot record its own decisions is not trustworthy.
         # Re-raise so the adapter treats that as a denial in enforce mode.
         raise
+
+
+def _main(argv: Sequence[str] | None = None) -> int:
+    """Operator commands. The agent never runs these; they act on the record."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="capability_gate.py")
+    sub = parser.add_subparsers(dest="command", required=True)
+    re_cmd = sub.add_parser(
+        "reanchor",
+        help="retire a damaged decision log, witness, and anchor so a new chain starts",
+    )
+    re_cmd.add_argument("--log", required=True, help="decision log path")
+    re_cmd.add_argument("--anchor", help="anchor path, when not beside the log")
+    args = parser.parse_args(argv)
+    retired = reanchor_audit_log(args.log, anchor_path=args.anchor)
+    if retired:
+        print("retired: " + ", ".join(retired))
+    else:
+        print("nothing to retire")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
