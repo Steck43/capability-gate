@@ -12,7 +12,7 @@ one-to-one implementations of the Paper MASTER-PLAN Part C letters.
 | C4 | Close K3 through K8. | Depends on the contract each K-item tests. | K3-K8 are a work queue, not aliases for scaffold folders `C3`-`C8`. Map each item to its actual boundary before implementation. |
 | C5 | Prove Windows grant ownership and ACL behavior. | `C1` fail-closed; `C2` closed schema and log-before-act. | This is host-specific evidence. The #63 scaffolds contain no Windows ACL measurement. |
 | C6 | Mint the Zenodo DOI only with B7. | No scaffold implements release authority. | `C6/` is the four-plane threat-model contract. MASTER-PLAN C6 is a held publication action and remains coupled to B7. |
-| C7 | Close Forseti follow-ups. | Any of `C1`-`C7`, according to the finding. | Forseti findings route to the boundary they falsify. `C7/` only defines cross-roof object and dependency handling. |
+| C7 | Close independent review follow-ups. | Any of `C1`-`C7`, according to the finding. | Review findings route to the boundary they falsify. `C7/` only defines cross-roof object and dependency handling. |
 
 ## State boundary
 
