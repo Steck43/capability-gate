@@ -167,11 +167,21 @@ def test_star_and_question_mark_match_within_one_segment(name) -> None:
 
 
 @PROPERTY
-@given(glob=_NAME, other=_NAME)
-def test_glob_without_wildcards_matches_only_itself(glob, other) -> None:
+@given(
+    glob=_NAME,
+    other=_NAME,
+    suffix=st.sampled_from(["", "\n", "\r", "x", "/", "\\"]),
+)
+def test_glob_without_wildcards_matches_only_itself(glob, other, suffix) -> None:
     literal = _glob_to_regex(glob)
-    assert literal.match(glob)
+    assert bool(literal.match(glob + suffix)) == (suffix == "")
     assert bool(literal.match(other)) == (other == glob)
+
+
+@PROPERTY
+@given(names=st.lists(_NAME, min_size=1, max_size=4))
+def test_double_star_matches_every_name_below(names) -> None:
+    assert _glob_to_regex("/w/**").match("/w/" + "/".join(names))
 
 
 _PROTECTED = st.sampled_from([".env", ".aegis", ".envrc", ".env.local", ".env.x"])
