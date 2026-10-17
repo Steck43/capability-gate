@@ -98,7 +98,7 @@
     },
     {
       "path": "tests/test_public_text_paths.py",
-      "sha256": "92fbea6cc62a55aa7301ffa8b5eb3aed3458634ac3bb36a15b1de6445ef2f9ad"
+      "sha256": "b439e946316db9e1249f0eda66fa6e0cd4bc4793130e776106bc02135cd29382"
     }
   ],
   "jobs": [
