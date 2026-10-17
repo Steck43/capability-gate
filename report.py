@@ -13,7 +13,7 @@ import json
 import os
 from collections import Counter
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -68,7 +68,7 @@ def _path_prefix(path: str, depth: int = 3) -> str:
 
 
 def _day_key(ts: float) -> str:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d")
 
 
 def _collect_paths(entry: dict[str, Any]) -> list[str]:

@@ -31,7 +31,6 @@ import os
 import sys
 from pathlib import Path
 
-
 # Modules CI skips as a whole by design, with the reason. Each one runs no
 # test in CI, so adding to this list is a change review must see.
 SKIPPABLE_MODULES = {

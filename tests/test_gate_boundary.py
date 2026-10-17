@@ -169,6 +169,7 @@ def test_siblings_pinned() -> None:
             ["git", "-C", str(root), "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert head.returncode == 0, f"{name} at {root}: {head.stderr.strip()}"
         assert head.stdout.strip() == _PINS[name], (
@@ -179,6 +180,7 @@ def test_siblings_pinned() -> None:
             ["git", "-C", str(root), "status", "--porcelain"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert dirty.returncode == 0, f"{name} at {root}: {dirty.stderr.strip()}"
         assert dirty.stdout == "", f"{name} has uncommitted changes:\n{dirty.stdout}"

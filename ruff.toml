@@ -1,7 +1,16 @@
 # Floor baseline allow-boundary (2026-08-18). Intentional patterns stay ignored;
 # do not widen without a Landen call. Auto-fixed noise was scrubbed same day.
 [lint]
+# ruff 0.16 grew the default rule set and dropped these 18 from it; they stay
+# on so nothing the floor enforced before 0.16 is lost. S506 keeps the YAML
+# loader check that the floor guard's noqa documents.
+extend-select = [
+  "E401", "E402", "E701", "E702", "E703", "E711", "E712", "E713", "E714",
+  "E721", "E731", "E741", "E742", "E743", "F403", "F405", "F406", "F722",
+  "S506",
+]
 ignore = [
+  "TRY004", # the gate raises ValueError for malformed input; its fail-closed handlers catch ValueError
   "N999",   # roof package dir is hyphenated capability-gate
   "BLE001", # fail-closed Exception catches are deliberate
   "S102",   # test_adapter loads plugin source via exec

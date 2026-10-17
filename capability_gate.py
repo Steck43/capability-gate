@@ -52,11 +52,11 @@ import re
 import secrets
 import stat
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import IO, Iterator
+from typing import IO
 
 import yaml
 from yaml.constructor import ConstructorError
@@ -126,7 +126,7 @@ _StrictLoader.add_constructor("tag:yaml.org,2002:merge", _refuse_merge)
 
 def load_yaml_mapping(text: str) -> dict:
     """Parse YAML that must be a mapping, without duplicate or merge keys."""
-    data = yaml.load(text, Loader=_StrictLoader)
+    data = yaml.load(text, Loader=_StrictLoader)  # noqa: S506 (SafeLoader subclass)
     if data is None:
         return {}
     if not isinstance(data, dict):

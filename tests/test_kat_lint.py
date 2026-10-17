@@ -409,14 +409,18 @@ def test_k_pl(gate):
     "src, reason",
     [
         (
-            "import pytest\n\n\n@pytest.mark.xfail(strict=False, reason='x')\n"
-            "def test_a():\n    assert 1\n",
+            (
+                "import pytest\n\n\n@pytest.mark.xfail(strict=False, reason='x')\n"
+                "def test_a():\n    assert 1\n"
+            ),
             "strict=False",
         ),
         (
-            "import pytest\n\n\n"
-            "@pytest.mark.parametrize('v', [pytest.param(1, marks=pytest.mark.xfail(strict=False))])\n"
-            "def test_b(v):\n    assert v\n",
+            (
+                "import pytest\n\n\n"
+                "@pytest.mark.parametrize('v', [pytest.param(1, marks=pytest.mark.xfail(strict=False))])\n"
+                "def test_b(v):\n    assert v\n"
+            ),
             "strict=False",
         ),
         (
@@ -424,8 +428,10 @@ def test_k_pl(gate):
             "imperative pytest.xfail",
         ),
         (
-            "import pytest\n\n\n@pytest.mark.skipif(True, reason='x')\n"
-            "def test_d():\n    assert 1\n",
+            (
+                "import pytest\n\n\n@pytest.mark.skipif(True, reason='x')\n"
+                "def test_d():\n    assert 1\n"
+            ),
             "skipif on a constant",
         ),
         (
@@ -607,8 +613,10 @@ T10_ANY_FILE = {
         "skipif on a constant",
     ),
     "module_pytestmark_skipif": (
-        "pytestmark = [pytest.mark.skipif(True, reason='x')]\n\n\n"
-        "def test_a():\n    assert 1\n",
+        (
+            "pytestmark = [pytest.mark.skipif(True, reason='x')]\n\n\n"
+            "def test_a():\n    assert 1\n"
+        ),
         "skipif on a constant",
     ),
     "skipif_alias": (
@@ -1057,8 +1065,10 @@ T12_PATCHED = {
     ),
     "autouse_fixture": (
         "",
-        "@pytest.fixture(autouse=True)\ndef _swap(monkeypatch):\n"
-        "    monkeypatch.setattr(Gate, 'evaluate', lambda *a, **k: None)",
+        (
+            "@pytest.fixture(autouse=True)\ndef _swap(monkeypatch):\n"
+            "    monkeypatch.setattr(Gate, 'evaluate', lambda *a, **k: None)"
+        ),
         "gate",
         "",
     ),
@@ -1906,8 +1916,10 @@ T12_PATCHED_MORE = {
     "delete_method": ("del gate.evaluate", "", "gate"),
     "fixture_taken": (
         "",
-        "@pytest.fixture()\ndef swap(monkeypatch):\n"
-        "    monkeypatch.setattr(Gate, 'evaluate', lambda *a, **k: None)",
+        (
+            "@pytest.fixture()\ndef swap(monkeypatch):\n"
+            "    monkeypatch.setattr(Gate, 'evaluate', lambda *a, **k: None)"
+        ),
         "gate, swap",
     ),
     "helper_called": (
@@ -4456,14 +4468,18 @@ PROTECTED_REBINDS = {
     "match-capture-of-verdict": (
         _FAKE + "\n\n\n" + _NS,
         "gate",
-        f"d = {_CALL}\nmatch _NS:\n    case Verdict:\n        pass\n"
-        "assert d.verdict is Verdict.DENY",
+        (
+            f"d = {_CALL}\nmatch _NS:\n    case Verdict:\n        pass\n"
+            "assert d.verdict is Verdict.DENY"
+        ),
     ),
     "match-as-of-verdict": (
         _FAKE + "\n\n\n" + _NS,
         "gate",
-        f"d = {_CALL}\nmatch _NS:\n    case type() as Verdict:\n        pass\n"
-        "assert d.verdict is Verdict.DENY",
+        (
+            f"d = {_CALL}\nmatch _NS:\n    case type() as Verdict:\n        pass\n"
+            "assert d.verdict is Verdict.DENY"
+        ),
     ),
     "walrus-in-a-call-arg-of-verdict": (
         _FAKE + "\n\n\n" + _NS,
@@ -4473,20 +4489,26 @@ PROTECTED_REBINDS = {
     "except-name-of-verdict": (
         _FAKE,
         "gate",
-        f"d = {_CALL}\ntry:\n    pass\nexcept Exception as Verdict:\n    pass\n"
-        "assert d.verdict is Verdict.DENY",
+        (
+            f"d = {_CALL}\ntry:\n    pass\nexcept Exception as Verdict:\n    pass\n"
+            "assert d.verdict is Verdict.DENY"
+        ),
     ),
     "match-capture-of-gate": (
         _FAKE + "\n\n\n" + _FAKE_GATE,
         "gate",
-        "match _FakeGate():\n    case gate:\n        pass\n"
-        f"d = {_CALL}\nassert d.verdict is Verdict.DENY",
+        (
+            "match _FakeGate():\n    case gate:\n        pass\n"
+            f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+        ),
     ),
     "nonlocal-swap-of-gate": (
         _FAKE + "\n\n\n" + _FAKE_GATE,
         "gate",
-        "def _swap():\n    nonlocal gate\n    gate = _FakeGate()\n_swap()\n"
-        f"d = {_CALL}\nassert d.verdict is Verdict.DENY",
+        (
+            "def _swap():\n    nonlocal gate\n    gate = _FakeGate()\n_swap()\n"
+            f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+        ),
     ),
     "walrus-in-a-call-arg-of-gate": (
         _FAKE + "\n\n\n" + _FAKE_GATE,
@@ -4501,15 +4523,19 @@ PROTECTED_REBINDS = {
     "with-target-of-gate": (
         _FAKE + "\n\n\n" + _FAKE_GATE,
         "gate",
-        "with contextlib.nullcontext(_FakeGate()) as gate:\n    pass\n"
-        f"d = {_CALL}\nassert d.verdict is Verdict.DENY",
+        (
+            "with contextlib.nullcontext(_FakeGate()) as gate:\n    pass\n"
+            f"d = {_CALL}\nassert d.verdict is Verdict.DENY"
+        ),
     ),
     "walrus-of-the-gate-class": (
         _FAKE + "\n\n\n" + _FAKE_GATE,
         "",
-        "print(Gate := _FakeGate)\n"
-        "g = Gate(load_policy({'skills': {}}))\n"
-        "d = g.evaluate('s', 'read_file', ['zqxwvk'])\nassert d.verdict is Verdict.DENY",
+        (
+            "print(Gate := _FakeGate)\n"
+            "g = Gate(load_policy({'skills': {}}))\n"
+            "d = g.evaluate('s', 'read_file', ['zqxwvk'])\nassert d.verdict is Verdict.DENY"
+        ),
     ),
     "module-walrus-of-the-gate-class": (
         _FAKE + "\n\n\n" + _FAKE_GATE + "\n\n\nprint(Gate := _FakeGate)",

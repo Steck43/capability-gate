@@ -48,7 +48,7 @@ def area(tmp_path: Path):
 
 @pytest.fixture
 def gate(area):
-    root, work, log, anchor = area
+    _root, work, log, anchor = area
     g = Gate(_policy(work), log_path=str(log), anchor_path=str(anchor))
     for _ in range(4):
         assert g.evaluate("s", "write_file", [str(work / "a.md")]).verdict is (
@@ -83,7 +83,7 @@ def test_a_log_and_witness_deleted(area, gate) -> None:
 
 
 def test_b_log_truncated_and_witness_deleted(area, gate) -> None:
-    _, work, log, anchor = area
+    _, work, log, _anchor = area
     log.write_text("".join(_lines(log)[:2]), encoding="utf-8")
     os.remove(str(log) + ".witness")
     _not_allowed(gate, work / "a.md")
@@ -107,7 +107,7 @@ def test_c_log_truncated_and_witness_recomputed(area, gate) -> None:
 
 
 def test_d_log_folder_deleted_and_next_call_does_not_reanchor(area, gate) -> None:
-    root, work, log, anchor = area
+    _root, work, log, anchor = area
     before = anchor.read_bytes()
     shutil.rmtree(log.parent)
     # A new gate, as after a restart, must not re-anchor either.
@@ -141,13 +141,13 @@ def test_default_anchor_beside_the_log_catches_b(tmp_path) -> None:
 
 
 def test_unreadable_anchor_fails_closed(area, gate) -> None:
-    _, work, log, anchor = area
+    _, work, _log, anchor = area
     anchor.write_text("not json\n", encoding="utf-8")
     _not_allowed(gate, work / "a.md")
 
 
 def test_operator_reanchor_starts_a_new_chain(area, gate) -> None:
-    root, work, log, anchor = area
+    _root, work, log, anchor = area
     shutil.rmtree(log.parent)
     _not_allowed(gate, work / "a.md")
     retired = reanchor_audit_log(str(log), anchor_path=str(anchor))
@@ -161,7 +161,7 @@ def test_operator_reanchor_starts_a_new_chain(area, gate) -> None:
 
 
 def test_reanchor_command_line(area, gate) -> None:
-    root, work, log, anchor = area
+    _root, work, log, anchor = area
     os.remove(log)
     os.remove(str(log) + ".witness")
     r = subprocess.run(
@@ -212,7 +212,7 @@ def _witness_only_deleted(gate: Gate, log: Path, work: Path) -> None:
 
 
 def test_witness_alone_deleted_is_denied(area, gate) -> None:
-    _, work, log, anchor = area
+    _, work, log, _anchor = area
     lines_before = len(_lines(log))
     _witness_only_deleted(gate, log, work)
     assert len(_lines(log)) == lines_before

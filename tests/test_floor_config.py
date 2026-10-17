@@ -916,7 +916,7 @@ def test_each_allowlisted_shell_stops_a_failing_script(
     argv = [exe] + [
         str(script).replace("\\", "/") if w == "{0}" else w for w in words[1:]
     ]
-    run = subprocess.run(argv, capture_output=True, text=True)
+    run = subprocess.run(argv, capture_output=True, text=True, check=False)
     assert run.returncode != 0, value
     assert "zqxwvk-reached" not in run.stdout, value
 
@@ -1031,6 +1031,7 @@ def test_a_malformed_pin_file_exits_nonzero_without_a_traceback(tmp_path: Path) 
         [sys.executable, str(ROOT / "scripts" / "floor_guard.py"), "--root", str(root)],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert run.returncode == 1
     assert "Traceback" not in run.stdout + run.stderr
@@ -1768,7 +1769,7 @@ def test_pipefail_stops_a_failing_pipe_in_each_allowed_shell(tmp_path: Path) -> 
         argv = [exe] + [
             str(script).replace("\\", "/") if w == "{0}" else w for w in words[1:]
         ]
-        run = subprocess.run(argv, capture_output=True, text=True)
+        run = subprocess.run(argv, capture_output=True, text=True, check=False)
         assert run.returncode != 0, value
         assert "zqxwvk-reached" not in run.stdout, value
 
@@ -1818,6 +1819,7 @@ def _trailer_check(tmp_path: Path, text: str) -> subprocess.CompletedProcess:
         [sys.executable, str(ROOT / "scripts" / "no_ai_trailers.py"), str(history)],
         capture_output=True,
         text=True,
+        check=False,
     )
 
 
@@ -2067,11 +2069,16 @@ def test_a_stdlib_named_module_beside_a_guard_script_never_loads(
     (tree / "scripts" / "argparse.py").write_text(_shadow(marker), encoding="utf-8")
     # The fixture bites: without isolation the shadow runs instead of the guard.
     subprocess.run(
-        [sys.executable, "scripts/kat_lint.py"], cwd=tree, capture_output=True
+        [sys.executable, "scripts/kat_lint.py"],
+        cwd=tree,
+        capture_output=True,
+        check=False,
     )
     assert marker.exists()
     marker.unlink()
-    subprocess.run([sys.executable, *words[1:]], cwd=tree, capture_output=True)
+    subprocess.run(
+        [sys.executable, *words[1:]], cwd=tree, capture_output=True, check=False
+    )
     assert not marker.exists(), words
 
 
@@ -2083,7 +2090,10 @@ def test_a_package_main_in_the_checkout_never_replaces_pip(tmp_path: Path) -> No
     (tree / "pip" / "__init__.py").write_text("", encoding="utf-8")
     (tree / "pip" / "__main__.py").write_text(_shadow(marker), encoding="utf-8")
     subprocess.run(
-        [sys.executable, "-m", "pip", "--version"], cwd=tree, capture_output=True
+        [sys.executable, "-m", "pip", "--version"],
+        cwd=tree,
+        capture_output=True,
+        check=False,
     )
     assert marker.exists()
     installs = [w for _k, w in _live_commands() if "pip" in w]
@@ -2092,7 +2102,10 @@ def test_a_package_main_in_the_checkout_never_replaces_pip(tmp_path: Path) -> No
         marker.unlink(missing_ok=True)
         upto = words.index("pip") + 1
         subprocess.run(
-            [sys.executable, *words[1:upto], "--version"], cwd=tree, capture_output=True
+            [sys.executable, *words[1:upto], "--version"],
+            cwd=tree,
+            capture_output=True,
+            check=False,
         )
         assert not marker.exists(), words
 
@@ -2196,8 +2209,10 @@ def test_git_takes_only_its_exact_shapes(tmp_path: Path, bad: str) -> None:
 
 _TAR = "tar -C /tmp -xzf /tmp/actionlint.tgz actionlint"
 _TAR_BAD = [
-    "tar -C /tmp -xzf /tmp/actionlint.tgz --checkpoint=1 "
-    "--checkpoint-action=exec=zqxwvk actionlint",
+    (
+        "tar -C /tmp -xzf /tmp/actionlint.tgz --checkpoint=1 "
+        "--checkpoint-action=exec=zqxwvk actionlint"
+    ),
     "tar -C /tmp -xzf /tmp/actionlint.tgz --to-command=zqxwvk actionlint",
     "tar -C /tmp -I zqxwvk -xf /tmp/actionlint.tgz actionlint",
     "tar -C /tmp --use-compress-program=zqxwvk -xf /tmp/actionlint.tgz actionlint",
@@ -2652,6 +2667,7 @@ _RUFF_LOOSENED = [
         lambda t: t + '\n[lint.per-file-ignores]\n"*" = ["ALL"]\n', "ALL", id="per-file"
     ),
     pytest.param(_ruff_edit('"N999",', '"N999",\n  "F",'), "", id="ignore-a-family"),
+    pytest.param(_ruff_edit('"E402", ', ""), "", id="drop-a-kept-rule"),
 ]
 
 
@@ -3318,8 +3334,10 @@ _BAIL = "    pytest.xfail('x')\n    assert False\n"
 _NOT_RUN = {
     "word-in-a-class-name": (
         "tests/test_b.py",
-        "import pytest\n\nclass TestXfail:\n    def test_zqxwvk(self):\n"
-        "        pytest.xfail('x')\n        assert False\n",
+        (
+            "import pytest\n\nclass TestXfail:\n    def test_zqxwvk(self):\n"
+            "        pytest.xfail('x')\n        assert False\n"
+        ),
     ),
     "word-as-a-parametrize-id": (
         "tests/test_b.py",
@@ -3360,15 +3378,19 @@ _NOT_RUN = {
     ),
     "raises-mark-matched-by-its-own-raise": (
         "tests/test_b.py",
-        "import pytest\n\n"
-        "@pytest.mark.xfail(raises=ValueError, strict=True, reason='x')\n"
-        "def test_zqxwvk():\n    raise ValueError('x')\n    assert False\n",
+        (
+            "import pytest\n\n"
+            "@pytest.mark.xfail(raises=ValueError, strict=True, reason='x')\n"
+            "def test_zqxwvk():\n    raise ValueError('x')\n    assert False\n"
+        ),
     ),
     "raises-mark-matched-by-a-raise-in-a-same-file-helper": (
         "tests/test_b.py",
-        "import pytest\n\ndef _zqxwvk_bail():\n    raise ValueError('x')\n\n"
-        "@pytest.mark.xfail(raises=ValueError, strict=True, reason='x')\n"
-        "def test_zqxwvk():\n    _zqxwvk_bail()\n    assert False\n",
+        (
+            "import pytest\n\ndef _zqxwvk_bail():\n    raise ValueError('x')\n\n"
+            "@pytest.mark.xfail(raises=ValueError, strict=True, reason='x')\n"
+            "def test_zqxwvk():\n    _zqxwvk_bail()\n    assert False\n"
+        ),
     ),
     "inactive-mark-then-imperative-xfail": (
         "tests/test_b.py",

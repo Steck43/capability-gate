@@ -95,6 +95,7 @@ def _canon(path: str) -> str:
 
 def _load_policy():
     import yaml
+
     from capability_gate import PolicyError, load_policy
 
     with open(_allowlist_path(), encoding="utf-8") as f:
@@ -103,7 +104,7 @@ def _load_policy():
         raise PolicyError("allowlist root must be a mapping")
     skills = raw.get("skills")
     if isinstance(skills, dict):
-        for name, rule in skills.items():
+        for rule in skills.values():
             if not isinstance(rule, dict) or not isinstance(
                 rule.get("paths", []), list
             ):
@@ -122,7 +123,7 @@ def _load_policy():
                     raise PolicyError(
                         f"grant {g!r}: only a trailing /** wildcard is supported here"
                     )
-                if g.endswith("/**") or g.endswith("\\**"):
+                if g.endswith(("/**", "\\**")):
                     root = _canon(g[:-3])
                     canon_paths += [
                         root,

@@ -344,8 +344,10 @@ JOB_COMMANDS: dict[str, frozenset[str]] = {
     "leak-denylist": frozenset(
         {
             "git cat-file -e origin/main:scripts/leak_denylist_scan.py",
-            "git show origin/main:scripts/leak_denylist_scan.py"
-            ' > "$RUNNER_TEMP/leak_scan.py"',
+            (
+                "git show origin/main:scripts/leak_denylist_scan.py"
+                ' > "$RUNNER_TEMP/leak_scan.py"'
+            ),
             _REV.format("SCAN_BASE"),
             _LEAK_CI,
             'printf \'%s\\n\\n%s\\n\' "$PR_TITLE" "$PR_BODY"',
@@ -384,9 +386,11 @@ JOB_COMMANDS: dict[str, frozenset[str]] = {
     ),
     "workflow-lint": frozenset(
         {
-            'curl -sSL "https://github.com/rhysd/actionlint/releases/download/'
-            "v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-            '" -o /tmp/actionlint.tgz',
+            (
+                'curl -sSL "https://github.com/rhysd/actionlint/releases/download/'
+                "v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+                '" -o /tmp/actionlint.tgz'
+            ),
             'echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz"',
             "sha256sum -c -",
             _TAR,
@@ -1271,7 +1275,7 @@ def check_names(key: str, job: dict) -> list[str]:
     for combo in _matrix_combos(job):
         shown = re.sub(
             r"\$\{\{\s*matrix\.([\w-]+)\s*\}\}",
-            lambda m: str(combo.get(m.group(1), "")),
+            lambda m, combo=combo: str(combo.get(m.group(1), "")),
             name,
         )
         if combo and "matrix." not in name:
@@ -1782,7 +1786,29 @@ def path_violations(root: Path) -> list[str]:
 # skips files git or an .ignore file excludes, so each of those is judged too.
 RUFF_CONFIG = {
     "lint": {
+        "extend-select": [
+            "E401",
+            "E402",
+            "E701",
+            "E702",
+            "E703",
+            "E711",
+            "E712",
+            "E713",
+            "E714",
+            "E721",
+            "E731",
+            "E741",
+            "E742",
+            "E743",
+            "F403",
+            "F405",
+            "F406",
+            "F722",
+            "S506",
+        ],
         "ignore": [
+            "TRY004",
             "N999",
             "BLE001",
             "S102",
@@ -1793,7 +1819,7 @@ RUFF_CONFIG = {
             "EXE001",
             "EXE002",
             "FURB167",
-        ]
+        ],
     }
 }
 _FILE_EXEMPTION = re.compile(r"(?i)^#\s*(?:ruff|flake8)\s*:\s*noqa\b")
@@ -1802,32 +1828,25 @@ _FILE_EXEMPTION = re.compile(r"(?i)^#\s*(?:ruff|flake8)\s*:\s*noqa\b")
 # violation, so silencing ruff on any line is a change to this file, which
 # base pins catch.
 NOQA_INVENTORY: dict[str, int] = {
+    "capability_gate.py:S506": 1,
     "harness/d15_hermes_faithful.py:E402": 1,
     "harness/t_adv_04_open_by_fd.py:E402": 1,
     "scripts/floor_guard.py:S506": 1,
     "test_e2_mode_staleness.py:F401": 1,
     "tests/grind01_util.py:E402": 1,
     "tests/test_alias_class.py:E402": 2,
-    "tests/test_arg_schemas.py:E402": 1,
-    "tests/test_base_dir.py:E402": 2,
     "tests/test_cases_table.py:E402": 2,
     "tests/test_d15_hermes_faithful.py:E402": 1,
     "tests/test_floor_config.py:E402": 1,
     "tests/test_floor_fixes.py:E402": 1,
     "tests/test_gate_boundary.py:E402": 1,
-    "tests/test_gate_files.py:E402": 1,
     "tests/test_glob_regex.py:E402": 1,
     "tests/test_glob_separators.py:E402": 1,
     "tests/test_halt_marker.py:E402": 1,
     "tests/test_harness_tally.py:E402": 1,
-    "tests/test_hook_behavior.py:E402": 1,
-    "tests/test_hook_payload_fail_closed.py:E402": 1,
-    "tests/test_issue33_shapes.py:E402": 1,
     "tests/test_kill_switch.py:E402": 1,
-    "tests/test_path_escapes_hook.py:E402": 2,
     "tests/test_receipt_paths.py:E402": 1,
     "tests/test_s1_distinguish.py:E402": 2,
-    "tests/test_secondary_path_key.py:E402": 1,
     "tests/test_witness_tamper.py:E402": 1,
 }
 

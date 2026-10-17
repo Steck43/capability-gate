@@ -34,6 +34,7 @@ def test_committed_receipt_matches_gate_file_and_names_a_visible_commit() -> Non
         cwd=ROOF,
         capture_output=True,
         text=True,
+        check=False,
     )
     if exists.returncode != 0:
         shallow = subprocess.run(
@@ -49,6 +50,7 @@ def test_committed_receipt_matches_gate_file_and_names_a_visible_commit() -> Non
     visible = subprocess.run(
         ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
         cwd=ROOF,
+        check=False,
     )
     assert visible.returncode == 0
 

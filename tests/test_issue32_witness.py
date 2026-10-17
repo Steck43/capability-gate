@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
+
+import pytest
 
 import capability_gate as cg
-import pytest
 
 
 def _mk(dirpath: str) -> cg.Gate:
@@ -22,7 +24,7 @@ def test_untouched_log_passes() -> None:
     log = os.path.join(d, "g.jsonl")
     for _ in range(4):
         g.evaluate("s", "write_file", [d + "/x"])
-    assert len(open(log, encoding="utf-8").read().splitlines()) == 4
+    assert len(Path(log).read_text(encoding="utf-8").splitlines()) == 4
     head = cg.verify_hash_chain(log)
     assert len(head) == 64
     assert head != "0" * 64
@@ -34,9 +36,9 @@ def test_dropping_trailing_lines_fails() -> None:
     log = os.path.join(d, "g.jsonl")
     for _ in range(4):
         g.evaluate("s", "write_file", [d + "/x"])
-    lines = open(log, encoding="utf-8").read().splitlines(True)
+    lines = Path(log).read_text(encoding="utf-8").splitlines(True)
     assert len(lines) == 4
-    open(log, "w", encoding="utf-8").writelines(lines[:2])
+    Path(log).write_text("".join(lines[:2]), encoding="utf-8")
     with pytest.raises(ValueError, match="witness"):
         cg.verify_hash_chain(log)
 
