@@ -1,0 +1,10 @@
+{
+  "__init__.py::pre_tool_call": ["verdict:gate.evaluate"],
+  "__init__.py::register": ["register_hook(\"pre_tool_call\", pre_tool_call)"],
+  "adapters/claude_code_hook.py::_pre": ["verdict:gate.evaluate"],
+  "adapters/claude_code_hook.py::main": ["any:_pre"],
+  "_pending": {
+    "__init__.py::pre_tool_call": ["any:open_authorized_read"],
+    "adapters/claude_code_hook.py::_pre": ["any:open_authorized_read"]
+  }
+}
