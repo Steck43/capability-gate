@@ -1,0 +1,153 @@
+{
+  "files": [
+    {
+      "path": ".floor/craft/changelog_gate.py",
+      "sha256": "d4cbe405689cf9836da7c70285cb959a44b4121d64284e550702db102ee23b7d"
+    },
+    {
+      "path": ".floor/craft/comment_craft.py",
+      "sha256": "a49020805136111e913987cfab821052766cb2a59d6fb971086b34a36dafafa8"
+    },
+    {
+      "path": ".floor/craft/comment_craft_staged.py",
+      "sha256": "456cb9767852d7de366d8f4e6b6d4f3cf1cfced23b4f00b472f3c9580cd74278"
+    },
+    {
+      "path": ".floor/craft/empty_diff_gate.py",
+      "sha256": "4478fa415322a991afb39857d7eed9ab33295fd45e54fd6e8644743e20973399"
+    },
+    {
+      "path": ".floor/craft/empty_range.py",
+      "sha256": "f344fc6c8e83a0671cf4cae779df419164b299dc7c4c9cd2d1ac10c0c2dbe82c"
+    },
+    {
+      "path": ".floor/craft/voice_lint.py",
+      "sha256": "ccd6331d60d4de5b1edf996a8b2cbe90b4ce7bf07c3b1e5d65b3deb428dc018f"
+    },
+    {
+      "path": ".github/workflows/floor.yml",
+      "sha256": "00ac5b1dae0f2c0beaf9d1c7e4e5d4a18a1be770b278ad7f822157373223cfa3"
+    },
+    {
+      "path": ".github/workflows/plugin-bundle.yml",
+      "sha256": "d76ca70b443199ebf287bd3d2743af5ea7a53163a6e95f545c7e418f4f66403a"
+    },
+    {
+      "path": ".github/workflows/scorecard.yml",
+      "sha256": "d2caaaf9df5d5d67440c32e0b1eb99b5dadbaecde9c9a7402fc9d733fe9b51fd"
+    },
+    {
+      "path": ".gitleaks.toml",
+      "sha256": "72cd732aa8da3890e81c06a42dd49c1731f23cb3264db7fb10064e8c9eeac343"
+    },
+    {
+      "path": ".gitleaksignore",
+      "sha256": "89c72cb9080d5f5a86f541b1086a99bc22bff23001cd99af8a7085d2642f3d13"
+    },
+    {
+      "path": ".pre-commit-config.yaml",
+      "sha256": "6e2a4c6e7857ff3931fdb42d383d21df199c938cc788306355f4e2b99df895b5"
+    },
+    {
+      "path": "conftest.py",
+      "sha256": "45795ef6e04b4e937e4485d270a60bed18041759be8541af5205921752f8d986"
+    },
+    {
+      "path": "pytest.ini",
+      "sha256": "f26f5057babf7775f4a689365a0d82344e44417313f8c390c9c7a3b2a1bd5e38"
+    },
+    {
+      "path": "requirements-ci.lock",
+      "sha256": "b0883c22e6b31cca54a2180736c25294afac5e2f119c39c6ed6a4cb6e21ee6b7"
+    },
+    {
+      "path": "ruff.toml",
+      "sha256": "d46146935d7e85777297a687c6fd33294758750371aeeb4aa2050cbb84f08e93"
+    },
+    {
+      "path": "scripts/floor_guard.py",
+      "sha256": "726bf399238e790697d116256e82282982fccfd31d05c43bce9cfc3133d1a5e6"
+    },
+    {
+      "path": "scripts/kat_lint.py",
+      "sha256": "7b5f35adc5691b86b3f71e3f1c59a8f173acd1f2e7cf644e5881a00d9857f1f9"
+    },
+    {
+      "path": "scripts/leak_denylist_scan.py",
+      "sha256": "3ffa18c8c70990423b27553e1c20c2230a0545a7a117f33831d840e6620a0744"
+    },
+    {
+      "path": "scripts/no_ai_trailers.py",
+      "sha256": "552f24eeb3a69f8234bc7a4481fc0f91cecb1b5e0b5b7aa3e5e2172aad0feeaf"
+    },
+    {
+      "path": "scripts/run_record_check.py",
+      "sha256": "30fc8fc91909841aa5fcce8a36bf75283ad21c6eb84bea40ff11b5dcc48b431f"
+    },
+    {
+      "path": "tests/test_floor_config.py",
+      "sha256": "0d16ae40e397dee391df000c8d27cf3e0c48e18a2261146a10261148d07b7dd0"
+    },
+    {
+      "path": "tests/test_kat_lint.py",
+      "sha256": "273d4d2d36b8a6efdc06ec77f1e345cbee7b5d05bcec0a152ac0c33e7a7f75d7"
+    },
+    {
+      "path": "tests/test_public_text_paths.py",
+      "sha256": "92fbea6cc62a55aa7301ffa8b5eb3aed3458634ac3bb36a15b1de6445ef2f9ad"
+    }
+  ],
+  "jobs": [
+    {
+      "job": "authorship",
+      "sha256": "ab6f44439bd070fad6add07782ff1eee4b0725c33e71f65ac69a2ca70b3e78c9"
+    },
+    {
+      "job": "craft-changelog",
+      "sha256": "ff9ddf1f43adb994c6ec883d9e964088a7244cca1ae55557fccf0d965d1a99b0"
+    },
+    {
+      "job": "craft-comments",
+      "sha256": "c781b8e9d0cf70055dd628bd57ba1cc76345db47ea11d3aa611fe12a526ad991"
+    },
+    {
+      "job": "craft-empty-diff",
+      "sha256": "d1ef4648cb36ef4485cacb7f499235f0e04849a15b3de39d8f51be5431021d2a"
+    },
+    {
+      "job": "craft-voice",
+      "sha256": "1f5c1f708d1f319bede4ddbe5c7392728dc638ac62057d58d163d4f9a7db46ef"
+    },
+    {
+      "job": "floor-guard",
+      "sha256": "2e30cf89f66267c8d9c23781b25e098ad865bae08fac42859622a60c2abd9f00"
+    },
+    {
+      "job": "kat-lint",
+      "sha256": "19267e88a93b327454d0b11a940671ef4b42cdb760c1ebe6fb21250c0c4b29d4"
+    },
+    {
+      "job": "leak-denylist",
+      "sha256": "30d0d322501d333143704e50b6b5e50ebe3c3cf8e22c8b13b2153452979cb2f2"
+    },
+    {
+      "job": "lint",
+      "sha256": "77c70cbd8381853a0215c2a04e4d6bff221b5d1ae7499f4e279fa497d23029a0"
+    },
+    {
+      "job": "secrets",
+      "sha256": "c72dcbf82a9c0e7de22e75f4e0764ee579e7846709adb9f492f7bb456f1af704"
+    },
+    {
+      "job": "tests",
+      "sha256": "996ab3ea33ca0a41dcdef73812e49b501df91ef6d19b0ee99f14cfb6c3d96722"
+    },
+    {
+      "job": "workflow-lint",
+      "sha256": "587306b7386cc6d73bd4c1144d89ba61f2f189b96d90c580c0a2fde4692fe254"
+    }
+  ],
+  "workflow": {
+    "sha256": "b399f8a1ac560da3b4d81bc971928862c87ea0e6cd6a55909d302475a67a876b"
+  }
+}
