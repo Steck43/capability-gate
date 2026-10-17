@@ -1,0 +1,5 @@
+# One gitleaks finding is ignored, by fingerprint only (commit:file:rule:line).
+# Commit 14b3be1 stored a pin digest under the job key "secrets" in
+# .github/floor-pins.json; the generic-api-key rule read that pair as a credential.
+# Pins now sit under a sha256 field, and history is fixed forward, not rewritten.
+14b3be176f09833ea0da0421bf7d5cf15a6095c1:.github/floor-pins.json:generic-api-key:31
