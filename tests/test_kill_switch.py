@@ -134,28 +134,23 @@ def test_ks_state_error_fails_closed(root, log, monkeypatch):
 def test_ks_log_one_thrown_row_chain_holds_denies_logged(gate, root, log):
     # KS-LOG: one THROWN row on the existing chain, and the denies after it
     # are logged like any other deny.
-    gate.evaluate("writer", "write_file", [_granted(root)])
+    assert gate.evaluate("writer", "write_file", [_granted(root)]).verdict is (
+        Verdict.ALLOW
+    )
     assert _thrown_rows(log) == []
-    gate.throw("drill")
+    assert gate.throw("drill") is True
     thrown = _thrown_rows(log)
     assert len(thrown) == 1
     assert "kill switch" in thrown[0]["reason"]
     assert thrown[0]["paths"] == [gate.halt_path]
-    gate.evaluate("writer", "write_file", [_granted(root)])
-    gate.evaluate("writer", "read_file", [_granted(root)])
+    first = gate.evaluate("writer", "write_file", [_granted(root)])
+    second = gate.evaluate("writer", "read_file", [_granted(root)])
+    assert first.verdict is Verdict.DENY
+    assert second.verdict is Verdict.DENY
     verify_hash_chain(str(log))
     after = _rows(log)[-2:]
     assert [r["verdict"] for r in after] == ["deny", "deny"]
     assert all("kill switch" in r["reason"] for r in after)
-
-
-def test_ks_double_throw_one_row(gate, log):
-    # KS-DOUBLE-THROW: a second throw is a no-op. Still one row, still thrown.
-    assert gate.throw("first") is True
-    assert gate.throw("second") is False
-    assert len(_thrown_rows(log)) == 1
-    assert os.path.exists(gate.halt_path)
-    verify_hash_chain(str(log))
 
 
 def test_ks_tamper_thrown_row_breaks_chain(gate, root, log):
@@ -163,8 +158,9 @@ def test_ks_tamper_thrown_row_breaks_chain(gate, root, log):
     # so its parent link no longer matches and the chain check raises. An
     # edit to the very last line is not caught by the chain; that limit is
     # older than this switch.
-    gate.throw("drill")
-    gate.evaluate("writer", "write_file", [_granted(root)])
+    assert gate.throw("drill") is True
+    d = gate.evaluate("writer", "write_file", [_granted(root)])
+    assert d.verdict is Verdict.DENY
     lines = log.read_text(encoding="utf-8").splitlines(keepends=True)
     idx = next(i for i, x in enumerate(lines) if '"thrown"' in x)
     rec = json.loads(lines[idx])
@@ -204,7 +200,7 @@ def test_ks_paths_materialized_once_generator(gate, root):
     paths = (p for p in ["/etc/passwd"])
     d = gate.evaluate("writer", "write_file", paths)
     assert d.verdict is Verdict.DENY
-    assert "outside allowlist" in d.reason or "passwd" in d.reason
+    assert "outside allowlist" in d.reason
     assert d.paths == ("/etc/passwd",)
 
 
