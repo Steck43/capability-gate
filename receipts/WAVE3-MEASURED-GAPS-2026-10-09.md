@@ -76,5 +76,5 @@ PRs are forbidden.
 ## NOT measured
 
 No paid API, model, benchmark package, AgentDojo suite, Progent run, live
-Hermes turn, aegisbox hour, judge application, B7/Zenodo action, release, or
+Hermes turn, test box hour, judge application, B7/Zenodo action, release, or
 tag was executed. `always_invoked` remains false.

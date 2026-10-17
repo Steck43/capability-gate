@@ -12,16 +12,23 @@
 # resolving a release tag to its peeled commit, then editing both the SHA and
 # the trailing version comment.
 #
-# Craft BASE (2026-08-18): on pull_request use the PR base SHA; on push use
-# github.event.before. Never fall back to the root commit. Empty range
-# (BASE == HEAD) exits 3 — that is "nothing in scope", not success.
+# Craft BASE: on pull_request the PR base SHA; on push github.event.before;
+# on a schedule or manual run this commit. Never the root commit. Every step
+# runs under bash -eo pipefail and holds only plain commands and pipes, so a
+# failing command always fails the step (no conditions, &&, ||, background
+# jobs, command substitution, functions, loops or groups). Every command has
+# one exact shape per job, and python always runs with -I so no file in the
+# checkout is importable. scripts/floor_guard.py enforces all of this.
 
 name: floor
 
 on:
   push:
     branches: [main]
+  # edited reruns the floor when a title or body changes after the last push,
+  # so the title and body leak scan always reads the current text.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
   schedule:
     - cron: "17 9 * * 1"
@@ -32,6 +39,10 @@ concurrency:
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -eo pipefail {0}
 
 jobs:
   secrets:
@@ -47,6 +58,61 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  leak-denylist:
+    name: secrets (names and personal paths)
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      # The scanner runs from the default branch, not from the change it judges,
+      # so a pull request cannot weaken the check that reads it. main without a
+      # scanner fails this step at git cat-file: there is no fallback.
+      - name: load scanner from main
+        run: |
+          git cat-file -e origin/main:scripts/leak_denylist_scan.py
+          git show origin/main:scripts/leak_denylist_scan.py > "$RUNNER_TEMP/leak_scan.py"
+      # The list of names is a repo secret, never a tracked file: a public list
+      # of private names is the leak. An unset secret fails closed, which also
+      # means fork PRs (no secret access) fail here until a maintainer reruns.
+      # The range starts at the previous main on push and at main on a pull
+      # request; a base that does not resolve fails the step.
+      - name: scan each commit and its message
+        env:
+          LEAK_DENYLIST: ${{ secrets.LEAK_DENYLIST }}
+          SCAN_BASE: ${{ github.event_name == 'push' && github.event.before || 'origin/main' }}
+        run: |
+          git rev-parse --verify "$SCAN_BASE^{commit}"
+          python -I "$RUNNER_TEMP/leak_scan.py" --ci --base "$SCAN_BASE" --head HEAD
+      - name: scan pull request title and body
+        if: github.event_name == 'pull_request'
+        env:
+          LEAK_DENYLIST: ${{ secrets.LEAK_DENYLIST }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" \
+            | python -I "$RUNNER_TEMP/leak_scan.py" --text "pull request title and body"
+
+  kat-lint:
+    name: tests (known-answer tests call the gate)
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: python -I scripts/kat_lint.py
+
   authorship:
     name: authorship (no AI trailers)
     timeout-minutes: 10
@@ -56,14 +122,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      # Plain commands only: a failing git log or a trailer found fails the step.
       - name: check commit messages in history
         run: |
-          if git log --all --format=%B | grep -inE \
-            'co-authored-by:.*(claude|cursor|copilot|gpt|gemini|assistant)|generated with .*(claude|cursor|copilot)'; then
-            echo "::error::AI authorship trailer found in history"
-            exit 1
-          fi
-          echo "no AI authorship trailers in history"
+          git log --all --format=%B > "$RUNNER_TEMP/history.txt"
+          python -I scripts/no_ai_trailers.py "$RUNNER_TEMP/history.txt"
 
   tests:
     name: tests
@@ -100,33 +166,45 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: install
         working-directory: capability-gate
-        run: |
-          python -m pip install --upgrade pip
-          INSTALLED=
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-            INSTALLED="${INSTALLED}+requirements"
-          fi
-          if [ -f requirements-dev.txt ]; then
-            pip install -r requirements-dev.txt
-            INSTALLED="${INSTALLED}+requirements-dev"
-          fi
-          if [ -f pyproject.toml ]; then
-            pip install -e .
-            INSTALLED="${INSTALLED}+pyproject"
-          fi
-          pip install pytest
-          echo "install-branch: ${INSTALLED:-none-only-pytest}"
+        run: python -I -m pip install --require-hashes --no-deps -r requirements-ci.lock
       - name: pytest
         # Do NOT add a step that installs the host agent to make skipped tests
-        # run. On capability-gate that turns a green 37-passed/2-skipped suite
-        # red in two different ways depending on which of two same-named modules
-        # lands on the path. The skips are correct behaviour.
+        # run. On capability-gate that turns a green suite red in two different
+        # ways depending on which of two same-named modules lands on the path.
+        # The skips are correct behaviour.
         working-directory: capability-gate
         env:
           AEGIS_ATOMS_ROOT: ${{ github.workspace }}/aegis-atoms
           ISOLATION_LAYER_ROOT: ${{ github.workspace }}/isolation-layer
+          FLOOR_RUN_RECORD: ${{ runner.temp }}/pytest-run.json
         run: pytest -q
+      # pytest exits 0 when a test module ends the process early (os._exit),
+      # so the job also needs the run record that only a finished session
+      # writes, covering every test module (see conftest.py).
+      - name: every test module ran
+        working-directory: capability-gate
+        env:
+          FLOOR_RUN_RECORD: ${{ runner.temp }}/pytest-run.json
+        run: python -I scripts/run_record_check.py "$FLOOR_RUN_RECORD"
+
+  # Advisory, not a required check. Every known-answer test must change its
+  # answer when the gate does: each KAT file runs under the real gate,
+  # allow-all, deny-all, an inverted gate and one mutant per constant verdict
+  # in the decision, installed in the gate module of a scratch copy. A branch
+  # no KAT reaches is listed, not failed. See scripts/kat_swap.py.
+  kat-swap:
+    name: tests (KAT answers follow the gate, advisory)
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: python -I -m pip install --require-hashes --no-deps -r requirements-ci.lock
+      - run: python -I scripts/kat_swap.py
 
   lint:
     name: lint (ruff)
@@ -140,7 +218,7 @@ jobs:
         with:
           python-version: "3.12"
       # Pin matches atoms. Unpinned install pulled 0.16 on 2026-09-12 and reddened I001/RUF100.
-      - run: python -m pip install "ruff>=0.15.15,<0.16"
+      - run: python -I -m pip install --require-hashes --no-deps -r requirements-ci.lock
       - run: ruff check .
       - run: ruff format --check .
 
@@ -156,57 +234,18 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
+      # BASE is the pull request base, the previous main on push, or this
+      # commit on a schedule or manual run (an empty range the craft scripts
+      # treat as nothing in scope). A base that does not resolve fails the step.
       - name: voice lint (commits + prose)
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
+          CRAFT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          CRAFT_HEAD: ${{ github.sha }}
         run: |
-          if [ -f .floor/craft/voice_lint.py ]; then V=.floor/craft/voice_lint.py
-          elif [ -f craft/voice_lint.py ]; then V=craft/voice_lint.py
-          else
-            echo "::error::voice_lint.py missing from roof (install_floor craft pack)"
-            exit 1
-          fi
-          ZERO=0000000000000000000000000000000000000000
-          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$PR_BASE" ]; then
-            BASE="$PR_BASE"
-          elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ]; then
-            BASE="$PUSH_BEFORE"
-          elif [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" = "$ZERO" ]; then
-            if git rev-parse --verify origin/HEAD >/dev/null 2>&1; then
-              BASE=$(git rev-parse origin/HEAD)
-            elif git rev-parse --verify origin/main >/dev/null 2>&1; then
-              BASE=origin/main
-            else
-              echo "::error::first push of a new branch and no origin default"
-              exit 3
-            fi
-          elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "schedule" ]; then
-            if git rev-parse --verify origin/main >/dev/null 2>&1; then
-              BASE=origin/main
-            else
-              echo "::error::cannot determine BASE"
-              exit 3
-            fi
-          else
-            echo "::error::cannot determine BASE event=$EVENT_NAME"
-            exit 3
-          fi
-          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
-            echo "::error::BASE does not resolve: $BASE"
-            exit 3
-          fi
-          set +e
-          python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"
-          ERC=$?
-          set -e
-          if [ "$ERC" != "0" ]; then
-            echo "::error::empty range BASE==HEAD; craft would inspect nothing (empty_range.py=$ERC)"
-            exit "$ERC"
-          fi
-          echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
-          python "$V" --commits --base "$BASE" --head HEAD --prose --fail-on-warn
+          git rev-parse --verify "$CRAFT_BASE^{commit}"
+          python -I .floor/craft/empty_range.py --base "$CRAFT_BASE" --head "$CRAFT_HEAD" --event "$EVENT_NAME"
+          python -I .floor/craft/voice_lint.py --commits --base "$CRAFT_BASE" --head HEAD --prose --fail-on-warn
 
   craft-changelog:
     name: craft (changelog)
@@ -223,54 +262,12 @@ jobs:
       - name: changelog gate
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
+          CRAFT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          CRAFT_HEAD: ${{ github.sha }}
         run: |
-          if [ -f .floor/craft/changelog_gate.py ]; then C=.floor/craft/changelog_gate.py
-          elif [ -f craft/changelog_gate.py ]; then C=craft/changelog_gate.py
-          else
-            echo "::error::changelog_gate.py missing from roof"
-            exit 1
-          fi
-          ZERO=0000000000000000000000000000000000000000
-          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$PR_BASE" ]; then
-            BASE="$PR_BASE"
-          elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ]; then
-            BASE="$PUSH_BEFORE"
-          elif [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" = "$ZERO" ]; then
-            if git rev-parse --verify origin/HEAD >/dev/null 2>&1; then
-              BASE=$(git rev-parse origin/HEAD)
-            elif git rev-parse --verify origin/main >/dev/null 2>&1; then
-              BASE=origin/main
-            else
-              echo "::error::first push of a new branch and no origin default"
-              exit 3
-            fi
-          elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "schedule" ]; then
-            if git rev-parse --verify origin/main >/dev/null 2>&1; then
-              BASE=origin/main
-            else
-              echo "::error::cannot determine BASE"
-              exit 3
-            fi
-          else
-            echo "::error::cannot determine BASE event=$EVENT_NAME"
-            exit 3
-          fi
-          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
-            echo "::error::BASE does not resolve: $BASE"
-            exit 3
-          fi
-          set +e
-          python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"
-          ERC=$?
-          set -e
-          if [ "$ERC" != "0" ]; then
-            echo "::error::empty range BASE==HEAD; craft would inspect nothing (empty_range.py=$ERC)"
-            exit "$ERC"
-          fi
-          echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
-          python "$C" --base "$BASE" --head HEAD
+          git rev-parse --verify "$CRAFT_BASE^{commit}"
+          python -I .floor/craft/empty_range.py --base "$CRAFT_BASE" --head "$CRAFT_HEAD" --event "$EVENT_NAME"
+          python -I .floor/craft/changelog_gate.py --base "$CRAFT_BASE" --head HEAD
 
   craft-comments:
     name: craft (comments)
@@ -287,64 +284,17 @@ jobs:
       - name: comment craft
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
+          CRAFT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          CRAFT_HEAD: ${{ github.sha }}
         run: |
-          if [ -f .floor/craft/comment_craft.py ]; then C=.floor/craft/comment_craft.py
-          elif [ -f craft/comment_craft.py ]; then C=craft/comment_craft.py
-          else
-            echo "::error::comment_craft.py missing from roof"
-            exit 1
-          fi
-          ZERO=0000000000000000000000000000000000000000
-          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$PR_BASE" ]; then
-            BASE="$PR_BASE"
-          elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ]; then
-            BASE="$PUSH_BEFORE"
-          elif [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" = "$ZERO" ]; then
-            if git rev-parse --verify origin/HEAD >/dev/null 2>&1; then
-              BASE=$(git rev-parse origin/HEAD)
-            elif git rev-parse --verify origin/main >/dev/null 2>&1; then
-              BASE=origin/main
-            else
-              echo "::error::first push of a new branch and no origin default"
-              exit 3
-            fi
-          elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "schedule" ]; then
-            if git rev-parse --verify origin/main >/dev/null 2>&1; then
-              BASE=origin/main
-            else
-              echo "::error::cannot determine BASE"
-              exit 3
-            fi
-          else
-            echo "::error::cannot determine BASE event=$EVENT_NAME"
-            exit 3
-          fi
-          if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
-            echo "::error::BASE does not resolve: $BASE"
-            exit 3
-          fi
-          set +e
-          python .floor/craft/empty_range.py --base "$(git rev-parse "$BASE")" --head "$(git rev-parse HEAD)" --event "$EVENT_NAME"
-          ERC=$?
-          set -e
-          if [ "$ERC" != "0" ]; then
-            echo "::error::empty range BASE==HEAD; craft would inspect nothing (empty_range.py=$ERC)"
-            exit "$ERC"
-          fi
-          echo "BASE=$BASE HEAD=$(git rev-parse HEAD)"
-          python "$C" --base "$BASE" --head HEAD
+          git rev-parse --verify "$CRAFT_BASE^{commit}"
+          python -I .floor/craft/empty_range.py --base "$CRAFT_BASE" --head "$CRAFT_HEAD" --event "$EVENT_NAME"
+          python -I .floor/craft/comment_craft.py --base "$CRAFT_BASE" --head HEAD
 
   craft-empty-diff:
     name: craft (empty-diff)
     timeout-minutes: 10
     runs-on: ubuntu-latest
-    # Pull requests only. On push/schedule/dispatch there is no meaningful base:
-    # BASE resolves to origin/main, which on a push to main IS head, so the range is
-    # empty by definition rather than by defect. Running this job there would make the
-    # floor permanently red on the default branch, which trains people to ignore it.
-    # Not-applicable and violated are different states.
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -355,16 +305,45 @@ jobs:
         with:
           python-version: "3.12"
       - name: empty-diff gate
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          if [ -f .floor/craft/empty_diff_gate.py ]; then C=.floor/craft/empty_diff_gate.py
-          elif [ -f craft/empty_diff_gate.py ]; then C=craft/empty_diff_gate.py
-          else
-            echo "::error::empty_diff_gate.py missing from roof"
-            exit 1
-          fi
-          BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
-          git rev-parse --verify "$BASE" >/dev/null 2>&1 || BASE="$(git rev-list --max-parents=0 HEAD | tail -1)"
-          python "$C" --base "$BASE" --head HEAD
+          git rev-parse --verify "$PR_BASE^{commit}"
+          python -I .floor/craft/empty_diff_gate.py --base "$PR_BASE" --head HEAD
+
+  floor-guard:
+    name: floor (guard from base)
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      # The guard, its pins and its lock come from the base: the pull request
+      # base, the previous main on push, or this commit on a schedule or manual
+      # run of main. A base without them fails git cat-file; there is no
+      # fallback to the copy under review.
+      - name: load the guard from the base branch
+        env:
+          GUARD_BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        run: |
+          git rev-parse --verify "$GUARD_BASE^{commit}"
+          mkdir -p "$RUNNER_TEMP/floor"
+          git cat-file -e "$GUARD_BASE:scripts/floor_guard.py"
+          git cat-file -e "$GUARD_BASE:.github/floor-pins.json"
+          git cat-file -e "$GUARD_BASE:requirements-ci.lock"
+          git show "$GUARD_BASE:scripts/floor_guard.py" > "$RUNNER_TEMP/floor/floor_guard.py"
+          git show "$GUARD_BASE:.github/floor-pins.json" > "$RUNNER_TEMP/floor/floor-pins.json"
+          git show "$GUARD_BASE:requirements-ci.lock" > "$RUNNER_TEMP/floor/requirements-ci.lock"
+          echo "guard from base $GUARD_BASE"
+      - name: install the base lock
+        run: python -I -m pip install --require-hashes --no-deps -r "$RUNNER_TEMP/floor/requirements-ci.lock"
+      - name: run the base guard on this tree
+        run: python -I "$RUNNER_TEMP/floor/floor_guard.py" --root . --pins "$RUNNER_TEMP/floor/floor-pins.json"
 
   workflow-lint:
     name: workflow (zizmor + actionlint)

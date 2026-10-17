@@ -27,7 +27,7 @@ aegis-atoms derived `SHA256SUMS` regenerate check after this sitting's merges.
 
 ## NOT measured
 
-- A hosted "nightly readiness probe" job run this sitting (no LandensPC
+- A hosted "nightly readiness probe" job run this sitting (no workstation
   schedule fired here; tip census is the dest-read substitute).
 - Byte-identity of every derived artifact on newwave and dual-lab.
 - `always_invoked` (stays false).

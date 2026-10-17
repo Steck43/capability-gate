@@ -13,7 +13,7 @@ Hermes runtime pin for this paper pass: `ccd8deaa67`.
 
 ## Source
 
-Held patch `Grok-Bot-Hub/burn-queue/2026-10-07-proof-build-1/kill-switch.patch`
+Held patch `kill-switch.patch` (an internal working copy, not in this repository)
 (sha256 `34315dd8…ccab`) on base `7cbc6eb`, verdict fix-first. Ported to tip
 `bcb5783` with:
 
