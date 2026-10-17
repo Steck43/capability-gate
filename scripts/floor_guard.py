@@ -119,7 +119,7 @@ GUARD_GLOBS = (
 # plugin that registers during collection and writes the run record. Changing
 # it is a change to this file, which base pins catch.
 FLOOR_CONFTEST_SHA256 = (
-    "45795ef6e04b4e937e4485d270a60bed18041759be8541af5205921752f8d986"
+    "ccb52afc819c9ac0036422992afc1252eed9995fbdb8dd19b275acdf6e8435fd"
 )
 
 ALLOWED_COMMANDS = frozenset(
@@ -357,7 +357,7 @@ JOB_COMMANDS: dict[str, frozenset[str]] = {
     "kat-lint": frozenset({"python -I scripts/kat_lint.py"}),
     "kat-swap": frozenset({f"{_PIP} {LOCK}", "python -I scripts/kat_swap.py"}),
     "authorship": frozenset({_HISTORY, _TRAILERS}),
-    "tests": frozenset({f"{_PIP} {LOCK}", "pytest -q", _RUN_CHECK}),
+    "tests": frozenset({f"{_PIP} {LOCK}", "pytest -q -n 4", _RUN_CHECK}),
     "lint": frozenset({f"{_PIP} {LOCK}", "ruff check .", "ruff format --check ."}),
     "craft-voice": frozenset({_REV.format("CRAFT_BASE"), _CRAFT_RANGE, _VOICE}),
     "craft-changelog": frozenset({_REV.format("CRAFT_BASE"), _CRAFT_RANGE, _CHANGELOG}),
@@ -406,7 +406,7 @@ REQUIRED_COMMANDS: dict[str, tuple[str, ...]] = {
     "kat-lint": ("python -I scripts/kat_lint.py",),
     "kat-swap": ("python -I scripts/kat_swap.py",),
     "authorship": (_HISTORY, _TRAILERS),
-    "tests": ("pytest -q", _RUN_CHECK),
+    "tests": ("pytest -q -n 4", _RUN_CHECK),
     "lint": ("ruff check .", "ruff format --check ."),
     "craft-voice": (_VOICE,),
     "craft-changelog": (_CHANGELOG,),
@@ -571,9 +571,11 @@ FLOOR_CONCURRENCY = {
     "cancel-in-progress": True,
 }
 JOB_TIMEOUT = 10
-# pytest options a guardrail run may not add: they select, deselect, skip,
-# collect only, change config or root, disable plugins or relax xfail.
-PYTEST_OPTIONS = frozenset({"-q"})
+# The only pytest options a guardrail run may add, each as its exact words.
+# Any other option could select, deselect, skip, collect only, change config
+# or root, disable plugins or relax xfail. -n 4 spreads the run over four
+# pytest-xdist workers and selects nothing.
+PYTEST_OPTIONS = frozenset({("-q",), ("-n", "4")})
 # pytest.ini keys and their required values; no other pytest config may exist.
 PYTEST_INI_KEYS = frozenset({"norecursedirs", "xfail_strict", "filterwarnings"})
 # Commands whose failure a pipe, && or || could hide.
@@ -1219,11 +1221,18 @@ def _python_violations(words: list[str], where: str) -> list[str]:
 
 
 def _pytest_violations(args: list[str], where: str) -> list[str]:
-    return [
-        f"{where}: pytest argument {a!r} is not allowed"
-        for a in args
-        if a not in PYTEST_OPTIONS
-    ]
+    found: list[str] = []
+    i = 0
+    while i < len(args):
+        opt = next(
+            (o for o in PYTEST_OPTIONS if tuple(args[i : i + len(o)]) == o), None
+        )
+        if opt is None:
+            found.append(f"{where}: pytest argument {args[i]!r} is not allowed")
+            i += 1
+        else:
+            i += len(opt)
+    return found
 
 
 # The only shell values a guardrail may set, compared as exact strings. Flags
