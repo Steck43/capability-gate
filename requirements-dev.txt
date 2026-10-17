@@ -1,3 +1,4 @@
 # Tooling and test dependencies. The decider (capability_gate.py) needs none of these; it is standard-library only.
 PyYAML>=6.0
+hypothesis>=6.168
 pytest>=8.0
