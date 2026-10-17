@@ -56,6 +56,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from typing import IO, Iterator
 
 import yaml
 from yaml.constructor import ConstructorError
@@ -1076,6 +1077,84 @@ class Gate:
             arg_summary=arg_summary,
             anchor_path=self._anchor_path,
         )
+
+
+@dataclass(frozen=True)
+class AuthorizedRead:
+    """One gate decision bound to the file object the host must consume."""
+
+    decision: Decision
+    stream: IO[str] | None
+    opened_path: str | None
+
+
+@contextmanager
+def open_authorized_read(
+    gate: Gate,
+    skill: str,
+    path: str,
+    *,
+    tool: str = "read_file",
+    trace: Mapping[str, str] | None = None,
+    args: Mapping | None = None,
+    base_dir: str | None = None,
+    encoding: str = "utf-8",
+) -> Iterator[AuthorizedRead]:
+    """Open once, authorize the opened object, and keep that descriptor bound.
+
+    Linux exposes the opened object through ``/proc/self/fd``. The gate checks
+    that object rather than re-resolving the caller's name, and the host reads
+    from the same descriptor. A platform without this identity surface denies
+    instead of falling back to a check-then-open sequence.
+    """
+
+    fd = -1
+    stream: IO[str] | None = None
+    opened_path: str | None = None
+    decision_args = args if args is not None else {"path": path}
+    absolute = _absolute(path, base_dir)
+    refuse: str | None = None
+    try:
+        if absolute is None:
+            refuse = "open-by-fd requires an absolute path or a trusted base directory"
+        elif os.name != "posix" or not os.path.isdir("/proc/self/fd"):
+            refuse = "open-by-fd requires the Linux /proc/self/fd identity surface"
+        elif not hasattr(os, "O_NOFOLLOW"):
+            refuse = "open-by-fd requires O_NOFOLLOW"
+        else:
+            flags = os.O_RDONLY | os.O_NOFOLLOW
+            flags |= getattr(os, "O_CLOEXEC", 0)
+            try:
+                fd = os.open(absolute, flags)
+                opened = os.fstat(fd)
+                if not stat.S_ISREG(opened.st_mode):
+                    refuse = "opened object is not a regular file"
+                else:
+                    opened_path = os.path.realpath(f"/proc/self/fd/{fd}")
+            except OSError as exc:
+                refuse = f"descriptor open failed: {exc.strerror or exc!s}"
+
+        checked_paths = [opened_path] if opened_path is not None else [path]
+        decision = gate.evaluate(
+            skill,
+            tool,
+            checked_paths,
+            trace=trace,
+            args=decision_args,
+            refuse=refuse,
+            base_dir=base_dir if opened_path is None else None,
+        )
+        if decision.verdict is Verdict.ALLOW or not decision.enforced:
+            if fd < 0:
+                raise RuntimeError("descriptor-backed passthrough has no descriptor")
+            stream = os.fdopen(fd, "r", encoding=encoding)
+            fd = -1
+        yield AuthorizedRead(decision, stream, opened_path)
+    finally:
+        if stream is not None:
+            stream.close()
+        if fd >= 0:
+            os.close(fd)
 
 
 def record_decision(

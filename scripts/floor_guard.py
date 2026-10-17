@@ -1803,6 +1803,7 @@ _FILE_EXEMPTION = re.compile(r"(?i)^#\s*(?:ruff|flake8)\s*:\s*noqa\b")
 # base pins catch.
 NOQA_INVENTORY: dict[str, int] = {
     "harness/d15_hermes_faithful.py:E402": 1,
+    "harness/t_adv_04_open_by_fd.py:E402": 1,
     "scripts/floor_guard.py:S506": 1,
     "test_e2_mode_staleness.py:F401": 1,
     "tests/grind01_util.py:E402": 1,
