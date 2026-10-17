@@ -1818,6 +1818,7 @@ NOQA_INVENTORY: dict[str, int] = {
     "tests/test_halt_marker.py:E402": 1,
     "tests/test_harness_tally.py:E402": 1,
     "tests/test_hook_behavior.py:E402": 1,
+    "tests/test_hook_payload_fail_closed.py:E402": 1,
     "tests/test_issue33_shapes.py:E402": 1,
     "tests/test_kill_switch.py:E402": 1,
     "tests/test_receipt_paths.py:E402": 1,
