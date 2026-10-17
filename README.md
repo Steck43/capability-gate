@@ -52,14 +52,16 @@ This is a manual step, run by you outside the agent. Replace the symlink or fix 
 `Gate.throw(reason)` creates a marker beside the decision log, the log path plus `.halt` (live: `~/.hermes/logs/capability-gate.jsonl.halt`), and appends one THROWN row to the hash-chained log. From the next call on, every call is denied and logged, with no restart. A second throw adds no row.
 
 - Every call reads the marker before the allowlist, so a gate that is already running stops on its next call. A marker the gate cannot read, for any reason other than "not there", is a deny.
-- No tool call may name the marker, switch on or off, so a granted write cannot clear it.
+- No tool call may name the marker, switch on or off, so a granted write cannot clear it. The same holds for the folder that holds the marker or the log, any folder above it, and the gate's own log, lock, and witness files.
+- A switch that cannot be thrown counts as thrown: if no marker location is writable, every call is denied. `Gate` takes an operator-set `halt_path` outside the agent's grants, with the marker beside the log as the fallback, and `Gate.throw` raises `KillSwitchUnthrowable` when no location takes the marker.
 - Clearing is a manual step outside the agent: remove the marker. The gate never clears it, and the clear is not in the log.
 
 Limits, pinned in `tests/test_kill_switch.py`:
 
 - This is the gate, not the hook. The tests show `Gate.evaluate` denies after a throw. They do not show the live Hermes hook or a Claude Code hook calls the gate, and a plugin that is not loaded stops nothing.
 - Observe mode logs the kill switch deny and blocks nothing (`test_kill_switch_blocks_in_observe`, a strict expected failure). Throw it in enforce.
-- `terminal` and `execute_code` can remove the marker through a command the gate does not read as a path, and removing or renaming the logs folder clears it too. That is one more reason those tools stay behind approval.
+- `terminal` and `execute_code` can remove the marker through a command the gate does not read as a path. A running gate whose logs folder was removed or replaced denies every call, but a gate started after that (a new Claude Code hook process, or a Hermes restart) starts a fresh log there. That is one more reason those tools stay behind approval.
+- The hooks do not yet pass an operator-set marker location; both use the marker beside the log.
 - An edit to the THROWN row is caught once a later row chains onto it. The chain does not anchor its last line.
 
 Claude Code on Windows: the same decider runs as a `PreToolUse` hook. Glob patterns that climb, including character-class and nested-brace obfuscations, are denied by a denylist, not a full Glob semantic model. See [adapters/CLAUDE-CODE.md](adapters/CLAUDE-CODE.md).

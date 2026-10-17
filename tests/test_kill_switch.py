@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -272,3 +273,110 @@ def test_kill_switch_blocks_in_observe(root, log):
     assert d.verdict is Verdict.DENY
     assert "kill switch" in _rows(log)[-1]["reason"]
     assert d.enforced is True
+
+
+def _not_a_dir_parent(root: Path, name: str) -> str:
+    """A path whose parent is a regular file, so nothing can ever be created there."""
+    blocker = root / f"{name}-blocker"
+    blocker.write_text("x", encoding="utf-8")
+    return str(blocker / "halt")
+
+
+def test_ks_denies_when_no_halt_location_is_writable(root, log, monkeypatch):
+    # KS-UNTHROWABLE: if no halt location can take a marker, an operator could
+    # not stop the gate, so the gate treats itself as thrown.
+    g = Gate(_policy(root), log_path=str(log))
+    halt_dir = os.path.dirname(g.halt_path)
+    real_access = os.access
+
+    def no_write(path, mode, *a, **k):
+        if os.path.normcase(os.path.abspath(path)) == os.path.normcase(halt_dir):
+            return False
+        return real_access(path, mode, *a, **k)
+
+    monkeypatch.setattr(os, "access", no_write)
+    d = g.evaluate("writer", "write_file", [_granted(root)])
+    assert d.verdict is Verdict.DENY
+    assert "cannot be thrown" in d.reason
+
+
+def test_throw_fallback_location_used_when_primary_unwritable(root, log):
+    primary = _not_a_dir_parent(root, "primary")
+    fallback = str(root / "fallback" / "gate.halt")
+    g = Gate(
+        _policy(root), log_path=str(log), halt_path=primary, fallback_halt_path=fallback
+    )
+    assert g.evaluate("writer", "write_file", [_granted(root)]).verdict is Verdict.ALLOW
+    assert g.throw("drill") is True
+    assert os.path.exists(fallback)
+    d = g.evaluate("writer", "write_file", [_granted(root)])
+    assert d.verdict is Verdict.DENY
+    assert "kill switch thrown" in d.reason
+    assert g.throw("again") is False
+
+
+def test_throw_fails_loudly_when_no_location_works(root, log):
+    g = Gate(
+        _policy(root),
+        log_path=str(log),
+        halt_path=_not_a_dir_parent(root, "a"),
+        fallback_halt_path=_not_a_dir_parent(root, "b"),
+    )
+    # Other tests reload capability_gate, so match on the builtin base class and
+    # the class name rather than on one module object's class.
+    with pytest.raises(RuntimeError, match="kill switch NOT thrown") as exc:
+        g.throw("drill")
+    assert type(exc.value).__name__ == "KillSwitchUnthrowable"
+    d = g.evaluate("writer", "write_file", [_granted(root)])
+    assert d.verdict is Verdict.DENY
+    assert "cannot be thrown" in d.reason
+
+
+def test_ks_denies_when_log_folder_removed(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    logs = tmp_path / "logs"
+    g = Gate(_policy(tmp_path), log_path=str(logs / "decisions.jsonl"))
+    assert (
+        g.evaluate("writer", "write_file", [str(work / "a.md")]).verdict
+        is Verdict.ALLOW
+    )
+    shutil.rmtree(logs)
+    d = g.evaluate("writer", "write_file", [str(work / "a.md")])
+    assert d.verdict is Verdict.DENY
+    assert "log folder" in d.reason
+    # The denial does not re-create the folder, which would start a new chain.
+    assert not logs.exists()
+    # A folder put back in its place is a different folder; still denied.
+    logs.mkdir()
+    d = g.evaluate("writer", "write_file", [str(work / "a.md")])
+    assert d.verdict is Verdict.DENY
+    assert "removed or replaced" in d.reason
+
+
+@pytest.mark.parametrize("thrown", [False, True])
+def test_ks_log_folder_and_ancestors_denied(tmp_path, thrown):
+    # Removing or renaming the folder that holds the marker clears the
+    # switch, so the folder, its ancestors, and the gate's own files in it are
+    # denied to every tool, with the switch off or on.
+    logs = tmp_path / "logs"
+    log = logs / "decisions.jsonl"
+    policy = load_policy(
+        {
+            "skills": {
+                "writer": {
+                    "tools": ["write_file", "delete"],
+                    "paths": [str(tmp_path) + "/**"],
+                }
+            }
+        }
+    )
+    g = Gate(policy, log_path=str(log))
+    first = g.evaluate("writer", "write_file", [str(tmp_path / "x.md")])
+    assert first.verdict is Verdict.ALLOW
+    if thrown:
+        g.throw("drill")
+    for target in (logs, tmp_path, log, str(log) + ".lock", str(log) + ".witness"):
+        for tool in ("write_file", "delete"):
+            d = g.evaluate("writer", tool, [str(target)])
+            assert d.verdict is Verdict.DENY, (tool, target, d.reason)
