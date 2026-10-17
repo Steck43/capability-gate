@@ -79,6 +79,7 @@ TOKEN_ENV = {"GITHUB_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
 GUARD_FILES = (
     "scripts/floor_guard.py",
     "scripts/kat_lint.py",
+    "scripts/kat_swap.py",
     "scripts/leak_denylist_scan.py",
     "scripts/gh_pr.py",
     "scripts/no_ai_trailers.py",
@@ -288,6 +289,7 @@ PROTECTED_JOBS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "secrets": (("secrets (gitleaks)",), ("gitleaks/gitleaks-action@",)),
     "leak-denylist": (("secrets (names and personal paths)",), ()),
     "kat-lint": (("tests (known-answer tests call the gate)",), ()),
+    "kat-swap": (("tests (KAT answers follow the gate, advisory)",), ()),
     "authorship": (("authorship (no AI trailers)",), ()),
     "tests": (("tests (3.11)", "tests (3.12)"), ()),
     "lint": (("lint (ruff)",), ()),
@@ -351,6 +353,7 @@ JOB_COMMANDS: dict[str, frozenset[str]] = {
         }
     ),
     "kat-lint": frozenset({"python -I scripts/kat_lint.py"}),
+    "kat-swap": frozenset({f"{_PIP} {LOCK}", "python -I scripts/kat_swap.py"}),
     "authorship": frozenset({_HISTORY, _TRAILERS}),
     "tests": frozenset({f"{_PIP} {LOCK}", "pytest -q", _RUN_CHECK}),
     "lint": frozenset({f"{_PIP} {LOCK}", "ruff check .", "ruff format --check ."}),
@@ -397,6 +400,7 @@ JOB_COMMANDS: dict[str, frozenset[str]] = {
 REQUIRED_COMMANDS: dict[str, tuple[str, ...]] = {
     "leak-denylist": (_LEAK_CI, _LEAK_TEXT),
     "kat-lint": ("python -I scripts/kat_lint.py",),
+    "kat-swap": ("python -I scripts/kat_swap.py",),
     "authorship": (_HISTORY, _TRAILERS),
     "tests": ("pytest -q", _RUN_CHECK),
     "lint": ("ruff check .", "ruff format --check ."),
@@ -499,6 +503,7 @@ STEP_ENV = {
 PY_SCRIPTS = frozenset(
     {
         "scripts/kat_lint.py",
+        "scripts/kat_swap.py",
         "scripts/no_ai_trailers.py",
         "scripts/run_record_check.py",
         ".floor/craft/empty_range.py",
@@ -514,6 +519,7 @@ PY_SCRIPTS = frozenset(
 # A guard that gains, loses or changes an argument is a different guard.
 SCRIPT_ARGS: dict[str, frozenset[tuple[str, ...]]] = {
     "scripts/kat_lint.py": frozenset({()}),
+    "scripts/kat_swap.py": frozenset({()}),
     "scripts/no_ai_trailers.py": frozenset({("$RUNNER_TEMP/history.txt",)}),
     "scripts/run_record_check.py": frozenset({("$FLOOR_RUN_RECORD",)}),
     ".floor/craft/empty_range.py": frozenset(

@@ -26,7 +26,7 @@
     },
     {
       "path": ".github/workflows/floor.yml",
-      "sha256": "00ac5b1dae0f2c0beaf9d1c7e4e5d4a18a1be770b278ad7f822157373223cfa3"
+      "sha256": "cfc3d39c31049db1491b1437d3bad9543d4afe0c7b6fe08f10b419a1caae5f20"
     },
     {
       "path": ".github/workflows/plugin-bundle.yml",
@@ -66,11 +66,15 @@
     },
     {
       "path": "scripts/floor_guard.py",
-      "sha256": "726bf399238e790697d116256e82282982fccfd31d05c43bce9cfc3133d1a5e6"
+      "sha256": "02ed2c64dc5fac46c6f25f6720171cce6769ed71fc9c79382c67bef000be58aa"
     },
     {
       "path": "scripts/kat_lint.py",
       "sha256": "a96ed7d586e1a4e76cb9bf82029db3d773b2b50825a85ef345a3a7a05d4806f8"
+    },
+    {
+      "path": "scripts/kat_swap.py",
+      "sha256": "d0b3bc721692a23bdf45dd126feef060981c06d2fe336dfa08a245380d4bfa78"
     },
     {
       "path": "scripts/leak_denylist_scan.py",
@@ -125,6 +129,10 @@
     {
       "job": "kat-lint",
       "sha256": "19267e88a93b327454d0b11a940671ef4b42cdb760c1ebe6fb21250c0c4b29d4"
+    },
+    {
+      "job": "kat-swap",
+      "sha256": "35d710a41cf0dc1b0075118c392a65af9ee8830c0a669b40ead5ba917fc05757"
     },
     {
       "job": "leak-denylist",
