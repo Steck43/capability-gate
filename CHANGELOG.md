@@ -160,6 +160,7 @@ Known gaps, tracked and not closed by this PR:
 - Adapter extracts every path argument. A notes path plus `target=/etc/passwd` is denied.
 
 ### Changed
+- CI pins `actions/checkout` at v7.0.1 (`3d3c42e`), up from v4.2.2, and `actions/setup-python` at v7.0.0 (`5fda3b9`), up from v5.6.0, in every workflow and in the floor guard's action allowlist; `requirements-ci.lock` pins pytest 9.1.1, up from 8.4.2. Each release is at least 7 days old, the Dependabot cooldown. ruff stays at 0.15.22: from 0.16 on it enables 413 rules by default instead of 59, which is a lint policy change of its own.
 - The `tests` job runs on Python 3.12 only, the version the README names, and its timeout is back to the floor's 10 minutes, so every floor job is pinned at exactly 10 again. The full suite on Python 3.11 had run past 10 minutes. The floor guard protects the `tests (3.12)` check name, the KAT linter judges version guards under 3.12, and `tests/test_floor_config.py` fails when the matrix names another Python.
 - `tests/test_kill_switch.py` holds only tests that assert the gate's verdict. The log test and the tamper test now assert the verdicts they depend on (an allow before the throw, denies after it), and the double-throw test, which pins the marker and the THROWN row and asks the gate for no decision, moves to `tests/test_halt_marker.py`. `tests/test_verdict_asserts.py` fails when a test in the known-answer file asserts no gate verdict by identity. The fault-injection tests (an unreadable or locked marker) stay: they assert the deny the gate returns.
 

@@ -26,15 +26,15 @@
     },
     {
       "path": ".github/workflows/floor.yml",
-      "sha256": "c36a8179afc6c10ee243b4656e2925e23a108f39b37286b7f2e0adfc579f256c"
+      "sha256": "78725f012ffca723aa131399f062f70502fc7a8f9d1a68e4ef396e0fa7977a67"
     },
     {
       "path": ".github/workflows/plugin-bundle.yml",
-      "sha256": "d76ca70b443199ebf287bd3d2743af5ea7a53163a6e95f545c7e418f4f66403a"
+      "sha256": "159af28e6c323d078ba6fbc75deed6ada89a8faa92fbe69dce0fb1e832e684b1"
     },
     {
       "path": ".github/workflows/scorecard.yml",
-      "sha256": "d2caaaf9df5d5d67440c32e0b1eb99b5dadbaecde9c9a7402fc9d733fe9b51fd"
+      "sha256": "aed475c47c6cef933f759ace5fac9c7f41a34f4fd82733b9de9cd6e5894aec65"
     },
     {
       "path": ".gitleaks.toml",
@@ -58,7 +58,7 @@
     },
     {
       "path": "requirements-ci.lock",
-      "sha256": "6658c0fea6ec280c4c8c69b584fe04518a107609a8f28225bfcf8ac3bc4bc2d8"
+      "sha256": "a195d1feeb23eca3d82655417c2025b9509ef9027c21fdc5f404c2d2affce271"
     },
     {
       "path": "ruff.toml",
@@ -66,7 +66,7 @@
     },
     {
       "path": "scripts/floor_guard.py",
-      "sha256": "55461372b5ed36025a14aa43b21d771d84f17dfbd7d49d4fb68fa647b6b5ef8e"
+      "sha256": "4b1447ec4343091b0cc6809a03a69530e7dc868f94676c77a71c428c7bf9571d"
     },
     {
       "path": "scripts/kat_lint.py",
@@ -90,7 +90,7 @@
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "46a08a4faf5b6480fcbcc92cb30fd08650ac76bcda1f539ac003c41439689a57"
+      "sha256": "5e8e8e41c66ffe81c9e839b65f81f1ed7957c6e01310b35ed378f26bc52e272f"
     },
     {
       "path": "tests/test_kat_lint.py",
@@ -104,55 +104,55 @@
   "jobs": [
     {
       "job": "authorship",
-      "sha256": "ab6f44439bd070fad6add07782ff1eee4b0725c33e71f65ac69a2ca70b3e78c9"
+      "sha256": "f817e16033796dc8bd0ecc512625621e8599942737f13af75784aa75cc759c7c"
     },
     {
       "job": "craft-changelog",
-      "sha256": "ff9ddf1f43adb994c6ec883d9e964088a7244cca1ae55557fccf0d965d1a99b0"
+      "sha256": "7ac6a0d346780412788bb1e4049523cd91e9846f24189e25230ebea7af542f35"
     },
     {
       "job": "craft-comments",
-      "sha256": "c781b8e9d0cf70055dd628bd57ba1cc76345db47ea11d3aa611fe12a526ad991"
+      "sha256": "76f7ba0cdc4155c116568aa6a2a0fc63c2865ddfd9f747bc439efce6e7a0d8f5"
     },
     {
       "job": "craft-empty-diff",
-      "sha256": "d1ef4648cb36ef4485cacb7f499235f0e04849a15b3de39d8f51be5431021d2a"
+      "sha256": "cc69f3798674e61a77952763d15e144886eb102ca6b61b4c1034d91b4e4769b6"
     },
     {
       "job": "craft-voice",
-      "sha256": "1f5c1f708d1f319bede4ddbe5c7392728dc638ac62057d58d163d4f9a7db46ef"
+      "sha256": "edc989b73511fc880177f8098ee1855b92b6f0b49de1caec8a3e8a56d6ea8970"
     },
     {
       "job": "floor-guard",
-      "sha256": "2e30cf89f66267c8d9c23781b25e098ad865bae08fac42859622a60c2abd9f00"
+      "sha256": "eeadbdf01bccf2cb9cbf2f6361011030344f6278ea20ae508cb7a92f44f87bbe"
     },
     {
       "job": "kat-lint",
-      "sha256": "19267e88a93b327454d0b11a940671ef4b42cdb760c1ebe6fb21250c0c4b29d4"
+      "sha256": "42aeed58dc19182bb48b019256267f29e0bddb7fe80eebc2149fd6923eabe163"
     },
     {
       "job": "kat-swap",
-      "sha256": "35d710a41cf0dc1b0075118c392a65af9ee8830c0a669b40ead5ba917fc05757"
+      "sha256": "497c5f173b503de062d12e429c24fb7d5129abea1f04fc71da2e8df28e42ac42"
     },
     {
       "job": "leak-denylist",
-      "sha256": "30d0d322501d333143704e50b6b5e50ebe3c3cf8e22c8b13b2153452979cb2f2"
+      "sha256": "c81f030c89e3a31282e037a626abf8f9970dcbb6837214f9915073806c42ba34"
     },
     {
       "job": "lint",
-      "sha256": "77c70cbd8381853a0215c2a04e4d6bff221b5d1ae7499f4e279fa497d23029a0"
+      "sha256": "7eeb3bdf861f1937c4806c90cd5e8db2fff669d5cb55a4ffd49058205c717ba4"
     },
     {
       "job": "secrets",
-      "sha256": "c72dcbf82a9c0e7de22e75f4e0764ee579e7846709adb9f492f7bb456f1af704"
+      "sha256": "462b5a5448b6c862fe409c51bfd3c9d95ccc763e5d01152713aa3d2631142337"
     },
     {
       "job": "tests",
-      "sha256": "16a8b134d8f683919968cdfc4b29939527e7825bca37936f7621aafbd21b0fc1"
+      "sha256": "af05f426551ac5a841d08809508054defb67b776dc4626314df57fc10886980c"
     },
     {
       "job": "workflow-lint",
-      "sha256": "587306b7386cc6d73bd4c1144d89ba61f2f189b96d90c580c0a2fde4692fe254"
+      "sha256": "66fb3df1b33f955fd395149f082725ccafcbbb9abf54937a3a1afa97e996ce44"
     }
   ],
   "workflow": {
