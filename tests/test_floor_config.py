@@ -84,7 +84,7 @@ def test_pytest_ini_keeps_strict_xfail_and_syntax_warning_errors() -> None:
         ("leak-denylist", '--text "pull request title and body"'),
         ("leak-denylist", "git show origin/main:scripts/leak_denylist_scan.py"),
         ("kat-lint", "python -I scripts/kat_lint.py"),
-        ("tests", "pytest -q"),
+        ("tests", "pytest -q -n 4"),
         ("floor-guard", 'git show "$GUARD_BASE:scripts/floor_guard.py"'),
     ],
 )
@@ -155,7 +155,7 @@ def test_pytest_invocation_is_exact_and_from_the_gate_directory() -> None:
         and "pip install" not in str(s.get("run", ""))
     ]
     assert len(runs) == 1
-    assert str(runs[0]["run"]).strip() == "pytest -q"
+    assert str(runs[0]["run"]).strip() == "pytest -q -n 4"
     assert runs[0].get("working-directory") == "capability-gate"
 
 
@@ -177,7 +177,7 @@ def test_installs_use_only_the_hash_locked_file() -> None:
 
 KAT = "      - run: python -I scripts/kat_lint.py\n"
 RUFF = "      - run: ruff check .\n"
-PYTEST = "        run: pytest -q\n"
+PYTEST = "        run: pytest -q -n 4\n"
 
 
 def _step(run: str, extra: str = "") -> str:
@@ -244,7 +244,10 @@ TAMPERS = [
     ),
     (
         "T1 expression in run",
-        (PYTEST, "        run: pytest -q ${{ github.event.pull_request.title }}\n"),
+        (
+            PYTEST,
+            "        run: pytest -q -n 4 ${{ github.event.pull_request.title }}\n",
+        ),
         "expression interpolated",
         False,
     ),
@@ -1204,33 +1207,43 @@ RULE_TAMPERS = [
     # pytest invocation is exact
     (
         "pytest -k",
-        (PYTEST, "        run: pytest -q -k zqxwvk\n"),
+        (PYTEST, "        run: pytest -q -n 4 -k zqxwvk\n"),
         "pytest argument '-k'",
     ),
     (
         "pytest --co",
-        (PYTEST, "        run: pytest -q --co\n"),
+        (PYTEST, "        run: pytest -q -n 4 --co\n"),
         "pytest argument '--co'",
     ),
     (
         "pytest -p no:plugin",
-        (PYTEST, "        run: pytest -q -p no:zqxwvk\n"),
+        (PYTEST, "        run: pytest -q -n 4 -p no:zqxwvk\n"),
         "pytest argument '-p'",
     ),
     (
         "pytest --rootdir",
-        (PYTEST, "        run: pytest -q --rootdir=zqxwvk\n"),
+        (PYTEST, "        run: pytest -q -n 4 --rootdir=zqxwvk\n"),
         "pytest argument '--rootdir=zqxwvk'",
     ),
     (
         "pytest --deselect",
-        (PYTEST, "        run: pytest -q --deselect tests\n"),
+        (PYTEST, "        run: pytest -q -n 4 --deselect tests\n"),
         "pytest argument '--deselect'",
     ),
     (
         "python -m pytest -x",
-        (PYTEST, "        run: python -m pytest -q --runxfail\n"),
+        (PYTEST, "        run: python -m pytest -q -n 4 --runxfail\n"),
         "pytest argument '--runxfail'",
+    ),
+    (
+        "pytest worker count changed",
+        (PYTEST, "        run: pytest -q -n 0\n"),
+        "pytest argument '0'",
+    ),
+    (
+        "pytest worker count without -n",
+        (PYTEST, "        run: pytest -q 4\n"),
+        "pytest argument '4'",
     ),
     # guardrail jobs and steps always run
     (
@@ -1976,7 +1989,7 @@ def _set_tool_run(job: str, run: str):
             (
                 i
                 for i, s in enumerate(steps)
-                if str(s.get("run", "")).strip() == "pytest -q"
+                if str(s.get("run", "")).strip() == "pytest -q -n 4"
             ),
             len(steps) - 1,
         )
@@ -2142,7 +2155,9 @@ def test_a_construct_that_defines_shadows_or_skips_a_command_is_rejected(
     ("job", "run", "missing"),
     [
         pytest.param("kat-lint", "echo LIVE", "kat_lint.py", id="kat-lint-echoed"),
-        pytest.param("tests", "echo pytest -q", "pytest -q", id="pytest-echoed"),
+        pytest.param(
+            "tests", "echo pytest -q -n 4", "pytest -q -n 4", id="pytest-echoed"
+        ),
         pytest.param(
             "lint", "true ruff format --check .", "ruff format", id="ruff-behind-true"
         ),
@@ -2944,7 +2959,7 @@ def test_a_run_record_that_does_not_cover_the_suite_fails(
 def test_the_tests_job_checks_its_run_record() -> None:
     job = _workflow()["jobs"]["tests"]
     runs = [s for s in job["steps"] if s.get("run")]
-    pytest_step = next(s for s in runs if s["run"].strip() == "pytest -q")
+    pytest_step = next(s for s in runs if s["run"].strip() == "pytest -q -n 4")
     check_step = next(s for s in runs if "run_record_check.py" in s["run"])
     assert runs.index(check_step) > runs.index(pytest_step)
     for step in (pytest_step, check_step):

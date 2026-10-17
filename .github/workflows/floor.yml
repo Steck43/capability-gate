@@ -173,12 +173,15 @@ jobs:
         # run. On capability-gate that turns a green suite red in two different
         # ways depending on which of two same-named modules lands on the path.
         # The skips are correct behaviour.
+        # -n 4 runs four pytest-xdist workers, one per runner core. The main
+        # process writes the run record from what the workers hand back
+        # (see conftest.py).
         working-directory: capability-gate
         env:
           AEGIS_ATOMS_ROOT: ${{ github.workspace }}/aegis-atoms
           ISOLATION_LAYER_ROOT: ${{ github.workspace }}/isolation-layer
           FLOOR_RUN_RECORD: ${{ runner.temp }}/pytest-run.json
-        run: pytest -q
+        run: pytest -q -n 4
       # pytest exits 0 when a test module ends the process early (os._exit),
       # so the job also needs the run record that only a finished session
       # writes, covering every test module (see conftest.py).

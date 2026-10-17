@@ -1,4 +1,4 @@
-"""The floor's only conftest: two checks a test module cannot opt out of.
+"""The floor's only conftest: checks a test module cannot opt out of.
 
 1. A plugin that registers once collection has started fails the run. A test
    module can declare pytest_plugins in forms no static scan reads (a name
@@ -10,6 +10,11 @@
    its call, and the tests that reported. A process that ends early, such as os._exit during an
    import or a test, writes none, and scripts/run_record_check.py then fails
    the job.
+3. Under pytest-xdist (CI runs pytest -n 4) the main process writes the
+   record. Workers write none; each hands the modules it collected to the
+   main process when it shuts down. The main process sees every test report
+   itself. A worker that goes down with an error, or without handing over its
+   modules, is a lost worker, and the main process then writes no record.
 
 The floor guard pins this file's exact content. Test modules still run
 arbitrary code inside this process, so a module that forges the record or
@@ -31,6 +36,7 @@ _STATE: dict = {
     "skipped_modules": set(),
     "called_modules": set(),
     "reported": set(),
+    "lost_worker": False,
 }
 
 
@@ -96,9 +102,26 @@ def pytest_runtest_logreport(report) -> None:
         _STATE["called_modules"].add(report.nodeid.split("::", 1)[0])
 
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error) -> None:
+    out = getattr(node, "workeroutput", None) or {}
+    if error is not None or "floor_modules" not in out:
+        _STATE["lost_worker"] = True
+        return
+    _STATE["modules"].update(out["floor_modules"])
+    _STATE["skipped_modules"].update(out["floor_skipped_modules"])
+
+
 def pytest_sessionfinish(session, exitstatus) -> None:
     path = os.environ.get("FLOOR_RUN_RECORD")
     if not path:
+        return
+    workeroutput = getattr(session.config, "workeroutput", None)
+    if workeroutput is not None:
+        workeroutput["floor_modules"] = sorted(_STATE["modules"])
+        workeroutput["floor_skipped_modules"] = sorted(_STATE["skipped_modules"])
+        return
+    if _STATE["lost_worker"]:
         return
     record = {
         "finished": True,
