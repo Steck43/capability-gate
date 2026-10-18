@@ -129,11 +129,6 @@ def test_s6_short_name_of_env_denied(tmp_path: Path) -> None:
     assert d.verdict is Verdict.DENY
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="LIMIT: the canary check reads the name as given, not the 8.3 alias",
-)
 def test_s6_short_name_of_canary_denied(tmp_path: Path) -> None:
     grant, short = _s6_grant(tmp_path, "secret-canary.txt")
     target = str(grant.resolve() / short)

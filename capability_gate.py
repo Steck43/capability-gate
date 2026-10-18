@@ -683,15 +683,35 @@ def _path_allowed(path: str, globs: Iterable[str]) -> bool:
 _CANARY_BASENAMES = frozenset({"secret-canary.txt"})
 
 
+def _windows_name(name: str) -> str:
+    """The name as Windows opens it: any case, trailing dots and spaces dropped.
+
+    Used on every OS, so a policy denies the same names wherever it runs.
+    """
+    return name.rstrip(". ").casefold()
+
+
 def _canary_secret(path: str) -> bool:
-    return os.path.basename(os.path.normpath(_expand(path))) in _CANARY_BASENAMES
+    """True when the name as given, or the file it resolves to, is the canary.
+
+    The resolved name catches an in-grant symlink to the canary and, on
+    Windows, its 8.3 short name.
+    """
+    expanded = os.path.normpath(_expand(path))
+    names = [os.path.basename(expanded)]
+    try:
+        names.append(os.path.basename(os.path.realpath(expanded)))
+    except OSError:
+        pass
+    return any(_windows_name(n) in _CANARY_BASENAMES for n in names)
 
 
 def _protected_segment(name: str) -> bool:
-    """True for .env / .aegis / .env.* / .envrc (case-insensitive)."""
+    """True for .env / .aegis / .env.* / .envrc (any case, trailing dots and
+    spaces dropped, since Windows creates ``.env`` for a write to ``.env ``)."""
     if not name:
         return False
-    lower = name.casefold()
+    lower = _windows_name(name)
     if lower in {".env", ".aegis", ".envrc"}:
         return True
     # .env.local, .env.production, …

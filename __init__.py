@@ -163,24 +163,138 @@ class UntrustedFile(Exception):
     """A gate file is not the plain, privately owned file it should be."""
 
 
+# SYSTEM and Administrators can replace any file anyway, like root on POSIX.
+# OWNER RIGHTS grants only to the owner, which is checked on its own; Python
+# puts it on a folder made with mode 0o700.
+_WIN_TRUSTED_SIDS = frozenset({"S-1-5-18", "S-1-5-32-544", "S-1-3-4"})
+# Rights that change the content, or let the holder grant itself that.
+# FILE_WRITE_DATA, FILE_APPEND_DATA, WRITE_DAC, WRITE_OWNER, GENERIC_ALL,
+# GENERIC_WRITE.
+_WIN_WRITE_MASK = 0x2 | 0x4 | 0x40000 | 0x80000 | 0x10000000 | 0x40000000
+
+
+def _windows_acl_problem(handle: int) -> str | None:
+    """Why an open Windows file is not privately owned, or None.
+
+    The owner must be the current user, SYSTEM or Administrators, and no
+    allow entry may give write rights to anyone else. Deny entries are not
+    credited, so an allow that a deny cancels still refuses the file.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    vp = ctypes.c_void_p
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.LocalFree.argtypes = [vp]
+    advapi.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    advapi.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        vp,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi.ConvertSidToStringSidW.argtypes = [vp, ctypes.POINTER(vp)]
+    # handle, object type, info flags, then owner, group, DACL, SACL, descriptor
+    advapi.GetSecurityInfo.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.DWORD]
+    advapi.GetSecurityInfo.argtypes += [ctypes.POINTER(vp)] * 5
+    advapi.GetSecurityInfo.restype = wintypes.DWORD
+    advapi.GetAce.argtypes = [vp, wintypes.DWORD, ctypes.POINTER(vp)]
+
+    def sid_string(psid: int) -> str:
+        out = vp()
+        if not advapi.ConvertSidToStringSidW(psid, ctypes.byref(out)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            return ctypes.wstring_at(out.value)
+        finally:
+            kernel.LocalFree(out)
+
+    token = wintypes.HANDLE()
+    if not advapi.OpenProcessToken(kernel.GetCurrentProcess(), 0x8, token):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        size = wintypes.DWORD()
+        advapi.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))
+        buf = ctypes.create_string_buffer(size.value)
+        if not advapi.GetTokenInformation(token, 1, buf, size, ctypes.byref(size)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        # TOKEN_USER starts with the user's SID pointer.
+        user = sid_string(vp.from_buffer(buf).value)
+    finally:
+        kernel.CloseHandle(token)
+    trusted = _WIN_TRUSTED_SIDS | {user}
+
+    owner, dacl, sd = vp(), vp(), vp()
+    # SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION
+    err = advapi.GetSecurityInfo(
+        handle,
+        1,
+        0x1 | 0x4,
+        ctypes.byref(owner),
+        None,
+        ctypes.byref(dacl),
+        None,
+        ctypes.byref(sd),
+    )
+    if err:
+        return f"security info unreadable (error {err})"
+    try:
+        if sid_string(owner.value) not in trusted:
+            return "not owned by the current user"
+        if not dacl.value:
+            return "has no DACL, so everyone has full access"
+        # ACL header: revision, pad, size (WORD), ace count (WORD), pad.
+        count = ctypes.c_uint16.from_address(dacl.value + 4).value
+        for i in range(count):
+            ace = vp()
+            if not advapi.GetAce(dacl, i, ctypes.byref(ace)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            ace_type = ctypes.c_uint8.from_address(ace.value).value
+            ace_flags = ctypes.c_uint8.from_address(ace.value + 1).value
+            if ace_type == 1 or ace_flags & 0x8:  # deny, or inherit-only
+                continue
+            if ace_type not in (0, 9):  # allowed, allowed-callback
+                return f"has an ACL entry of unexpected type {ace_type}"
+            mask = ctypes.c_uint32.from_address(ace.value + 4).value
+            if mask & _WIN_WRITE_MASK and sid_string(ace.value + 8) not in trusted:
+                return "writable by another user or group"
+        return None
+    finally:
+        kernel.LocalFree(sd)
+
+
 def _read_trusted(path: str | os.PathLike) -> str:
     """Read one of the gate's own files only if it is what it claims to be.
 
     POSIX: the last path part must not be a symlink (``O_NOFOLLOW``), the
     opened file must be the same inode the name pointed at, a regular file,
     owned by the current user, and not writable by group or others. Windows:
-    a symlink or other reparse point is refused; owner and ACL are not checked
-    there yet. A symlink in a parent folder and a hardlink are not detected.
+    a symlink or other reparse point is refused, and the opened file must be
+    owned by the current user, SYSTEM or Administrators and writable by no
+    one else. A symlink in a parent folder and a hardlink are not detected.
     """
     path = os.fspath(path)
     named = os.lstat(path)
     if stat.S_ISLNK(named.st_mode):
         raise UntrustedFile(f"{path} is a symlink")
     if os.name == "nt":
+        import msvcrt
+
         reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
         if getattr(named, "st_file_attributes", 0) & reparse:
             raise UntrustedFile(f"{path} is a reparse point")
         with open(path, encoding="utf-8") as f:
+            problem = _windows_acl_problem(msvcrt.get_osfhandle(f.fileno()))
+            if problem:
+                raise UntrustedFile(f"{path} {problem}")
             return f.read()
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:

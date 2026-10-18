@@ -175,11 +175,6 @@ def test_allowlist_modes(env) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ACL")
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="LIMIT: Windows owner and ACL are not checked yet (C5)",
-)
 def test_allowlist_writable_by_everyone_refused_on_windows(env) -> None:
     al = _allowlist(env.tmp / "allowlist.yaml")
     # S-1-1-0 is Everyone. (M) is modify, which includes write.
