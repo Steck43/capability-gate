@@ -22,15 +22,11 @@ test_alias_class.py, since a volume can have them turned off.
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
 
-ROOF = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOF))
-
-from capability_gate import Gate, Verdict, load_policy  # noqa: E402
+from capability_gate import Gate, Verdict, load_policy
 
 CANARY = "secret-canary.txt"
 
