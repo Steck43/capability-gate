@@ -8,15 +8,17 @@ on Windows 11, NTFS, Python 3.12 (AEG-163):
 
 - The protected segment check holds for every spelling here, because it also
   checks the resolved path of the name and of its folder.
-- The canary check reads only the name as given. Upper case, a trailing dot
-  and a trailing space each open the canary and are allowed. So is an
-  in-grant symlink to it, on every OS.
-- A write to ".env " (trailing space) in a folder with no .env yet is
-  allowed, and Windows creates .env.
+- The canary check read only the name as given, so upper case, a trailing
+  dot and a trailing space each opened the canary and were allowed. So was
+  an in-grant symlink to it, on every OS. It now also checks the resolved
+  name, and compares both casefolded with trailing dots and spaces dropped.
+- A write to ".env " (trailing space) in a folder with no .env yet was
+  allowed, and Windows created .env. Each segment now drops trailing dots
+  and spaces before the protected segment check.
 
-Each miss is a strict expected failure that accepts only AssertionError, so
-a fix turns it red until the mark comes off. The 8.3 short names are in
-test_alias_class.py, since a volume can have them turned off.
+These were strict expected failures until the fix; they now pass plain. The
+8.3 short names are in test_alias_class.py, since a volume can have them
+turned off.
 """
 
 from __future__ import annotations
@@ -84,47 +86,27 @@ def test_k8_write_to_env_with_trailing_dot_is_denied(grant: Path) -> None:
     assert d.verdict is Verdict.DENY, d.reason
 
 
-# Missed: the canary check compares the basename as given.
+# Was missed: the canary check compared only the basename as given.
 @pytest.mark.skipif(os.name != "nt", reason="Windows file name rules")
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="LIMIT: the canary check is case-sensitive; Windows opens any case",
-)
 def test_k8_canary_in_upper_case_is_denied(grant: Path) -> None:
     d = _gate(grant).evaluate("writer", "read_file", [f"{grant}\\SECRET-CANARY.TXT"])
     assert d.verdict is Verdict.DENY, d.reason
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows file name rules")
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="LIMIT: Windows drops a trailing dot; the canary check does not",
-)
 def test_k8_canary_with_trailing_dot_is_denied(grant: Path) -> None:
     d = _gate(grant).evaluate("writer", "read_file", [f"{grant}\\{CANARY}."])
     assert d.verdict is Verdict.DENY, d.reason
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows file name rules")
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="LIMIT: Windows drops a trailing space; the canary check does not",
-)
 def test_k8_canary_with_trailing_space_is_denied(grant: Path) -> None:
     d = _gate(grant).evaluate("writer", "read_file", [f"{grant}\\{CANARY} "])
     assert d.verdict is Verdict.DENY, d.reason
 
 
-# Missed: a new name is checked as given, and Windows creates .env.
+# Was missed: a new name was checked as given, and Windows creates .env.
 @pytest.mark.skipif(os.name != "nt", reason="Windows file name rules")
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="LIMIT: a write to '.env ' is allowed and Windows creates .env",
-)
 def test_k8_write_to_env_with_trailing_space_is_denied(grant: Path) -> None:
     new = grant / "fresh"
     new.mkdir()
@@ -132,12 +114,7 @@ def test_k8_write_to_env_with_trailing_space_is_denied(grant: Path) -> None:
     assert d.verdict is Verdict.DENY, d.reason
 
 
-# Missed on every OS: the canary check reads the link's name, not its target.
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="LIMIT: an in-grant symlink to the canary is allowed",
-)
+# Was missed on every OS: the canary check read the link's name, not its target.
 def test_k8_symlink_to_canary_is_denied(grant: Path) -> None:
     link = grant / "notes.txt"
     try:
