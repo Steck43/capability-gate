@@ -1,0 +1,4 @@
+Contact: https://github.com/Steck43/capability-gate/security/advisories/new
+Expires: 2027-10-17T00:00:00.000Z
+Policy: https://github.com/Steck43/capability-gate/blob/main/SECURITY.md
+Preferred-Languages: en
