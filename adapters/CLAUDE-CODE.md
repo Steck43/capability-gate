@@ -4,7 +4,7 @@ Controls that contain what an agent can do at the level of each tool call.
 
 The decider in `capability_gate.py` runs as a Claude Code `PreToolUse` hook. Every tool call Claude Code is about to make is checked against an allowlist of tools and paths. A call the allowlist does not grant is blocked before it runs, and every decision is written to a hash-chained log before the hook answers.
 
-Windows only. Measured on Claude Code 2.1.290 and Windows 10.0.26300.9457, with the adapter at commit `f4aae96`.
+Windows only. Measured on Claude Code 2.1.290 and Windows 10.0.26300.9457, with the adapter at commit `f4aae96`. The `onFailure` key in the snippet below needs Claude Code 2.1.295 or later. Its live behavior has not been measured here.
 
 ## Install
 
@@ -18,13 +18,15 @@ Windows only. Measured on Claude Code 2.1.290 and Windows 10.0.26300.9457, with 
       {"matcher": "*", "hooks": [{"type": "command",
         "command": "C:\\path\\to\\python.exe",
         "args": ["C:\\path\\to\\capability-gate\\adapters\\claude_code_hook.py"],
-        "timeout": 15}]}
+        "timeout": 15,
+        "onFailure": "block"}]}
     ],
     "PostToolUse": [
       {"matcher": "*", "hooks": [{"type": "command",
         "command": "C:\\path\\to\\python.exe",
         "args": ["C:\\path\\to\\capability-gate\\adapters\\claude_code_hook.py", "--post"],
-        "timeout": 15}]}
+        "timeout": 15,
+        "onFailure": "block"}]}
     ]
   }
 }
@@ -36,8 +38,8 @@ The allowlist path can be set with `CG_CC_ALLOWLIST`. Decisions go to `%USERPROF
 
 - **Allow** is exit 0 with no output. Claude Code reads that as "no decision", so its own permission rules still apply. The hook can take access away; it cannot grant it.
 - **Deny** is exit 2 with the reason on stderr. Claude Code shows the reason to the model.
-- **Every error is a deny.** Bad input, a missing or unreadable allowlist, a grant that does not load, and a log that cannot be written all end in exit 2. This matters because Claude Code does not block on a hook that crashes or times out. Only exit 2 or a JSON deny blocks.
-- **Deadline.** The hook denies after 5 s by default (`CG_CC_DEADLINE_S`), clamped to at most 14 s and rejecting non-finite values, so a stalled check blocks inside Claude Code's ~15 s hook timeout instead of timing out as allow.
+- **Every error is a deny.** Bad input, a missing or unreadable allowlist, a grant that does not load, and a log that cannot be written all end in exit 2. This matters because, without `onFailure`, Claude Code does not block on a hook that crashes or times out; only exit 2 or a JSON deny blocks. The snippet sets `"onFailure": "block"`, which tells Claude Code to treat a hook that cannot start, times out, or exits with a code other than 0 or 2 as a block. On `PostToolUse` the call has already run, so a block there can only report it.
+- **Deadline.** The hook denies after 5 s by default (`CG_CC_DEADLINE_S`), clamped to at most 14 s and rejecting non-finite values, so a stalled check blocks inside the 15 s timeout the snippet sets. That 15 s is this snippet's `"timeout"`, not a Claude Code default; Claude Code's own default for a command hook is 600 s.
 - **No skill label.** Claude Code sends none, so every call is judged as the skill `UNLABELED`. The allowlist must grant `UNLABELED` by name. A `"*"` entry never applies.
 - **Paths.** Only tools in the closed adapter schema are checked: `Read`, `Write`, `Edit`, `MultiEdit` and `NotebookEdit` on the file they name; `Glob` and `Grep` on their search path, or the working directory when none is given. Any other tool name (including `LS`, `NotebookRead`, and `mcp__*`) is denied even if the allowlist grants it. Relative paths resolve against the working directory. Links are resolved and case is folded before matching. A path with an unexpanded `$` or a leading `~` is denied. A `Glob` pattern that is absolute or climbs is denied, including `[.][.]/*`, `[\.][\.]/*`, nested braces such as `{a,{..,b}}/*`, `..*`, and absolute brace alts. That is a denylist over climb shapes, not a full Glob semantic model.
 - **Shell tools.** `Bash` and `PowerShell` are outside the path schema, so the adapter denies them. The example allowlist also lists them under `require_approval`.
@@ -84,13 +86,13 @@ This happens after the call has run. It is detection, not prevention.
 
 ## What this hook does not see
 
-- **The interpreter failing to start.** If `python.exe` is missing or moved, Claude Code treats the hook as a non-blocking error and the call runs. Nothing inside the hook can close this. (From the Claude Code documentation; not measured here.)
-- **A broken settings file.** If the settings file that holds the hook is invalid JSON, Claude Code skips it. In an interactive session it asks first; with `-p` it skips silently. The hook is then not loaded. (From the Claude Code documentation; not measured here.)
+- **The interpreter failing to start.** If `python.exe` is missing or moved, nothing inside the hook runs. Without `onFailure`, Claude Code treats that as a non-blocking error and the call runs. With `"onFailure": "block"` (Claude Code 2.1.295 or later) the call is blocked instead. The same setting blocks a wrong script path, a crash that exits with a code other than 0 or 2, and a stall before the hook's own 5 s deadline starts. (From the Claude Code documentation; not measured here. Live `onFailure` behavior is untested.)
+- **A broken settings file.** If the settings file that holds the hook is invalid JSON, Claude Code skips it. In an interactive session it asks first; with `-p` it skips silently. The hook is then not loaded, so `onFailure` cannot help: there is no hook to fail. (From the Claude Code documentation; not measured here.)
 - **Other hooks.** Another hook's `updatedInput` can change a call after this hook allowed it (see the table above). The `PostToolUse` check reports it after the fact.
 - **What an allowed tool does next.** The hook sees the call, not its effects. What a shell command does once it is allowed, what an MCP server does on its side, and the files Claude Code reads on its own (project instructions, settings, `@` mentions) are outside the hook path.
 - **Hardlinks and races.** Resolving links catches a symlink or junction to an off-grant file. A regular file with more than one hard link is denied. A file swapped between the check and the open stays open until the host opens by fd.
 
-Managed settings change some of this. With the hook in managed settings and `allowManagedHooksOnly` set, user, project, local and plugin hooks do not run, apart from plugins that managed settings force-enable. That removes other hooks' rewrites and a broken user or project settings file. A user `disableAllHooks` cannot turn off a managed hook. The interpreter failing to start, and what an allowed tool does next, are not changed by managed settings. These managed-settings effects come from the Claude Code documentation and were not measured here.
+Managed settings change some of this. With the hook in managed settings and `allowManagedHooksOnly` set, user, project, local and plugin hooks do not run, apart from plugins that managed settings force-enable. That removes other hooks' rewrites and a broken user or project settings file. A user `disableAllHooks` cannot turn off a managed hook. Managed settings do not change what an allowed tool does next. The interpreter failing to start is covered by `onFailure`, not by managed settings. These managed-settings effects come from the Claude Code documentation and were not measured here.
 
 ## Tests
 
