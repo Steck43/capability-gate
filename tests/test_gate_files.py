@@ -12,7 +12,7 @@ observe, and later off-grant writes went through (G-2, config half). Now:
 
 Not covered here, named in the README: a hardlink to the config (same inode,
 no link to see), a symlink in a parent folder, and the Windows owner and ACL
-check.
+check. That last one is pinned as a strict expected failure (C5, AEG-163).
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -171,6 +172,26 @@ def test_allowlist_modes(env) -> None:
         os.chmod(al, bad)
         with pytest.raises(env.adapter.UntrustedFile):
             env.adapter._load_allowlist(str(al))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL")
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="LIMIT: Windows owner and ACL are not checked yet (C5)",
+)
+def test_allowlist_writable_by_everyone_refused_on_windows(env) -> None:
+    al = _allowlist(env.tmp / "allowlist.yaml")
+    # S-1-1-0 is Everyone. (M) is modify, which includes write.
+    subprocess.run(
+        ["icacls", str(al), "/grant", "*S-1-1-0:(M)"], check=True, capture_output=True
+    )
+    refused = False
+    try:
+        env.adapter._load_allowlist(str(al))
+    except env.adapter.UntrustedFile:
+        refused = True
+    assert refused, "loaded an allowlist that Everyone can write"
 
 
 def test_linked_allowlist_refused(env) -> None:
