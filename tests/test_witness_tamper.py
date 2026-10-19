@@ -230,30 +230,47 @@ def test_witness_alone_deleted_is_denied_with_default_anchor(tmp_path) -> None:
     assert len(_lines(log)) == 3
 
 
-# Known gap. With the default anchor beside the log, whoever can write the log
-# folder can also rewrite the witness and the anchor. These cases are caught
-# only when the anchor lives outside the agent's writable tree, and neither
-# hook sets such a location yet. Strict, so a fix turns them into failures that
-# force the marker off.
-_DEFAULT_ANCHOR_GAP = (
-    "default anchor sits beside the log; an agent that can write the log "
-    "folder can rewrite all three"
-)
+# Was a strict xfail (C4). With the default anchor beside the log, whoever can
+# write the log folder can also rewrite the witness and the anchor, so no
+# local file can be the root. The fix (option a3) is a checkpoint only the CI
+# signer can sign; the witness and anchor stay as a cache. This is the same
+# attack, on the same default anchor, with that checkpoint in place. Without a
+# checkpoint configured the attack still works: tests/test_c4_checkpoint.py
+# strips the check to show it.
 
 
-def _default_anchor_gate(tmp_path: Path):
+def _default_anchor_gate(tmp_path: Path, checkpoint=None):
     work = tmp_path / "work"
     work.mkdir()
     log = tmp_path / "logs" / "decisions.jsonl"
-    g = Gate(_policy(work), log_path=str(log))
+    g = Gate(_policy(work), log_path=str(log), checkpoint=checkpoint)
     for _ in range(4):
         g.evaluate("s", "write_file", [str(work / "a.md")])
     return g, work, log
 
 
-@pytest.mark.xfail(strict=True, reason=_DEFAULT_ANCHOR_GAP)
 def test_default_anchor_log_witness_and_anchor_rewritten(tmp_path) -> None:
-    g, work, log = _default_anchor_gate(tmp_path)
+    ed25519 = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.ed25519")
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    import capability_gate as cgm
+
+    key = ed25519.Ed25519PrivateKey.generate()
+    pub = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    folder = tmp_path / "checkpoints"
+    folder.mkdir()
+    cfg = cgm.CheckpointConfig(
+        str(folder), cgm.checkpoint_vkey("test", pub), "test/decisions"
+    )
+    empty = cgm.sign_extending(
+        None, cgm.checkpoint_request("absent.jsonl", cfg, first=True), cfg.vkey, key
+    )
+    (folder / "0.note").write_text(empty, encoding="utf-8", newline="")
+    g, work, log = _default_anchor_gate(tmp_path, cfg)
+    note = cgm.sign_extending(
+        empty, cgm.checkpoint_request(str(log), cfg), cfg.vkey, key
+    )
+    (folder / "4.note").write_text(note, encoding="utf-8", newline="")
     kept = _lines(log)[:2]
     log.write_text("".join(kept), encoding="utf-8")
     import hashlib
