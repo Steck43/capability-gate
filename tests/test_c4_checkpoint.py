@@ -397,3 +397,59 @@ def test_the_sign_command_writes_utf8_notes(tmp_path, signer):
     assert out.returncode == 0, out.stdout
     assert "\u2014 cg-test-signer ".encode() in out.stdout
     assert read_checkpoint(out.stdout.decode("utf-8"), vkey)[:2] == (ORIGIN, 0)
+
+
+# ---- Review 2026-10-18 (test-run seat B1, M1, M2) ----
+
+
+def _rows(log: Path) -> int:
+    return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
+
+
+def test_a_note_with_the_pinned_name_and_key_id_but_another_signature_is_refused(
+    tmp_path, signer
+):
+    """B1: the key id is public, so a forger can copy it. Only verify() stops this."""
+    work, log, g, cfg = _setup(tmp_path, signer, _operator_anchor)
+    _forge(log, [str(log) + ".witness", _operator_anchor(tmp_path)])
+    kept = cgm._cp_log_lines(str(log))
+    name, kid, _ = cgm._cp_parse_vkey(cfg.vkey)
+    other = ed25519.Ed25519PrivateKey.generate()
+    body = cgm._cp_body(ORIGIN, 2, cgm._cp_root([cgm._cp_leaf(x) for x in kept]))
+    sig = other.sign(body.encode("utf-8"))
+    for f in Path(cfg.folder).iterdir():
+        f.unlink()
+    Path(cfg.folder, "2.note").write_text(
+        f"{body}\n\u2014 {name} {cgm._cp_b64(kid + sig)}\n",
+        encoding="utf-8",
+        newline="",
+    )
+    assert "checkpoint signature does not verify" in _denied(g, work)
+    assert _rows(log) == 2
+
+
+def test_a_deleted_checkpoint_folder_fails_closed(tmp_path, signer):
+    """M1."""
+    import shutil
+
+    work, log, g, cfg = _setup(tmp_path, signer, _operator_anchor)
+    shutil.rmtree(cfg.folder)
+    _forge(log, [str(log) + ".witness", _operator_anchor(tmp_path)])
+    assert "signed checkpoint unreadable" in _denied(g, work)
+    assert _rows(log) == 2
+
+
+def test_log_witness_and_anchor_all_deleted_fails_closed(tmp_path, signer):
+    """M2."""
+    work, log, g, _cfg = _setup(tmp_path, signer, _operator_anchor)
+    for p in (log, Path(str(log) + ".witness"), Path(_operator_anchor(tmp_path))):
+        p.unlink()
+    assert "signed checkpoint covers 4" in _denied(g, work)
+    assert not log.exists()
+
+
+def test_a_note_that_is_not_utf8_fails_closed(tmp_path, signer):
+    work, log, g, cfg = _setup(tmp_path, signer)
+    Path(cfg.folder, "4.note").write_bytes(b"\xff\xfe not a note\n")
+    assert "not UTF-8" in _denied(g, work)
+    assert _rows(log) == 4

@@ -620,8 +620,12 @@ def _cp_read_latest(cfg: CheckpointConfig) -> tuple[int, bytes] | None:
         _owned_regular_file(path, "signed checkpoint")
     except ValueError as exc:
         raise CheckpointError(str(exc)) from None
-    with open(path, encoding="utf-8", newline="") as fh:
-        origin, note_size, root = read_checkpoint(fh.read(), cfg.vkey)
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            text = fh.read()
+    except UnicodeDecodeError:
+        raise CheckpointError("signed checkpoint is not UTF-8") from None
+    origin, note_size, root = read_checkpoint(text, cfg.vkey)
     if origin != cfg.origin:
         raise CheckpointError("signed checkpoint is for another log")
     if note_size != size:
