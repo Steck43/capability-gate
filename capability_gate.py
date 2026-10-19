@@ -51,6 +51,7 @@ import os
 import re
 import secrets
 import stat
+import sys
 import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -239,10 +240,22 @@ def _anchor_path(log_path: str) -> str:
 _REANCHOR = "an operator must re-anchor (python capability_gate.py reanchor)"
 
 
+def _owned_regular_file(path: str, what: str) -> None:
+    """Refuse a symlink, a non-file, or (where uids exist) a file another user owns."""
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode):
+        raise ValueError(f"{what} is a symlink, failing closed")
+    if not stat.S_ISREG(st.st_mode):
+        raise ValueError(f"{what} is not a regular file, failing closed")
+    if hasattr(os, "getuid") and st.st_uid != os.getuid():
+        raise ValueError(f"{what} is owned by another user, failing closed")
+
+
 def _read_anchor(anchor_path: str) -> dict | None:
     if not os.path.lexists(anchor_path):
         return None
     try:
+        _owned_regular_file(anchor_path, "audit log anchor")
         return _read_witness(anchor_path)
     except (OSError, ValueError) as exc:
         raise ValueError(
@@ -250,12 +263,18 @@ def _read_anchor(anchor_path: str) -> dict | None:
         ) from exc
 
 
-def _verify_log(log_path: str, anchor_path: str | None = None) -> tuple[str, int]:
+def _verify_log(
+    log_path: str,
+    anchor_path: str | None = None,
+    checkpoint: CheckpointConfig | None = None,
+) -> tuple[str, int]:
     """Return (head hash, record count). Check parent links, witness, and anchor.
 
     The anchor holds the same head and count as the witness, written on every
     append. Once it exists, a missing log, a missing witness, or a chain that
     does not reach the anchored head and count is tamper, not a first run.
+    With a checkpoint configured, the log must also match the newest signed
+    checkpoint in its folder (see the signed checkpoints section below).
     """
     witness_path = _witness_path(log_path)
     witness = _read_witness(witness_path) if os.path.exists(witness_path) else None
@@ -263,6 +282,7 @@ def _verify_log(log_path: str, anchor_path: str | None = None) -> tuple[str, int
 
     prev = _GENESIS
     count = 0
+    lines: list[bytes] = []
     if not os.path.exists(log_path):
         if witness is not None and (
             witness["count"] != 0 or witness["head"] != _GENESIS
@@ -273,6 +293,10 @@ def _verify_log(log_path: str, anchor_path: str | None = None) -> tuple[str, int
                 f"audit log missing but its anchor records {anchor['count']} "
                 f"row(s); {_REANCHOR}"
             )
+        # BEGIN C4-CHECKPOINT (an empty log must still match the signed size)
+        if checkpoint is not None:
+            _cp_check(checkpoint, lines)
+        # END C4-CHECKPOINT
         return _GENESIS, 0
 
     with open(log_path, encoding="utf-8") as fh:
@@ -285,6 +309,7 @@ def _verify_log(log_path: str, anchor_path: str | None = None) -> tuple[str, int
                 raise ValueError("audit log hash chain broken")
             prev = _hash_log_line(line)
             count += 1
+            lines.append(line.encode("utf-8"))
 
     if witness is None and anchor is not None and count > 0:
         raise ValueError(f"audit log witness missing; {_REANCHOR}")
@@ -295,10 +320,18 @@ def _verify_log(log_path: str, anchor_path: str | None = None) -> tuple[str, int
             "audit log does not match its anchor (shortened, rewritten, or "
             f"replaced); {_REANCHOR}"
         )
+    # BEGIN C4-CHECKPOINT (the witness and anchor are a cache; this is the root)
+    if checkpoint is not None:
+        _cp_check(checkpoint, lines)
+    # END C4-CHECKPOINT
     return prev, count
 
 
-def verify_hash_chain(log_path: str, anchor_path: str | None = None) -> str:
+def verify_hash_chain(
+    log_path: str,
+    anchor_path: str | None = None,
+    checkpoint: CheckpointConfig | None = None,
+) -> str:
     """Return the hash of the last JSONL line, or genesis if none exist.
 
     Each record's parent is the hash of the previous line. A sibling witness
@@ -307,7 +340,7 @@ def verify_hash_chain(log_path: str, anchor_path: str | None = None) -> str:
     and a recomputed witness fail closed the same way a rewrite does. Fail
     closed instead of appending onto a broken chain.
     """
-    head, _count = _verify_log(log_path, anchor_path)
+    head, _count = _verify_log(log_path, anchor_path, checkpoint)
     return head
 
 
@@ -331,6 +364,374 @@ def reanchor_audit_log(log_path: str, anchor_path: str | None = None) -> list[st
             os.replace(path, target)
             retired.append(target)
     return retired
+
+
+# ---- Signed checkpoints (C4 boundary, option a3) ----
+#
+# The log, witness and anchor above all live where the agent's OS user can
+# write, so an agent that can write the log folder can rewrite all three
+# together (C4 attacks A1, A2 and A3b). Here the root of trust leaves the box.
+# A CI job that alone holds the signing key signs a C2SP checkpoint of the log
+# (origin, tree size, RFC 9162 Merkle root), and only after a consistency proof
+# shows the new log extends the last signed one (attack A4). The gate checks
+# its log against the newest signed checkpoint in a local folder on every
+# decision; the witness and anchor stay as a cache.
+#
+# What this does not stop: rows written after the newest signed checkpoint are
+# only as safe as the cache until the next one is signed, and an agent that
+# deletes the newest note falls back to an older one until the folder is synced
+# again from the signed branch. Both show up as a refused signing request or a
+# mismatch at the next sync.
+
+_CP_SIG_PREFIX = "\u2014 "  # C2SP signed-note signature lines start with an em dash
+_CP_NOTE = re.compile(r"^(\d{1,20})\.note$")
+
+
+class CheckpointError(ValueError):
+    """A checkpoint, a signed note or a consistency proof did not check out."""
+
+
+@dataclass(frozen=True)
+class CheckpointConfig:
+    """Where the gate finds signed checkpoints for one log, and whose key signs them.
+
+    folder: local copy of the signed notes, one file per checkpoint, named
+        ``<tree size>.note``.
+    vkey: the C2SP verifier key, ``<name>+<key id hex>+<base64(0x01 || key)>``.
+    origin: the log's origin line; one origin per log.
+    """
+
+    folder: str
+    vkey: str
+    origin: str
+
+
+def _cp_leaf(line: bytes) -> bytes:
+    return hashlib.sha256(b"\x00" + line).digest()
+
+
+def _cp_node(left: bytes, right: bytes) -> bytes:
+    return hashlib.sha256(b"\x01" + left + right).digest()
+
+
+def _cp_split(n: int) -> int:
+    """The largest power of two smaller than n (RFC 9162 section 2.1.1)."""
+    k = 1
+    while k * 2 < n:
+        k *= 2
+    return k
+
+
+def _cp_root(leaves: Sequence[bytes]) -> bytes:
+    """RFC 9162 Merkle tree hash over leaf hashes."""
+    if not leaves:
+        return hashlib.sha256(b"").digest()
+    if len(leaves) == 1:
+        return leaves[0]
+    k = _cp_split(len(leaves))
+    return _cp_node(_cp_root(leaves[:k]), _cp_root(leaves[k:]))
+
+
+def _cp_subproof(m: int, leaves: Sequence[bytes], whole: bool) -> list[bytes]:
+    n = len(leaves)
+    if m == n:
+        return [] if whole else [_cp_root(leaves)]
+    k = _cp_split(n)
+    if m <= k:
+        return _cp_subproof(m, leaves[:k], whole) + [_cp_root(leaves[k:])]
+    return _cp_subproof(m - k, leaves[k:], False) + [_cp_root(leaves[:k])]
+
+
+def _cp_consistency_proof(m: int, leaves: Sequence[bytes]) -> list[bytes]:
+    """RFC 9162 section 2.1.4.1: proof that the first m leaves are a prefix."""
+    if m < 0 or m > len(leaves):
+        raise CheckpointError(f"no consistency proof from size {m} to {len(leaves)}")
+    if m in (0, len(leaves)):
+        return []
+    return _cp_subproof(m, leaves, True)
+
+
+def _cp_verify_consistency(
+    m: int, n: int, old_root: bytes, new_root: bytes, proof: Sequence[bytes]
+) -> bool:
+    """RFC 9162 section 2.1.4.2."""
+    if m < 0 or m > n:
+        return False
+    if m == n:
+        return not proof and old_root == new_root
+    if m == 0:
+        return not proof
+    if not proof:
+        return False
+    path = list(proof)
+    if m & (m - 1) == 0:
+        path.insert(0, old_root)
+    fn, sn = m - 1, n - 1
+    while fn & 1:
+        fn >>= 1
+        sn >>= 1
+    fr = sr = path[0]
+    for c in path[1:]:
+        if sn == 0:
+            return False
+        if fn & 1 or fn == sn:
+            fr = _cp_node(c, fr)
+            sr = _cp_node(c, sr)
+            if not fn & 1:
+                while not fn & 1 and fn != 0:
+                    fn >>= 1
+                    sn >>= 1
+        else:
+            sr = _cp_node(sr, c)
+        fn >>= 1
+        sn >>= 1
+    return sn == 0 and fr == old_root and sr == new_root
+
+
+def _cp_b64(data: bytes) -> str:
+    import base64
+
+    return base64.b64encode(data).decode("ascii")
+
+
+def _cp_unb64(text: str, what: str) -> bytes:
+    import base64
+    import binascii
+
+    try:
+        return base64.b64decode(text.encode("ascii"), validate=True)
+    except (binascii.Error, UnicodeEncodeError) as exc:
+        raise CheckpointError(f"{what} is not base64") from exc
+
+
+def _cp_key_id(name: str, key: bytes) -> bytes:
+    return hashlib.sha256(name.encode("utf-8") + b"\n" + key).digest()[:4]
+
+
+def _cp_parse_vkey(vkey: str) -> tuple[str, bytes, bytes]:
+    """(name, key id, raw Ed25519 public key) from a C2SP verifier key."""
+    parts = vkey.strip().split("+", 2)  # base64 key data may hold "+"
+    if len(parts) != 3 or not parts[0]:
+        raise CheckpointError("verifier key is not name+id+key")
+    name, kid_hex, key_b64 = parts
+    key = _cp_unb64(key_b64, "verifier key")
+    if len(key) != 33 or key[0] != 1:
+        raise CheckpointError("verifier key is not an Ed25519 key")
+    kid = _cp_key_id(name, key)
+    if kid.hex() != kid_hex.lower():
+        raise CheckpointError("verifier key id does not match its key")
+    return name, kid, key[1:]
+
+
+def checkpoint_vkey(name: str, public_key: bytes) -> str:
+    """The C2SP verifier key string for a raw 32-byte Ed25519 public key."""
+    key = b"\x01" + public_key
+    return f"{name}+{_cp_key_id(name, key).hex()}+{_cp_b64(key)}"
+
+
+def _cp_body(origin: str, size: int, root: bytes) -> str:
+    if not origin or "\n" in origin:
+        raise CheckpointError("origin must be one non-empty line")
+    return f"{origin}\n{size}\n{_cp_b64(root)}\n"
+
+
+def read_checkpoint(text: str, vkey: str) -> tuple[str, int, bytes]:
+    """(origin, size, root) from a signed note, or CheckpointError.
+
+    The body must be exactly three lines (origin, size, root) and carry a
+    valid Ed25519 signature from vkey. Unknown signers are ignored, as the
+    signed-note format allows, but one signature must be vkey's.
+    """
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    name, kid, pub = _cp_parse_vkey(vkey)
+    body, sep, sigs = text.partition("\n\n")
+    if not sep or not sigs.endswith("\n"):
+        raise CheckpointError("signed note is malformed")
+    body += "\n"
+    fields = body.split("\n")[:-1]
+    if len(fields) != 3:
+        raise CheckpointError("checkpoint body is not origin, size and root")
+    origin, size_text, root_b64 = fields
+    if not re.fullmatch(r"0|[1-9]\d{0,19}", size_text):
+        raise CheckpointError("checkpoint size is not a number")
+    root = _cp_unb64(root_b64, "checkpoint root")
+    if len(root) != 32:
+        raise CheckpointError("checkpoint root is not 32 bytes")
+    verified = False
+    for line in sigs[:-1].split("\n"):
+        if not line.startswith(_CP_SIG_PREFIX):
+            raise CheckpointError("signed note has a line that is not a signature")
+        signer, _, sig_b64 = line[len(_CP_SIG_PREFIX) :].partition(" ")
+        if signer != name:
+            continue
+        sig = _cp_unb64(sig_b64, "note signature")
+        if len(sig) != 68 or sig[:4] != kid:
+            continue
+        try:
+            Ed25519PublicKey.from_public_bytes(pub).verify(
+                sig[4:], body.encode("utf-8")
+            )
+        except InvalidSignature:
+            raise CheckpointError("checkpoint signature does not verify") from None
+        verified = True
+    if not verified:
+        raise CheckpointError("checkpoint carries no signature from the pinned key")
+    return origin, int(size_text), root
+
+
+def sign_checkpoint(origin: str, size: int, root: bytes, name: str, private_key) -> str:
+    """A signed note over (origin, size, root). private_key is an Ed25519PrivateKey."""
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    body = _cp_body(origin, size, root)
+    pub = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    kid = _cp_key_id(name, b"\x01" + pub)
+    sig = private_key.sign(body.encode("utf-8"))
+    return f"{body}\n{_CP_SIG_PREFIX}{name} {_cp_b64(kid + sig)}\n"
+
+
+def _cp_latest(folder: str) -> tuple[str, int] | None:
+    """(path, size) of the newest note in folder; None if it holds none."""
+    _owned_folder(folder)
+    best = None
+    for entry in os.listdir(folder):
+        m = _CP_NOTE.match(entry)
+        if m and (best is None or int(m.group(1)) > best[1]):
+            best = (os.path.join(folder, entry), int(m.group(1)))
+    return best
+
+
+def _owned_folder(folder: str) -> None:
+    st = os.lstat(folder)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise CheckpointError("checkpoint folder is a symlink or not a folder")
+    if hasattr(os, "getuid") and st.st_uid != os.getuid():
+        raise CheckpointError("checkpoint folder is owned by another user")
+
+
+def _cp_read_latest(cfg: CheckpointConfig) -> tuple[int, bytes] | None:
+    latest = _cp_latest(cfg.folder)
+    if latest is None:
+        return None
+    path, size = latest
+    try:
+        _owned_regular_file(path, "signed checkpoint")
+    except ValueError as exc:
+        raise CheckpointError(str(exc)) from None
+    with open(path, encoding="utf-8", newline="") as fh:
+        origin, note_size, root = read_checkpoint(fh.read(), cfg.vkey)
+    if origin != cfg.origin:
+        raise CheckpointError("signed checkpoint is for another log")
+    if note_size != size:
+        raise CheckpointError("signed checkpoint size does not match its file name")
+    return size, root
+
+
+def _cp_check(cfg: CheckpointConfig, lines: Sequence[bytes]) -> None:
+    """The log must start with exactly the rows the newest signed checkpoint covers."""
+    try:
+        latest = _cp_read_latest(cfg)
+    except OSError as exc:
+        raise CheckpointError(
+            f"signed checkpoint unreadable, failing closed: {exc!r}"
+        ) from exc
+    if latest is None:
+        raise CheckpointError("no signed checkpoint for this log, failing closed")
+    size, root = latest
+    if size > len(lines):
+        raise CheckpointError(
+            f"audit log has {len(lines)} row(s) but its signed checkpoint covers {size}"
+        )
+    if _cp_root([_cp_leaf(x) for x in lines[:size]]) != root:
+        raise CheckpointError("audit log does not match its signed checkpoint")
+
+
+def _cp_log_lines(log_path: str) -> list[bytes]:
+    if not os.path.exists(log_path):
+        return []
+    with open(log_path, encoding="utf-8") as fh:
+        return [ln.rstrip("\n").encode("utf-8") for ln in fh if ln.rstrip("\n")]
+
+
+def checkpoint_request(
+    log_path: str, cfg: CheckpointConfig, *, first: bool = False
+) -> dict:
+    """What the signer needs to extend the newest signed checkpoint: hashes only.
+
+    The log must still match the newest signed checkpoint. ``first`` asks for
+    the first checkpoint of a log that has none yet.
+    """
+    lines = _cp_log_lines(log_path)
+    latest = _cp_read_latest(cfg)
+    if latest is None:
+        if not first:
+            raise CheckpointError("no signed checkpoint yet; ask for the first one")
+        old_size = 0
+    else:
+        _cp_check(cfg, lines)
+        old_size = latest[0]
+    leaves = [_cp_leaf(x) for x in lines]
+    return {
+        "origin": cfg.origin,
+        "old_size": old_size,
+        "size": len(leaves),
+        "root": _cp_b64(_cp_root(leaves)),
+        "proof": [_cp_b64(h) for h in _cp_consistency_proof(old_size, leaves)],
+    }
+
+
+def sign_extending(
+    prev_note: str | None, request: Mapping, vkey: str, private_key
+) -> str:
+    """The signer's rule (attack A4): sign only a log that extends the last signed one.
+
+    prev_note is the newest note on the signed branch for this origin, or None
+    when there is none yet. The request must name that note's size as its old
+    size and carry a consistency proof from that note's root to the new root.
+    """
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    name, _kid, pub = _cp_parse_vkey(vkey)
+    own = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    if own != pub:
+        raise CheckpointError("signing key does not match the pinned verifier key")
+    try:
+        origin = request["origin"]
+        old_size = request["old_size"]
+        size = request["size"]
+        root = _cp_unb64(request["root"], "requested root")
+        proof = [_cp_unb64(h, "proof hash") for h in request["proof"]]
+    except (KeyError, TypeError) as exc:
+        raise CheckpointError("checkpoint request is malformed") from exc
+    if not all(
+        isinstance(x, int) and not isinstance(x, bool) for x in (old_size, size)
+    ):
+        raise CheckpointError("checkpoint request sizes are not integers")
+    if len(root) != 32 or any(len(h) != 32 for h in proof):
+        raise CheckpointError("checkpoint request hashes are not 32 bytes")
+    if prev_note is None:
+        if old_size != 0:
+            raise CheckpointError(
+                "no signed checkpoint yet, but the request extends one"
+            )
+        prev_root = hashlib.sha256(b"").digest()
+    else:
+        prev_origin, prev_size, prev_root = read_checkpoint(prev_note, vkey)
+        if prev_origin != origin:
+            raise CheckpointError("request is for another log than the signed one")
+        if old_size != prev_size:
+            raise CheckpointError(
+                "request does not extend the newest signed checkpoint"
+            )
+    # BEGIN C4-EXTENDS (refuse a log that does not extend the signed prefix)
+    if not _cp_verify_consistency(old_size, size, prev_root, root, proof):
+        raise CheckpointError(
+            "the log does not extend the last signed checkpoint; refusing to sign"
+        )
+    # END C4-EXTENDS
+    return sign_checkpoint(origin, size, root, name, private_key)
 
 
 _PATH_LIKE_KEYS = frozenset(
@@ -854,10 +1255,14 @@ class Gate:
         halt_path: str | None = None,
         fallback_halt_path: str | None = None,
         anchor_path: str | None = None,
+        checkpoint: CheckpointConfig | None = None,
     ):
         if mode not in (ENFORCE, OBSERVE):
             raise ValueError(f"mode must be '{ENFORCE}' or '{OBSERVE}', got {mode!r}")
         self._policy = policy
+        # With a checkpoint the log must match a note only the CI signer can
+        # make; the folder of notes is guarded like the log's own files.
+        self._checkpoint = checkpoint
         # Absolute paths so a relative HERMES_HOME does not move the marker
         # when the process cwd changes (independent review R2-3).
         self._log_path = os.path.abspath(log_path)
@@ -996,6 +1401,11 @@ class Gate:
         for folder in folders:
             if _is_same_or_ancestor(a, folder):
                 return f"path '{p}' holds the kill switch or decision log folder"
+        if self._checkpoint is not None:
+            cp = self._checkpoint.folder
+            inside = _canon_path(a).startswith(_canon_path(cp).rstrip(os.sep) + os.sep)
+            if inside or _is_same_or_ancestor(a, cp):
+                return f"path '{p}' is or holds the signed checkpoint folder"
         return None
 
     def _kill_switch(
@@ -1098,6 +1508,7 @@ class Gate:
             trace=trace,
             arg_summary=arg_summary,
             anchor_path=self._anchor_path,
+            checkpoint=self._checkpoint,
         )
 
 
@@ -1187,6 +1598,7 @@ def record_decision(
     trace: Mapping[str, str] | None = None,
     arg_summary: Mapping | None = None,
     anchor_path: str | None = None,
+    checkpoint: CheckpointConfig | None = None,
 ) -> None:
     """Write one durable decision row with parent link, witness, and anchor update.
 
@@ -1209,7 +1621,7 @@ def record_decision(
         with _audit_lock(log_path):
             # F-3: verify and append under one lock so two processes cannot
             # both parent the same head.
-            head, count = _verify_log(log_path, anchor_path)
+            head, count = _verify_log(log_path, anchor_path, checkpoint)
             record["parent"] = head
             checked = checked_log_record(record)
             body = json.dumps(checked, sort_keys=True)
@@ -1256,13 +1668,76 @@ def _main(argv: Sequence[str] | None = None) -> int:
     )
     re_cmd.add_argument("--log", required=True, help="decision log path")
     re_cmd.add_argument("--anchor", help="anchor path, when not beside the log")
+    for name, text in (
+        (
+            "checkpoint-request",
+            "print the hashes-only request to extend the signed checkpoint",
+        ),
+        ("checkpoint-verify", "check the log against the newest signed checkpoint"),
+    ):
+        c = sub.add_parser(name, help=text)
+        c.add_argument("--log", required=True, help="decision log path")
+        c.add_argument("--folder", required=True, help="folder of signed notes")
+        c.add_argument("--vkey", required=True, help="C2SP verifier key")
+        c.add_argument("--origin", required=True, help="the log's origin line")
+        if name == "checkpoint-request":
+            c.add_argument("--first", action="store_true", help="first checkpoint")
+    s = sub.add_parser(
+        "checkpoint-sign",
+        help="CI only: sign a request that extends the last signed note; "
+        "the key comes from CG_CHECKPOINT_SIGNING_KEY and is never printed",
+    )
+    s.add_argument("--prev", required=True, help="newest signed note, or 'none'")
+    s.add_argument("--request", required=True, help="request JSON file")
+    s.add_argument("--vkey", required=True, help="C2SP verifier key")
     args = parser.parse_args(argv)
+    if args.command.startswith("checkpoint-"):
+        return _checkpoint_command(args)
     retired = reanchor_audit_log(args.log, anchor_path=args.anchor)
     if retired:
         print("retired: " + ", ".join(retired))
     else:
         print("nothing to retire")
     return 0
+
+
+def _checkpoint_command(args) -> int:
+    """Run one checkpoint command; any failure prints one line and exits 1."""
+    try:
+        if args.command == "checkpoint-sign":
+            import base64
+
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,
+            )
+
+            seed = os.environ.get("CG_CHECKPOINT_SIGNING_KEY", "")
+            if not seed:
+                raise CheckpointError("CG_CHECKPOINT_SIGNING_KEY is not set")
+            key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(seed))
+            prev = None
+            if args.prev != "none":
+                with open(args.prev, encoding="utf-8", newline="") as fh:
+                    prev = fh.read()
+            with open(args.request, encoding="utf-8") as fh:
+                request = json.load(fh)
+            note = sign_extending(prev, request, args.vkey, key)
+            # UTF-8 bytes on every platform: the signature line starts with
+            # an em dash, which a Windows console code page would rewrite.
+            sys.stdout.buffer.write(note.encode("utf-8"))
+            sys.stdout.flush()
+            return 0
+        cfg = CheckpointConfig(args.folder, args.vkey, args.origin)
+        if args.command == "checkpoint-request":
+            req = checkpoint_request(args.log, cfg, first=args.first)
+            print(json.dumps(req, sort_keys=True))
+            return 0
+        _cp_check(cfg, _cp_log_lines(args.log))
+        print("checkpoint: the log matches its newest signed checkpoint")
+        return 0
+    except (CheckpointError, OSError, ValueError, KeyError) as exc:
+        print(f"checkpoint: BLOCKED, {exc}. Fix: sync the signed notes or re-anchor.")
+        return 1
 
 
 if __name__ == "__main__":
