@@ -3,6 +3,6 @@
 # imports cryptography to check the note's Ed25519 signature.
 PyYAML>=6.0
 cryptography>=50.0
-hypothesis>=6.168
+hypothesis>=6.169.0
 pytest>=8.0
 pytest-xdist>=3.8
