@@ -967,8 +967,10 @@ def test_every_directory_the_guard_skips_is_one_pytest_skips() -> None:
 # --- historical gitleaks fingerprints ------------------------------------------
 # Commit 14b3be1 stored a pin digest under the job key "secrets", which the
 # generic-api-key rule reads as a credential. Later commits left user-home
-# paths in history. The current tree has neither shape, and history is not
-# rewritten, so exactly these fingerprints are ignored and nothing else.
+# paths in history. The current tree still has four home-path matches, all
+# the placeholder name agent. History is not rewritten, so exactly these
+# fingerprints are ignored and nothing else. An inline gitleaks:allow
+# comment is not caught.
 # The set is the schedule scan on a979de5, run 39285947927, job 118171856090.
 
 OLD_PIN_FINDING = "14b3be176f09833ea0da0421bf7d5cf15a6095c1:.github/floor-pins.json:generic-api-key:31"

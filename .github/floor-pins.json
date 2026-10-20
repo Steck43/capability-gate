@@ -42,7 +42,7 @@
     },
     {
       "path": ".gitleaksignore",
-      "sha256": "4a990ffbfb01d7670c86a6900e9940c7b14f9eb8874ab1657e10ec3a52ee0817"
+      "sha256": "0563c34288b375b449d0bd7add123ddd1e57d4cd43e36982cebad1a249fc05b9"
     },
     {
       "path": ".pre-commit-config.yaml",
@@ -90,7 +90,7 @@
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "5209490b1b9ea6ffefcabc4ad401ecc55ddfefbcbe363e3efb561afa93bc8f4d"
+      "sha256": "873193918e2ebe3b19746760cfdcddce12e278148f66026d8b09396a5b91f163"
     },
     {
       "path": "tests/test_kat_lint.py",

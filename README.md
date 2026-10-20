@@ -1,18 +1,18 @@
 # capability-gate
 
-A deny-by-default gate that decides allow or deny for every AI agent tool call before the tool runs, and writes that decision to a hash-chained log before the call proceeds.
+A deny-by-default gate that decides allow or deny for a tool call that reaches a host hook, before that call runs, and writes that decision to a hash-chained log when the write succeeds.
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22018052.svg)](https://doi.org/10.5281/zenodo.22018052) (concept DOI for the software record, resolves to the latest release)
 
 ## The threat it stops
 
-An agent with file and shell tools can be steered by injected text, a poisoned tool, or its own mistake into reading secrets, writing outside its task, or reaching tools nobody granted it. capability-gate puts a policy decision in front of each call: no grant, no call. When the gate itself breaks (bad payload, unreadable policy, tampered log, a kill switch it cannot read), the answer is deny.
+An agent with file and shell tools can be steered by injected text, a poisoned tool, or its own mistake into reading secrets, writing outside its task, or reaching tools nobody granted it. capability-gate puts a policy decision in front of a call that reaches a host hook: no grant, no call. In enforce, a bad payload, an unreadable policy, a tampered log, or a kill switch the gate cannot read is a deny. Observe mode records the decision and blocks nothing.
 
 ## How it works
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/capability-gate-dark.svg">
-  <img alt="capability-gate: agent tool call goes through a host hook to Gate.evaluate(), is written to a hash-chained log, then allowed or blocked" src="docs/diagrams/capability-gate-light.svg" width="100%">
+  <img alt="capability-gate: a tool call that reaches a host hook goes to Gate.evaluate(), then to the hash-chained log, then allow or block" src="docs/diagrams/capability-gate-light.svg" width="100%">
 </picture>
 
 <details>
@@ -33,42 +33,44 @@ Traces for these figures are in `docs/diagrams/TRACE.md`.
 
 - **Policy:** a YAML allowlist of skills, tools and path globs. Anything not granted is denied. Paths are resolved before matching, so `notes/../config.yaml` is judged where it lands.
 - **Two modes:** observe decides and logs exactly as enforce would but blocks nothing; enforce acts. `report.py` reads the log and lists the grant gap (tools and paths used but not granted), so the enforce allowlist comes from real behavior.
-- **Log check after the decision:** `Gate.evaluate()` makes the decision, then `record_decision()` checks the chain, the witness, and the anchor and appends the row under one lock before the gate returns. A mismatch denies. Each row carries the hash of the row before it.
+- **Log check after the decision:** `Gate.evaluate()` makes the decision, then `record_decision()` checks the chain, the witness, and the anchor and appends the row under one lock before the gate returns. A mismatch is a deny when the write of that deny succeeds. A tamper or a failed write in enforce re-raises, writes no row, and the hook blocks. Observe mode blocks nothing on a normal decision. Each row carries the hash of the row before it.
+- **PostToolUse rewrite check:** `adapters/claude_code_hook.py --post` flags a call whose input changed after the check. On PostToolUse the call has already run, so the check detects the rewrite and does not prevent it.
 - **Ask is a block for now:** the policy can return `ask` (reserved for a later human-approval stage). Both hooks turn `ask` into a block today.
 - **Claude Code adapter:** `adapters/claude_code_hook.py` maps each Claude Code tool to the argument that names its file. A tool missing from that map, including any MCP tool, is denied even when the allowlist grants it.
 
 ## Proof
 
-| Claim | Where it is proven |
-|---|---|
-| No grant, no call (deny by default) | `test_capability_gate.py`, `tests/test_gate_boundary.py`, `tests/test_cases_table.py` |
-| Tamper on the log fails closed (rewrite, truncation, deletion) | `capability_gate.py` `_verify_log`; `tests/test_witness_tamper.py`, `tests/test_issue32_witness.py` |
-| Signed checkpoints (RFC 9162 Merkle root, Ed25519 signed note, consistency proof) | `capability_gate.py` checkpoint section and `_cp_check`; `tests/test_c4_checkpoint.py` (22 tests, A1 to A4 attacks, plus strip tests that show the attacks pass when the check is removed) |
-| Kill switch beats every grant; an unreadable switch denies | `tests/test_kill_switch.py`, `tests/test_halt_marker.py` |
-| A read-only log folder denies (POSIX, non-root) | `tests/test_cc_adapter.py::test_readonly_log_folder_blocks_or_throw_succeeds` |
-| `ask` is enforced as a block | `test_adapter.py::test_ask_enforce_blocks` |
-| MCP and unlisted tools denied even when granted | `tests/test_cc_adapter.py::test_tool_without_path_schema_denied_even_when_granted` |
-| Path checks hold under generated input | `tests/test_path_properties.py` (8 Hypothesis properties) |
-| Known-answer tests must actually call the gate | `scripts/kat_lint.py`, `scripts/kat_swap.py`, `tests/test_kat_lint.py`, `tests/test_swap_harness.py` |
-| CI guardrails are hash-pinned | `scripts/floor_guard.py`, `.github/floor-pins.json` |
+| Claim | Grade | Where it is proven |
+|---|---|---|
+| No grant, no call, for a call the hook receives | wired into a hook | `tests/test_hook_behavior.py`; decision tests `test_capability_gate.py`, `tests/test_gate_boundary.py`, `tests/test_cases_table.py` |
+| Tamper or failed write in enforce re-raises, writes no row, and the hook blocks | built and tested | `capability_gate.py` `record_decision` and `_verify_log`; `tests/test_witness_tamper.py`, `tests/test_issue32_witness.py`; hook block `tests/test_hook_behavior.py` |
+| Signed checkpoints (RFC 9162 Merkle root, Ed25519 signed note, consistency proof) | built and tested | `capability_gate.py` checkpoint section and `_cp_check`; `tests/test_c4_checkpoint.py` (22 tests, A1 to A4 attacks, plus strip tests that show the attacks pass when the check is removed). Neither hook passes a checkpoint |
+| Kill switch denies a granted file call while the marker is present, and an unreadable switch denies. Observe mode blocks nothing. A granted `terminal` or `execute_code` call can delete the marker: `terminal` is checked on `workdir` only, and `execute_code` has no path | built and tested | `tests/test_kill_switch.py`, `tests/test_halt_marker.py`; observe passthrough `__init__.py`; schemas `__init__.py` (`execute_code` paths empty, `terminal` paths `workdir`) |
+| A read-only log folder denies (POSIX, non-root) | built and tested | `tests/test_cc_adapter.py::test_readonly_log_folder_blocks_or_throw_succeeds` |
+| `ask` is a block in both hooks | wired into a hook | `test_adapter.py::test_ask_enforce_blocks`; `__init__.py` and `adapters/claude_code_hook.py` |
+| MCP and unlisted tools denied even when granted | wired into a hook | `tests/test_cc_adapter.py::test_tool_without_path_schema_denied_even_when_granted` |
+| Path checks hold under generated input | built and tested | `tests/test_path_properties.py` (8 Hypothesis properties) |
+| Known-answer tests must actually call the gate | enforced in CI | `scripts/kat_lint.py` in the floor workflow; `tests/test_kat_lint.py`. `scripts/kat_swap.py` is a separate advisory job |
+| Hash-pinned guard files | built and tested | `scripts/floor_guard.py`, `.github/floor-pins.json`. The pin check is advisory: it is not a required check on main |
 
 ## Measured results
 
-The Linux suite figure is from commit `a979de5` (main, 2026-10-18) and was not rerun on Linux this session. The Windows figure is this branch, Python 3.12, siblings at the CI pins.
+The Linux suite figure is from the run dated 2026-10-19 on commit `a979de5` and was not rerun on Linux this session. The Windows figure is this branch, Python 3.12, siblings at the CI pins.
 
 | Measure | Result |
 |---|---|
-| Full test suite (Python 3.12, sibling repos at the CI pins) | Linux, 2026-10-19, not rerun this session: 2,287 passed, 26 skipped, 10 xfailed. Windows rerun this session: 2,285 passed, 17 skipped, 10 xfailed; the rest are a symlink copy error on `harness/s1-in-grant/s1-link` inside the KAT swap harness |
-| Stage-1 adversarial lab (`harness/lab_insufficiency_harness.py`) | 19 cases: 8 of 15 deny-expected caught, 7 false allows, 4 correct allows, 0 false denies |
+| Full test suite (Python 3.12, sibling repos at the CI pins) | Linux, 2026-10-19, not rerun this session: 2,287 passed, 26 skipped, 10 xfailed. Windows rerun this session: 2,285 passed, 17 skipped, 10 xfailed, 9 errors and 1 failure. The 9 errors and the failure are a symlink copy of `harness/s1-in-grant/s1-link` inside the KAT swap harness |
+| Stage-1 adversarial lab (`harness/lab_insufficiency_harness.py`) | 19 cases: 8 of 15 deny-expected caught, 7 false allows, 4 correct allows, 0 false denies. The lab calls `evaluate` with named skills. The live Hermes hook passes no skill name, so an unlabeled call is judged as `UNLABELED` |
 | Floor guard against its own pins | 13 jobs, 25 guard files, 0 violations |
 
 The 10 xfailed tests are known gaps kept as strict expected failures (`xfail_strict = true` in `pytest.ini`), so a gap that quietly closes turns the suite red until someone records it.
 
 ## Known limits
 
-- **The lab reports its misses.** 7 of the 15 deny-expected cases are allowed. They are single-call attacks that stay inside a granted tool and path (for example a secret read through an allowed reader, or a payload hidden in an allowed egress tool's arguments). A per-call allowlist cannot see intent; that is the job of a later stage.
+- **The lab reports its misses.** 7 of the 15 deny-expected cases are allowed. They are single-call attacks that stay inside a granted tool and path (for example a secret read through an allowed reader, or a payload hidden in an allowed egress tool's arguments). A per-call allowlist cannot see intent; that is the job of a later stage. The lab runs on named skills. The live Hermes hook passes no skill name (`__init__.py` resolves a missing skill to `UNLABELED`).
+- **Coverage is per hook.** There is no decision when no hook is installed, when the hook is disabled or its settings are invalid, or when the hook fails to start or times out before the gate runs. Files Claude Code reads on its own are outside the hook. Hermes paths outside `pre_tool_call` are outside the hook. The PostToolUse rewrite check detects a changed input after the call; it does not prevent the rewrite.
 - **Same OS user.** An attacker running as the same OS user as the agent can rewrite the log, the witness and the anchor together, and capability-gate does not detect it. Signed checkpoints close this for rows a checkpoint covers, but neither shipped hook passes a checkpoint yet, and no CI job in this repo signs checkpoints yet (the `checkpoint-sign` command exists). Treat checkpoints as built and tested, not live.
-- **Floor guard is advisory.** On pull requests the guard script and pins load from the base branch, but the job definition comes from the PR's own `floor.yml`, and the floor guard and KAT lint are not required checks on main. A PR could weaken them. Making both required is a pending repository setting.
+- **Floor guard is advisory.** On pull requests the guard script and pins load from the base branch, but the job definition comes from the PR's own `floor.yml`. The floor guard, the KAT lint, and the names and personal-path scan are not required checks on main. A PR could weaken them. Making them required is a pending repository setting.
 - **Pin changes show red on main.** When a merge regenerates the pins (as `a979de5` did for the CI lock), the push run checks the new tree against the parent's pins and reports one violation. The tree passes against its own pins.
 - **Read race.** `open_authorized_read` binds an authorized read to the opened file, but the host's own read tool does not call it yet.
 - **Not a reference monitor.** Mediation covers the calls that reach the hook while the plugin is loaded. It does not cover the agent's whole lifetime.

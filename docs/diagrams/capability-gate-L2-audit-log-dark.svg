@@ -93,5 +93,5 @@
 <text x="334.3" y="826.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">not wired or opt-in</text>
 <path d="M476.1,821.5 L504.1,821.5" fill="none" stroke="#768390" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="2 4" marker-end="url(#m768390)"/>
 <text x="512.1" y="826.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">reads / writes</text>
-<text x="932.0" y="826.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#768390" text-anchor="end">capability-gate @ a979de5 · trace: EMBED.md</text>
+<text x="932.0" y="826.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#768390" text-anchor="end">capability-gate @ a979de5 · trace: docs/diagrams/TRACE.md</text>
 </svg>
