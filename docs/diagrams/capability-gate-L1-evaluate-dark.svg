@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1261" viewBox="0 0 960 1261" role="img" aria-labelledby="t-capability-gate-L1">
+<title id="t-capability-gate-L1">capability-gate Level 1: inside Gate.evaluate()</title>
+<defs><marker id="m3d444d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0.8 L9.5,5 L0,9.2 z" fill="#3d444d"/></marker><marker id="m3d444ds" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M10,0.8 L0.5,5 L10,9.2 z" fill="#3d444d"/></marker><marker id="m3fb950" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0.8 L9.5,5 L0,9.2 z" fill="#3fb950"/></marker><marker id="m3fb950s" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M10,0.8 L0.5,5 L10,9.2 z" fill="#3fb950"/></marker><marker id="m768390" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0.8 L9.5,5 L0,9.2 z" fill="#768390"/></marker><marker id="m768390s" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M10,0.8 L0.5,5 L10,9.2 z" fill="#768390"/></marker><marker id="m9198a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0.8 L9.5,5 L0,9.2 z" fill="#9198a1"/></marker><marker id="m9198a1s" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M10,0.8 L0.5,5 L10,9.2 z" fill="#9198a1"/></marker><marker id="mf85149" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0.8 L9.5,5 L0,9.2 z" fill="#f85149"/></marker><marker id="mf85149s" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M10,0.8 L0.5,5 L10,9.2 z" fill="#f85149"/></marker></defs>
+<rect x="0.5" y="0.5" width="959" height="1260" rx="14" fill="#0d1117" stroke="#3d444d"/>
+<rect x="38" y="192" width="496" height="206" rx="14" fill="#1c2330" stroke="#4493f8" stroke-width="1.4" fill-opacity="0.55"/>
+<rect x="52" y="182" width="119.3828125" height="20" rx="4" fill="#0d1117" stroke="#0d1117" stroke-width="0"/>
+<text x="59.0" y="196.5" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12.5" fill="#4493f8" font-weight="600">_kill_switch()</text>
+<rect x="38" y="498" width="496" height="455" rx="14" fill="#1c2330" stroke="#4493f8" stroke-width="1.4" fill-opacity="0.55"/>
+<rect x="52" y="488" width="81.74609375" height="20" rx="4" fill="#0d1117" stroke="#0d1117" stroke-width="0"/>
+<text x="59.0" y="502.5" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12.5" fill="#4493f8" font-weight="600">_decide()</text>
+<text x="28.0" y="44.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="25" fill="#e6edf3" font-weight="600">Gate.evaluate()</text>
+<rect x="262.9140625" y="25" width="69.515625" height="21" rx="10.5" fill="#4493f8" stroke="#4493f8" stroke-width="1"/>
+<text x="297.7" y="39.8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12" fill="#0d1117" font-weight="600" text-anchor="middle">LEVEL 1</text>
+<text x="28.0" y="70.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="15" fill="#9198a1">capability_gate.py · checks run top to bottom; the first failure denies</text>
+<text x="932.0" y="44.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="13.5" text-anchor="end" xml:space="preserve"><tspan fill="#9198a1">zooms into  </tspan><tspan fill="#4493f8" font-weight="600">Gate.evaluate() · Level 0</tspan></text>
+<text x="28.0" y="96.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="13.5" fill="#9198a1">A failed check exits right as DENY. Denials are written to the log like any other decision.</text>
+<rect x="52" y="128" width="468" height="54" rx="10" fill="#0d1117" stroke="#3d444d" stroke-width="1.25"/>
+<text x="286.0" y="160.7" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="13.5" text-anchor="middle" xml:space="preserve"><tspan fill="#e6edf3" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-weight="600">evaluate(</tspan><tspan fill="#e6edf3" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace">skill, tool, paths, refuse=, base_dir=</tspan><tspan fill="#e6edf3" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-weight="600">)</tspan></text>
+<path d="M286.0,182.0 L286.0,208.0" fill="none" stroke="#9198a1" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m9198a1)"/>
+<rect x="52" y="208" width="468" height="76" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1.25"/>
+<text x="68.0" y="232.5" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="14" fill="#e6edf3" font-weight="600">_halt_state()</text>
+<text x="68.0" y="253.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">halt marker present, or its state unreadable</text>
+<text x="68.0" y="271.4" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">log folder removed or replaced; no writable halt spot</text>
+<rect x="596" y="219.0" width="340" height="54" rx="10" fill="#2c1517" stroke="#f85149" stroke-width="1.8"/>
+<text x="610.0" y="242.5" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12" fill="#9198a1">kill switch thrown: … a human removes it</text>
+<text x="610.0" y="259.6" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12" fill="#9198a1">… failing closed</text>
+<path d="M520.0,246.0 L596.0,246.0" fill="none" stroke="#f85149" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#mf85149)"/>
+<text x="558.0" y="239.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#f85149" font-weight="600" text-anchor="middle">DENY</text>
+<path d="M286.0,284.0 L286.0,310.0" fill="none" stroke="#9198a1" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m9198a1)"/>
+<rect x="52" y="310" width="468" height="76" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1.25"/>
+<text x="68.0" y="334.5" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="14" fill="#e6edf3" font-weight="600">_guarded_name()</text>
+<text x="68.0" y="355.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">a tool path names the switch, the log, its</text>
+<text x="68.0" y="373.4" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">witness or anchor, or the checkpoint folder</text>
+<rect x="596" y="321.0" width="340" height="54" rx="10" fill="#2c1517" stroke="#f85149" stroke-width="1.8"/>
+<text x="610.0" y="344.5" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12" fill="#9198a1">path '…' is the kill switch marker</text>
+<text x="610.0" y="361.6" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12" fill="#9198a1">path '…' is the audit log anchor</text>
+<path d="M520.0,348.0 L596.0,348.0" fill="none" stroke="#f85149" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#mf85149)"/>
+<text x="558.0" y="341.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#f85149" font-weight="600" text-anchor="middle">DENY</text>
+<path d="M286.0,386.0 L286.0,412.0" fill="none" stroke="#9198a1" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m9198a1)"/>
+<rect x="52" y="412" width="468" height="76" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1.25"/>
+<text x="68.0" y="436.5" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="14" fill="#e6edf3" font-weight="600">refuse=</text>
+<text x="68.0" y="457.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">set by the hook: arguments unreadable, or a</text>
+<text x="68.0" y="475.4" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">write aimed at the gate's own files</text>
+<rect x="596" y="432.0" width="340" height="36" rx="10" fill="#2c1517" stroke="#f85149" stroke-width="1.8"/>
+<text x="610.0" y="455.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12" fill="#9198a1">arguments refused: …</text>
+<path d="M520.0,450.0 L596.0,450.0" fill="none" stroke="#f85149" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#mf85149)"/>
+<text x="558.0" y="443.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#f85149" font-weight="600" text-anchor="middle">DENY</text>
+<path d="M286.0,488.0 L286.0,514.0" fill="none" stroke="#9198a1" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m9198a1)"/>
+<rect x="52" y="514" width="468" height="57" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1.25"/>
+<text x="68.0" y="537.9" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="14" fill="#e6edf3" font-weight="600">_absolute()</text>
+<text x="68.0" y="559.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">relative path with no base folder</text>
+<rect x="596" y="524.5" width="340" height="36" rx="10" fill="#2c1517" stroke="#f85149" stroke-width="1.8"/>
+<text x="610.0" y="547.5" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12" fill="#9198a1">relative path '…' has no base folder</text>
+<path d="M520.0,542.5 L596.0,542.5" fill="none" stroke="#f85149" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#mf85149)"/>
+<text x="558.0" y="535.5" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#f85149" font-weight="600" text-anchor="middle">DENY</text>
+<path d="M286.0,571.0 L286.0,597.0" fill="none" stroke="#9198a1" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m9198a1)"/>
+<rect x="52" y="597" width="468" height="57" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1.25"/>
+<text x="68.0" y="620.9" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="14" fill="#e6edf3" font-weight="600">policy.skills[skill] · rule.tools</text>
+<text x="68.0" y="642.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">skill must be granted; tool must be granted to it</text>
+<rect x="596" y="598.5" width="340" height="54" rx="10" fill="#2c1517" stroke="#f85149" stroke-width="1.8"/>
+<text x="610.0" y="622.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12" fill="#9198a1">skill '…' not in allowlist</text>
+<text x="610.0" y="639.1" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12" fill="#9198a1">tool '…' not granted to '…'</text>
+<path d="M520.0,625.5 L596.0,625.5" fill="none" stroke="#f85149" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#mf85149)"/>
+<text x="558.0" y="618.5" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#f85149" font-weight="600" text-anchor="middle">DENY</text>
+<path d="M286.0,654.0 L286.0,680.0" fill="none" stroke="#9198a1" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m9198a1)"/>
+<rect x="52" y="680" width="468" height="76" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1.25"/>
+<text x="68.0" y="704.5" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="14" fill="#e6edf3" font-weight="600">path hazards</text>
+<text x="68.0" y="725.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" xml:space="preserve"><tspan fill="#9198a1" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace">_canary_secret</tspan><tspan fill="#9198a1">  ·  </tspan><tspan fill="#9198a1" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace">_protected_path</tspan></text>
+<text x="68.0" y="743.4" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" xml:space="preserve"><tspan fill="#9198a1" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace">_shared_hardlink</tspan><tspan fill="#9198a1">  (.env, .aegis, shared inode)</tspan></text>
+<rect x="596" y="691.0" width="340" height="54" rx="10" fill="#2c1517" stroke="#f85149" stroke-width="1.8"/>
+<text x="610.0" y="714.5" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12" fill="#9198a1">path '…' is a canary secret inside a grant</text>
+<text x="610.0" y="731.6" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12" fill="#9198a1">path '…' has multiple hard links</text>
+<path d="M520.0,718.0 L596.0,718.0" fill="none" stroke="#f85149" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#mf85149)"/>
+<text x="558.0" y="711.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#f85149" font-weight="600" text-anchor="middle">DENY</text>
+<path d="M286.0,756.0 L286.0,782.0" fill="none" stroke="#9198a1" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m9198a1)"/>
+<rect x="52" y="782" width="468" height="76" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1.25"/>
+<text x="68.0" y="806.5" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="14" fill="#e6edf3" font-weight="600">_path_allowed() · _tree_escape()</text>
+<text x="68.0" y="827.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">resolved path must match a granted glob;</text>
+<text x="68.0" y="845.4" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">a folder must not reach outside it</text>
+<rect x="596" y="802.0" width="340" height="36" rx="10" fill="#2c1517" stroke="#f85149" stroke-width="1.8"/>
+<text x="610.0" y="825.0" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12" fill="#9198a1">path '…' outside allowlist for '…'</text>
+<path d="M520.0,820.0 L596.0,820.0" fill="none" stroke="#f85149" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#mf85149)"/>
+<text x="558.0" y="813.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#f85149" font-weight="600" text-anchor="middle">DENY</text>
+<path d="M286.0,858.0 L286.0,884.0" fill="none" stroke="#9198a1" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m9198a1)"/>
+<rect x="52" y="884" width="468" height="57" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1.25"/>
+<text x="68.0" y="907.9" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="14" fill="#e6edf3" font-weight="600">policy.require_approval</text>
+<text x="68.0" y="929.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">tool needs a human: verdict is ASK</text>
+<rect x="596" y="890" width="340" height="45" rx="10" fill="#2c1517" stroke="#f85149" stroke-width="1.8"/>
+<text x="610.0" y="917.8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">ASK: both hooks block it today</text>
+<path d="M520.0,912.5 L596.0,912.5" fill="none" stroke="#f85149" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#mf85149)"/>
+<text x="558.0" y="905.5" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#f85149" font-weight="600" text-anchor="middle">ASK</text>
+<path d="M286.0,941.0 L286.0,967.0" fill="none" stroke="#3fb950" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m3fb950)"/>
+<rect x="52" y="967" width="468" height="46" rx="10" fill="#11261a" stroke="#3fb950" stroke-width="1.6"/>
+<text x="286.0" y="994.3" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="14.5" fill="#3fb950" font-weight="600" text-anchor="middle">ALLOW  ·  allowed by policy</text>
+<path d="M286.0,1013.0 L286.0,1047.0" fill="none" stroke="#9198a1" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m9198a1)"/>
+<rect x="52" y="1047" width="468" height="54" rx="10" fill="#0d1117" stroke="#3d444d" stroke-width="1.25"/>
+<text x="286.0" y="1070.4" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" text-anchor="middle" xml:space="preserve"><tspan fill="#e6edf3" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace">replace(decision, enforced = </tspan><tspan fill="#e6edf3" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-weight="600">mode == 'enforce'</tspan><tspan fill="#e6edf3" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace">)</tspan></text>
+<text x="286.0" y="1088.1" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1" text-anchor="middle">observe records the true verdict and acts on nothing</text>
+<path d="M286.0,1101.0 L286.0,1131.0" fill="none" stroke="#9198a1" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m9198a1)"/>
+<rect x="52" y="1131" width="468" height="60" rx="10" fill="#151b23" stroke="#4493f8" stroke-width="2.2"/>
+<text x="286.0" y="1156.4" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="14" fill="#e6edf3" font-weight="600" text-anchor="middle">self._log()  →  record_decision()</text>
+<text x="286.0" y="1177.5" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1" text-anchor="middle">one hash-chained row, fsync, before the hook acts</text>
+<rect x="444.73046875" y="1120" width="67.26953125" height="20.5" rx="10.25" fill="#4493f8" stroke="#4493f8" stroke-width="1"/>
+<text x="478.4" y="1134.4" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#0d1117" font-weight="600" text-anchor="middle">LEVEL 2</text>
+<path d="M766.0,935.0 L766.0,1043.0" fill="none" stroke="#768390" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="2 4" marker-end="url(#m768390)"/>
+<path d="M766.0,1105.0 L766.0,1161.0 L520.0,1161.0" fill="none" stroke="#768390" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="2 4" marker-end="url(#m768390)"/>
+<text x="756.0" y="1153.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12" fill="#9198a1" text-anchor="end">denials are logged too</text>
+<rect x="596" y="1043" width="340" height="62" rx="10" fill="#2c1517" stroke="#f85149" stroke-width="1.8"/>
+<text x="610.0" y="1070.4" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" xml:space="preserve"><tspan fill="#e6edf3" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-weight="600">except Exception</tspan><tspan fill="#f85149" font-weight="600"> → DENY</tspan></text>
+<text x="610.0" y="1088.1" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="12.5" fill="#9198a1">gate error, failing closed: …</text>
+<path d="M28.0,1215.0 L932.0,1215.0" fill="none" stroke="#3d444d" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M28.0,1234.5 L56.0,1234.5" fill="none" stroke="#9198a1" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m9198a1)"/>
+<text x="64.0" y="1239.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">call path</text>
+<path d="M143.9,1234.5 L171.9,1234.5" fill="none" stroke="#f85149" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#mf85149)"/>
+<text x="179.9" y="1239.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">threat stopped</text>
+<path d="M298.3,1234.5 L326.3,1234.5" fill="none" stroke="#3fb950" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#m3fb950)"/>
+<text x="334.3" y="1239.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">allowed</text>
+<path d="M408.4,1234.5 L436.4,1234.5" fill="none" stroke="#768390" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="2 4" marker-end="url(#m768390)"/>
+<text x="444.4" y="1239.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#9198a1">reads / writes</text>
+<text x="932.0" y="1239.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#768390" text-anchor="end">capability-gate @ a979de5 · trace: EMBED.md</text>
+</svg>
