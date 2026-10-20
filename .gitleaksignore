@@ -1,5 +1,33 @@
-# One gitleaks finding is ignored, by fingerprint only (commit:file:rule:line).
+# Historical gitleaks findings, by fingerprint only (commit:file:rule:line).
 # Commit 14b3be1 stored a pin digest under the job key "secrets" in
 # .github/floor-pins.json; the generic-api-key rule read that pair as a credential.
-# Pins now sit under a sha256 field, and history is fixed forward, not rewritten.
+# Pins now sit under a sha256 field.
+# The other lines are the schedule scan on a979de5 (run 39285947927,
+# job 118171856090): home-path rules on commits that are no longer in the tree.
+# History is fixed forward, not rewritten. .gitleaks.toml has no allowlist.
 14b3be176f09833ea0da0421bf7d5cf15a6095c1:.github/floor-pins.json:generic-api-key:31
+2f21c6606841c5cd65fa6f391f43598ee236a7ab:test_report.py:posix-home-path:17
+2f21c6606841c5cd65fa6f391f43598ee236a7ab:test_report.py:posix-home-path:22
+2f21c6606841c5cd65fa6f391f43598ee236a7ab:test_report.py:posix-home-path:44
+5e1c71cd95c90bda353334bb317da5bef96c48f9:CHANGELOG.md:posix-home-path:12
+5e1c71cd95c90bda353334bb317da5bef96c48f9:test_report.py:posix-home-path:15
+5e1c71cd95c90bda353334bb317da5bef96c48f9:test_report.py:posix-home-path:20
+5e1c71cd95c90bda353334bb317da5bef96c48f9:test_report.py:posix-home-path:42
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:3
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:15
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:29
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:55
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:69
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:83
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:97
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:123
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:137
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:151
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:165
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:179
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:193
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:207
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:221
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:235
+6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:249
+713bd4b338c7101be1c252849a13635e5fea787a:test_capability_gate.py:posix-home-path:208

@@ -964,20 +964,54 @@ def test_every_directory_the_guard_skips_is_one_pytest_skips() -> None:
         assert any(fnmatch.fnmatch(name, p) for p in patterns), name
 
 
-# --- the one gitleaks fingerprint (brief 3d) -----------------------------------
+# --- historical gitleaks fingerprints ------------------------------------------
 # Commit 14b3be1 stored a pin digest under the job key "secrets", which the
-# generic-api-key rule reads as a credential. The tree no longer does that, and
-# history is not rewritten, so exactly that finding is ignored and nothing else.
+# generic-api-key rule reads as a credential. Later commits left user-home
+# paths in history. The current tree has neither shape, and history is not
+# rewritten, so exactly these fingerprints are ignored and nothing else.
+# The set is the schedule scan on a979de5, run 39285947927, job 118171856090.
 
 OLD_PIN_FINDING = "14b3be176f09833ea0da0421bf7d5cf15a6095c1:.github/floor-pins.json:generic-api-key:31"
 
+HISTORICAL_FINDINGS = frozenset(
+    {
+        OLD_PIN_FINDING,
+        "2f21c6606841c5cd65fa6f391f43598ee236a7ab:test_report.py:posix-home-path:17",
+        "2f21c6606841c5cd65fa6f391f43598ee236a7ab:test_report.py:posix-home-path:22",
+        "2f21c6606841c5cd65fa6f391f43598ee236a7ab:test_report.py:posix-home-path:44",
+        "5e1c71cd95c90bda353334bb317da5bef96c48f9:CHANGELOG.md:posix-home-path:12",
+        "5e1c71cd95c90bda353334bb317da5bef96c48f9:test_report.py:posix-home-path:15",
+        "5e1c71cd95c90bda353334bb317da5bef96c48f9:test_report.py:posix-home-path:20",
+        "5e1c71cd95c90bda353334bb317da5bef96c48f9:test_report.py:posix-home-path:42",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:3",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:15",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:29",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:55",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:69",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:83",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:97",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:123",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:137",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:151",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:165",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:179",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:193",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:207",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:221",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:235",
+        "6fae37e30d9c4301fcca26758d4979f1109aa545:harness/evidence_receipt.json:windows-user-home-path:249",
+        "713bd4b338c7101be1c252849a13635e5fea787a:test_capability_gate.py:posix-home-path:208",
+    }
+)
 
-def test_gitleaksignore_holds_exactly_the_one_old_pin_finding() -> None:
+
+def test_gitleaksignore_holds_exactly_the_historical_findings() -> None:
     lines = (ROOT / ".gitleaksignore").read_text(encoding="utf-8").splitlines()
     entries = [
         ln.strip() for ln in lines if ln.strip() and not ln.lstrip().startswith("#")
     ]
-    assert entries == [OLD_PIN_FINDING]
+    assert set(entries) == HISTORICAL_FINDINGS
+    assert len(entries) == len(HISTORICAL_FINDINGS)
 
 
 def _has_allowlist(node: object) -> bool:
