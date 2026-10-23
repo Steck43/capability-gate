@@ -1,0 +1,16 @@
+# Record N decisions, then edit, truncate or delete a row in a copy of the log.
+name: S08-receipt-chain-tamper
+control: decision log hash chain
+runner: tamper
+seed: 1308
+actor: {agent_id: synth-agent-08, user_id: synth-user-01}
+traffic:
+  benign: 20
+fault:
+  tamper: [edit, truncate, delete]
+expect:
+  records_written: benign
+  tamper_cases: 3
+  tamper_detected: 3
+  next_append_refused: 3
+  log_unchanged_after_refusal: 3

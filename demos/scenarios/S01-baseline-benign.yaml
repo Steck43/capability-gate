@@ -1,0 +1,16 @@
+# Proves no false alarms: ordinary in-workspace tool calls are all allowed.
+name: S01-baseline-benign
+control: none (false-alarm check)
+runner: policy
+seed: 1301
+actor: {agent_id: synth-agent-01, user_id: synth-user-01}
+traffic:
+  benign: 200
+fault: null
+expect:
+  allow: benign
+  deny: 0
+  ask: 0
+  executed: benign
+  log_rows: benign
+  chain_ok: 1

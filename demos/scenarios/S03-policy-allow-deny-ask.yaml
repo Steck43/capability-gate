@@ -1,0 +1,18 @@
+# A call set built to hit all three outcomes in the declared counts.
+name: S03-policy-allow-deny-ask
+control: policy engine (allow, deny, ask)
+runner: policy
+seed: 1303
+actor: {agent_id: synth-agent-03, user_id: synth-user-02}
+traffic:
+  benign: 60
+  deny: 15
+  ask: 9
+fault: null
+expect:
+  allow: benign
+  deny: deny
+  ask: ask
+  ask_executed: 0
+  ask_pending_human: ask
+  executed: benign
