@@ -26,7 +26,7 @@
     },
     {
       "path": ".github/workflows/floor.yml",
-      "sha256": "df4a9f20bcf69054a6a10e5807f57db89a84aedb21094b901310b671a777fce4"
+      "sha256": "9bfec7cd9e59f00f85a387cdd838901e8e09fc57f8c232a94a2c14e35a7c6cc8"
     },
     {
       "path": ".github/workflows/plugin-bundle.yml",
@@ -66,7 +66,7 @@
     },
     {
       "path": "scripts/floor_guard.py",
-      "sha256": "ab75961fc2e42bf3610a7e7c0be6c247ca1ef8b81980d172084897e04ffec57f"
+      "sha256": "9fe9e836add8065d9ca0c657b97285c21098421f7cc4cb9e11beeb9104ab03dd"
     },
     {
       "path": "scripts/kat_lint.py",
@@ -85,12 +85,16 @@
       "sha256": "552f24eeb3a69f8234bc7a4481fc0f91cecb1b5e0b5b7aa3e5e2172aad0feeaf"
     },
     {
+      "path": "scripts/readme_proof.py",
+      "sha256": "7b13b77722a66a211f085b98154e33574c32cf9a17c84d4a0fcec2c518aa4b7d"
+    },
+    {
       "path": "scripts/run_record_check.py",
       "sha256": "cc0ad5df751256075a3cc98ddc12aff21674af9b607465f23dd02ea124031156"
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "873193918e2ebe3b19746760cfdcddce12e278148f66026d8b09396a5b91f163"
+      "sha256": "9781a194a68692bcdd7de378f100ca81168e7c184ba103f01f6a016c9675aac7"
     },
     {
       "path": "tests/test_kat_lint.py",
@@ -121,6 +125,10 @@
     {
       "job": "craft-voice",
       "sha256": "edc989b73511fc880177f8098ee1855b92b6f0b49de1caec8a3e8a56d6ea8970"
+    },
+    {
+      "job": "demo",
+      "sha256": "df9b75f7bf700594a2381c422ae1df0e563eadc4df5d1f53fe96038924274e23"
     },
     {
       "job": "floor-guard",

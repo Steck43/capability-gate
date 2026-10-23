@@ -17,7 +17,7 @@ Each YAML file has a `traffic:` block (what to generate) and an `expect:` block
 | Scenario | Control |
 |---|---|
 | S01 baseline benign | allowlist, every call logged, chain verifies |
-| S02 risky command | tool grants; risky calls denied with a rule id, none executed |
+| S02 risky command | tool grants; each risky call denied with the rule expected for its kind (tool-not-granted or path-outside-allowlist), none executed |
 | S03 allow / deny / ask | allowlist, path globs, require_approval |
 | S04 kill switch mid run | halt marker; every call after the throw is denied |
 | S08 receipt chain tamper | hash chain, witness; edit, truncate and delete are detected and the next append is refused |
@@ -34,4 +34,11 @@ denied because the shell tool is not granted to the skill, and the rule id says
 so.
 
 Note on S09: the log store outage is simulated with `chmod 000` on the log
-folder, which has no effect when the tests run as root.
+folder, which has no effect when the tests run as root. The expected outage
+counts are computed from the windows declared in the scenario file.
+
+A control that raises, or a chain check that fails, gives a FAIL row with the
+error in the record, not a traceback.
+
+`scripts/readme_proof.py` writes and checks the Proof section of the top-level
+README against `out/summary.json`.

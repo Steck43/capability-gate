@@ -259,8 +259,8 @@ TAMPERS = [
     ),
     (
         "T1 unknown command",
-        (KAT, _step("make test")),
-        "command make is not allowlisted",
+        (KAT, _step("ninja test")),
+        "command ninja is not allowlisted",
         False,
     ),
     # T2: stop-on-error

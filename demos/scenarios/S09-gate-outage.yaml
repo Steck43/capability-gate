@@ -13,8 +13,8 @@ fault:
     - {kind: log_store_down, start: 35, end: 45}
 expect:
   calls: benign
-  calls_during_outage: 22
-  blocked_during_outage: 22
+  calls_during_outage: fault_outage_calls
+  blocked_during_outage: fault_outage_calls
   executed_during_outage: 0
-  allowed_outside_outage: benign - 22
-  decided_after_recovery: benign - 45
+  allowed_outside_outage: benign - fault_outage_calls
+  decided_after_recovery: benign - fault_outage_end
