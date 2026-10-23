@@ -44,3 +44,6 @@ allowlist.yaml.bak-*
 *.jsonl.lock
 *.jsonl.witness
 *.jsonl.anchor
+
+# demo output (make demo-all)
+out/

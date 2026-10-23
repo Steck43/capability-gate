@@ -1,0 +1,18 @@
+# The same seeded traffic in observe (shadow) mode and in enforce mode.
+name: S12-shadow-vs-enforce
+control: gate modes (observe vs enforce)
+runner: shadow
+seed: 1312
+actor: {agent_id: synth-agent-12, user_id: synth-user-01}
+traffic:
+  benign: 100
+  risky: 6
+  deny: 4
+fault: null
+expect:
+  shadow_would_block: risky + deny
+  shadow_executed: benign + risky + deny
+  enforce_blocked: risky + deny
+  enforce_risky_executed: 0
+  flagged_sets_identical: 1
+  same_events_both_runs: 1

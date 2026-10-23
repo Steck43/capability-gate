@@ -1,0 +1,19 @@
+# A long run; the kill switch is thrown before event kill_at.
+name: S04-kill-switch-mid-run
+control: kill switch
+runner: kill
+seed: 1304
+actor: {agent_id: synth-agent-04, user_id: synth-user-01}
+traffic:
+  benign: 300
+fault:
+  kill_at: 137
+expect:
+  calls_before_kill: fault_kill_at
+  allowed_before_kill: fault_kill_at
+  calls_after_kill: benign - fault_kill_at
+  denied_after_kill: benign - fault_kill_at
+  executed_after_kill: 0
+  kill_receipts: 1
+  halt_marker_present: 1
+  chain_ok: 1
