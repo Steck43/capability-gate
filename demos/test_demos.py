@@ -8,6 +8,7 @@ targets must turn it red (one mutation check per scenario).
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import shutil
 import sys
 from pathlib import Path
@@ -151,3 +152,103 @@ def test_mutation_s12_enforce_run_in_observe_goes_red(monkeypatch):
     res = st.run_scenario(_scn("S12-shadow-vs-enforce"))
     assert res["status"] == "FAIL"
     assert res["actual"]["enforce_risky_executed"] > 0
+
+
+# --- assertion strength: each count needs the right cause --------------------
+
+
+def test_s02_wrong_rule_for_a_risky_kind_goes_red(monkeypatch):
+    # Every risky call is still denied, but the grant deny is reported as a
+    # path rule: the rule id count must not accept that.
+    real = st.rule_id
+
+    def relabel(reason):
+        rid = real(reason)
+        return "path-outside-allowlist" if rid == "tool-not-granted" else rid
+
+    monkeypatch.setattr(st, "rule_id", relabel)
+    res = st.run_scenario(_scn("S02-gate-deny-risky-command"))
+    assert res["status"] == "FAIL"
+    assert res["actual"]["risky_denied"] == res["expected"]["risky_denied"]
+    assert res["actual"]["risky_with_rule_id"] < res["expected"]["risky_with_rule_id"]
+
+
+def test_s02_fail_closed_deny_does_not_count_as_the_rule(monkeypatch):
+    monkeypatch.setattr(st, "rule_id", lambda reason: "fail-closed")
+    res = st.run_scenario(_scn("S02-gate-deny-risky-command"))
+    assert res["status"] == "FAIL"
+    assert res["actual"]["risky_with_rule_id"] == 0
+
+
+def _broken_chain(*a, **k):
+    raise RuntimeError("synthetic: audit log hash chain broken")
+
+
+@pytest.mark.parametrize(
+    "stem",
+    ["S01-baseline-benign", "S04-kill-switch-mid-run", "S08-receipt-chain-tamper"],
+)
+def test_broken_chain_is_a_fail_row_not_a_traceback(monkeypatch, stem):
+    monkeypatch.setattr(cg, "verify_hash_chain", _broken_chain)
+    res = st.run_scenario(_scn(stem))
+    assert res["status"] == "FAIL"
+    if "chain_ok" in res["actual"]:
+        assert res["actual"]["chain_ok"] == 0
+
+
+def test_a_runner_that_raises_is_a_fail_row():
+    def boom(scn, sb, seed):
+        raise RuntimeError("synthetic control error")
+
+    res = st.run_scenario(_scn("S01-baseline-benign"), runner_override=boom)
+    assert res["status"] == "FAIL"
+    assert "synthetic control error" in res["detail"]["error"]
+
+
+def test_s09_expected_outage_count_follows_the_windows():
+    scn = _scn("S09-gate-outage")
+    base = st.run_scenario(scn)
+    moved = dict(scn)
+    moved["fault"] = {
+        "outages": [
+            {**w, "end": w["end"] + 2} if w["kind"] == "log_store_down" else w
+            for w in scn["fault"]["outages"]
+        ]
+    }
+    res = st.run_scenario(moved)
+    assert res["status"] == "PASS", _failed(res)
+    grew = (
+        res["expected"]["calls_during_outage"] - base["expected"]["calls_during_outage"]
+    )
+    assert grew == 2
+    assert (
+        res["actual"]["blocked_during_outage"] == res["expected"]["calls_during_outage"]
+    )
+
+
+# --- README Proof check ------------------------------------------------------
+
+
+_spec = importlib.util.spec_from_file_location(
+    "readme_proof", HERE.parent / "scripts" / "readme_proof.py"
+)
+rp = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(rp)
+
+
+def _summary(tmp_path):
+    out = tmp_path / "out"
+    assert st.main(["run", str(HERE / "scenarios"), "--out", str(out)]) == 0
+    return out / "summary.json"
+
+
+def test_readme_proof_check_goes_red_on_a_changed_number(tmp_path, capsys):
+    summary = _summary(tmp_path)
+    readme = tmp_path / "README.md"
+    readme.write_text(f"# x\n\n{rp.START}\n{rp.END}\n", encoding="utf-8")
+    assert rp.main(["write", "--readme", str(readme), "--summary", str(summary)]) == 0
+    assert rp.main(["check", "--readme", str(readme), "--summary", str(summary)]) == 0
+    text = readme.read_text(encoding="utf-8")
+    readme.write_text(text.replace("events=200", "events=201", 1), encoding="utf-8")
+    assert rp.main(["check", "--readme", str(readme), "--summary", str(summary)]) == 1
+    assert "numbers: 201 != 200" in capsys.readouterr().out

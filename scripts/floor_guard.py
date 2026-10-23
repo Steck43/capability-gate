@@ -84,6 +84,7 @@ GUARD_FILES = (
     "scripts/gh_pr.py",
     "scripts/no_ai_trailers.py",
     "scripts/run_record_check.py",
+    "scripts/readme_proof.py",
     "tests/test_floor_config.py",
     # Files the KAT lint exempts from discovery by name or receipts path.
     "tests/test_kat_lint.py",
@@ -139,6 +140,7 @@ ALLOWED_COMMANDS = frozenset(
         "sha256sum",
         "tar",
         "curl",
+        "make",
         "mkdir",
         "true",
         "false",
@@ -292,6 +294,7 @@ PROTECTED_JOBS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "kat-swap": (("tests (KAT answers follow the gate, advisory)",), ()),
     "authorship": (("authorship (no AI trailers)",), ()),
     "tests": (("tests (3.12)",), ()),
+    "demo": (("demo (make demo-all)",), ()),
     "lint": (("lint (ruff)",), ()),
     "craft-voice": (("craft (voice)",), ()),
     "craft-changelog": (("craft (changelog)",), ()),
@@ -339,6 +342,8 @@ _GUARD = (
 )
 _TAR = "tar -C /tmp -xzf /tmp/actionlint.tgz actionlint"
 _ACTIONLINT = "/tmp/actionlint -color"
+_DEMO = 'make demo-all PYTHON="python -I"'
+_PROOF = "python -I scripts/readme_proof.py check"
 JOB_COMMANDS: dict[str, frozenset[str]] = {
     "secrets": frozenset(),
     "leak-denylist": frozenset(
@@ -358,6 +363,7 @@ JOB_COMMANDS: dict[str, frozenset[str]] = {
     "kat-swap": frozenset({f"{_PIP} {LOCK}", "python -I scripts/kat_swap.py"}),
     "authorship": frozenset({_HISTORY, _TRAILERS}),
     "tests": frozenset({f"{_PIP} {LOCK}", "pytest -q -n 4", _RUN_CHECK}),
+    "demo": frozenset({f"{_PIP} {LOCK}", _DEMO, _PROOF}),
     "lint": frozenset({f"{_PIP} {LOCK}", "ruff check .", "ruff format --check ."}),
     "craft-voice": frozenset({_REV.format("CRAFT_BASE"), _CRAFT_RANGE, _VOICE}),
     "craft-changelog": frozenset({_REV.format("CRAFT_BASE"), _CRAFT_RANGE, _CHANGELOG}),
@@ -407,6 +413,7 @@ REQUIRED_COMMANDS: dict[str, tuple[str, ...]] = {
     "kat-swap": ("python -I scripts/kat_swap.py",),
     "authorship": (_HISTORY, _TRAILERS),
     "tests": ("pytest -q -n 4", _RUN_CHECK),
+    "demo": (_DEMO, _PROOF),
     "lint": ("ruff check .", "ruff format --check ."),
     "craft-voice": (_VOICE,),
     "craft-changelog": (_CHANGELOG,),
@@ -510,6 +517,7 @@ PY_SCRIPTS = frozenset(
         "scripts/kat_swap.py",
         "scripts/no_ai_trailers.py",
         "scripts/run_record_check.py",
+        "scripts/readme_proof.py",
         ".floor/craft/empty_range.py",
         ".floor/craft/voice_lint.py",
         ".floor/craft/changelog_gate.py",
@@ -526,6 +534,7 @@ SCRIPT_ARGS: dict[str, frozenset[tuple[str, ...]]] = {
     "scripts/kat_swap.py": frozenset({()}),
     "scripts/no_ai_trailers.py": frozenset({("$RUNNER_TEMP/history.txt",)}),
     "scripts/run_record_check.py": frozenset({("$FLOOR_RUN_RECORD",)}),
+    "scripts/readme_proof.py": frozenset({("check",)}),
     ".floor/craft/empty_range.py": frozenset(
         {("--base", "$CRAFT_BASE", "--head", "$CRAFT_HEAD", "--event", "$EVENT_NAME")}
     ),

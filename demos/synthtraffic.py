@@ -161,6 +161,14 @@ def benign_event(rng: random.Random, sb: Sandbox) -> dict:
 
 
 RISKY_KINDS = ("rm_rf_root", "curl_pipe_sh", "write_outside_workspace", "force_push")
+# The rule the gate must cite for each risky kind. The shell tool is not
+# granted to the demo skill, and the write lands outside every path grant.
+EXPECTED_RULE = {
+    "rm_rf_root": "tool-not-granted",
+    "curl_pipe_sh": "tool-not-granted",
+    "write_outside_workspace": "path-outside-allowlist",
+    "force_push": "tool-not-granted",
+}
 
 
 def risky_event(kind: str, sb: Sandbox) -> dict:
@@ -314,6 +322,7 @@ def decide(gate: cg.Gate, ev: dict) -> dict:
     return {
         "id": ev["id"],
         "class": ev["class"],
+        "kind": ev.get("kind"),
         "tool": ev["tool"],
         "verdict": verdict,
         "rule": rule_id(reason),
@@ -335,6 +344,15 @@ def log_rows(path: Path) -> list[dict]:
         for x in path.read_text(encoding="utf-8").splitlines()
         if x.strip()
     ]
+
+
+def chain_ok(log: Path) -> int:
+    """1 when the gate's own chain check passes, 0 when it raises."""
+    try:
+        cg.verify_hash_chain(str(log))
+    except Exception:
+        return 0
+    return 1
 
 
 @dataclass
@@ -373,14 +391,13 @@ def s_policy(scn, sb, seed) -> Result:
     queue = [r["id"] for r in rows if r["verdict"] == "ask"]
     a["ask_pending_human"] = len(queue)
     a["log_rows"] = len(log_rows(log))
-    cg.verify_hash_chain(str(log))
-    a["chain_ok"] = 1
+    a["chain_ok"] = chain_ok(log)
     a["risky_with_rule_id"] = sum(
         1
         for r in rows
         if r["class"] == "risky"
         and r["verdict"] == "deny"
-        and r["rule"] not in ("other", "allow")
+        and r["rule"] == EXPECTED_RULE[r["kind"]]
     )
     rules = sorted({r["rule"] for r in rows if r["class"] == "risky"})
     return Result(
@@ -417,8 +434,7 @@ def s_kill(scn, sb, seed) -> Result:
         "kill_receipts": sum(1 for x in lr if x.get("verdict") == "thrown"),
         "halt_marker_present": int(os.path.exists(gate.halt_path)),
     }
-    cg.verify_hash_chain(str(log))
-    a["chain_ok"] = 1
+    a["chain_ok"] = chain_ok(log)
     return Result(a, {"events_sha256": digest_events(events, sb)})
 
 
@@ -448,8 +464,8 @@ def s_tamper(scn, sb, seed) -> Result:
     gate = cg.Gate(demo_policy(sb), str(base), mode=cg.ENFORCE)
     for ev in events:
         decide(gate, ev)
-    cg.verify_hash_chain(str(base))
-    n = len(log_rows(base))
+    base_ok = chain_ok(base)
+    n = len(log_rows(base)) if base_ok else 0
     modes = list(scn["fault"]["tamper"])
     detected = refused = unchanged = 0
     per = {}
@@ -665,6 +681,14 @@ def check(scn: dict, actual: dict) -> list[dict]:
         }
     )
     names["events"] = actual.get("_events", 0)
+    outages = (scn.get("fault") or {}).get("outages") or []
+    if outages:
+        # Derived from the declared windows, so moving a window moves the
+        # expected counts with it.
+        calls = range(int(scn["traffic"].get("benign", 0)))
+        inside = {i for i in calls for w in outages if w["start"] <= i < w["end"]}
+        names["fault_outage_calls"] = len(inside)
+        names["fault_outage_end"] = min(max(w["end"] for w in outages), len(calls))
     out = []
     for key, expr in scn["expect"].items():
         want = _eval_expr(expr, names)
@@ -683,10 +707,15 @@ def check(scn: dict, actual: dict) -> list[dict]:
 def run_scenario(scn: dict, seed: int | None = None, runner_override=None) -> dict:
     seed = int(scn["seed"] if seed is None else seed)
     sb = make_sandbox(scn["name"].split("-")[0])
+    events = sum(int(v) for k, v in scn["traffic"].items() if isinstance(v, int))
     try:
         runner = runner_override or RUNNERS[scn["runner"]]
-        res = runner(scn, sb, seed)
-        events = sum(int(v) for k, v in scn["traffic"].items() if isinstance(v, int))
+        try:
+            res = runner(scn, sb, seed)
+        except Exception as exc:
+            # A control that raises gives a FAIL row with the error, not a
+            # traceback that hides the other scenarios.
+            res = Result({}, {"error": f"{type(exc).__name__}: {exc}"})
         res.actual["_events"] = events
         checks = check(scn, res.actual)
     finally:
@@ -814,11 +843,11 @@ NOT_SUPPORTED = [
     },
     {
         "scenario": "S10-phishing-investigation",
-        "reason": "P1.1 phishing workflow does not exist yet",
+        "reason": "phishing investigation workflow does not exist yet",
     },
     {
         "scenario": "S11-alert-triage-burst",
-        "reason": "P1.2 alert triage workflow does not exist yet",
+        "reason": "alert triage workflow does not exist yet",
     },
     {
         "scenario": "S13-token-usage",
@@ -830,7 +859,7 @@ NOT_SUPPORTED = [
     },
     {
         "scenario": "S01 alerts fired == 0",
-        "reason": "no alerting layer at this commit (P3.4 telemetry not built); S01 asserts allow, deny and ask counts",
+        "reason": "no alerting layer at this commit (telemetry not built yet); S01 asserts allow, deny and ask counts",
     },
 ]
 

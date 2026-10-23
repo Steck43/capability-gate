@@ -1,118 +1,142 @@
 # capability-gate
 
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Steck43/capability-gate/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Steck43/capability-gate)
 [![floor](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml/badge.svg)](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22018053.svg)](https://doi.org/10.5281/zenodo.22018053)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Steck43/capability-gate/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Steck43/capability-gate)
 [![License: MIT](https://img.shields.io/github/license/Steck43/capability-gate)](LICENSE)
 
+A deny-by-default gate for agent tool calls. Before a tool runs, the agent's
+runtime asks the gate, and the gate answers allow, deny or ask from a written
+allowlist of tools and paths per skill. The decision is plain Python you can
+read, not a model, and it is written to a hash-chained log before the answer
+goes back.
 
-A deny-by-default capability gate sits on the Hermes `pre_tool_call` hook and answers allow, deny, or ask before a tool runs. An agent thinks in text, and every real consequence is a tool call; in most setups that line is unbroken, because the model decides to read, write, or run, and the runtime obeys. This repository closes that line: the agent does not run the tool, it asks the gate, and the model proposes while the gate disposes.
+## What it is
 
-## Why
+`capability_gate.py` is the decider. The rest of the repo connects it to agent
+runtimes and checks its output.
 
-An agent wired into real systems is a non-human identity with standing access. It holds the tools and paths its task needs, and usually far more, because permissions are granted broad and rarely pulled back. A prompt injection, a poisoned document, or a confused plan then acts with everything that identity can reach, not just what the task required. Most controls watch for that after the fact and alert on it. This one enforces least privilege at the point of action. A call outside what the skill was granted does not run.
+- **Policy.** `load_policy` reads an allowlist (see `allowlist.example.yaml`):
+  for each skill, the tools it may call and the path globs it may touch, plus a
+  `require_approval` list of tools that always get `ask`. An unlisted skill,
+  tool or path is denied. A policy that does not resolve is refused at load.
+- **Decision.** `Gate.evaluate(skill, tool, paths, args=..., trace=...)`
+  returns a `Decision` with a verdict (`allow`, `deny` or `ask`), a reason and
+  whether it was enforced. Any error inside the decision path is a deny.
+- **Modes.** In `enforce` a deny blocks. In `observe` the gate decides and logs
+  the same way and blocks nothing, so an allowlist can be built from real
+  calls before it is switched to enforce.
+- **Kill switch.** `Gate.throw(reason)` writes a marker beside the log and one
+  THROWN row to the chain. Every later call is denied, in this gate and in any
+  other gate on the same log, with no restart. A person clears it by removing
+  the marker; the gate never clears it.
+- **Decision log.** Each row is chained to the one before it by sha256, with a
+  witness of the head and row count and an anchor beside the log.
+  `verify_hash_chain(log)` raises on an edit, a deleted row or a cut tail, and
+  the gate refuses to append to a log that does not verify. A signed checkpoint
+  over the log can be configured (`tests/test_c4_checkpoint.py`).
+- **Adapters.** `__init__.py` and `plugin.yaml` register the gate on the Hermes
+  `pre_tool_call` hook. `adapters/claude_code_hook.py` runs the same decider as
+  a Claude Code `PreToolUse` hook: it exits 2 to block, and every failure
+  inside it, including a missing policy or an unwritable log, also exits 2
+  (see [adapters/CLAUDE-CODE.md](adapters/CLAUDE-CODE.md)).
+- **Report.** `report.py` reads a decision log, after the chain verifies, and
+  lists the tools and paths used but not granted, which is how an observe run
+  turns into an enforce allowlist.
 
-The decision is deterministic code you can read, not the probabilistic model you cannot fully trust, because the model is the thing being guarded against. If the guard were also the model, a clever prompt could talk it into opening the door. A small amount of deterministic code cannot be argued with. Safety becomes a property of what a skill can reach, not of what the model can be talked into.
+## How to run it
 
-## What it does
+From a fresh clone, with Python 3 and PyYAML (`pip install -r requirements-dev.txt`):
 
-The gate sits on the Hermes `pre_tool_call` hook and enforces one file: an allowlist. Each skill may touch only the tools and paths its entry grants. Everything else is denied.
+    make demo-all
 
-- **Deny by default.** An unlisted skill, tool, or path is denied.
-- **Mediation at the hook.** While the plugin is loaded, every call that reaches `pre_tool_call` is checked, and every path that call touches is checked with it. That is completeness on one path, not a reference monitor over the agent's whole lifetime. A plugin that is not loaded mediates nothing, and this gate cannot prove its own presence.
-- **Least privilege.** A skill does only what its entry grants.
-- **Fail closed.** Any error in the decision path is a denial. The Hermes hook framework catches hook errors and lets the agent continue, so it fails open. A gate cannot lean on the thing it guards. It stops itself.
-- **Fail loud.** A policy that cannot resolve, an unset path variable, a malformed grant, is rejected at load, not silently ignored at decision time where the failure would be a security gap.
-- **Log before act.** The decision is flushed to durable storage before it returns, so the record survives a crash mid-action. Every decision, from the first call, is written before the call proceeds.
+That runs every scenario in `demos/scenarios/` against the real gate, prints a
+summary table (scenario, control, events, expected, actual, PASS/FAIL, mode)
+and writes `out/summary.json` plus one record per scenario in `out/runs/`. It
+exits non-zero if any row is FAIL. All traffic is synthetic and generated from
+the seed in each scenario file; nothing reads the network or a real log.
 
-## Rollout
+    make demo-test
 
-Two modes make rollout safe. Observe decides and logs exactly as it would, and blocks nothing. Enforce acts on the decision. The intended rollout is observe first: run observe, read the log, write the grants to match what the agent actually does, adjudicate would-denies, then flip to enforce. `report.py` reads the decision log and surfaces the grant gap, the tools and paths used but not yet granted, so the enforce allowlist is distilled from real behavior instead of guessed. Observe protects nothing by design. Protection is an enforce-mode property.
+runs the same scenarios as pytest assertions, at their own seed and at a
+changed seed, checks that two runs give the same counts, and removes each
+scenario's control once to show the row goes red. See
+[demos/README.md](demos/README.md).
 
-The allowlist is not frozen at the flip. After enforce, grants can keep training from live behavior under the same deny-by-default rule.
+The full test suite:
 
-## Install
-
-    # from your Hermes plugins directory
-    git clone https://github.com/Steck43/capability-gate.git ~/.hermes/plugins/capability-gate
-    cd ~/.hermes/plugins/capability-gate
-    cp allowlist.example.yaml allowlist.yaml   # then edit allowlist.yaml for your skills
-    python -m pytest -q                         # confirm the decider passes
-
-Enable the plugin under `plugins.enabled` in your Hermes `config.yaml`. Start in observe, read `~/.hermes/logs/capability-gate.jsonl`, tune the allowlist, then set the mode to enforce.
-
-The gate reads `config.yaml` and `allowlist.yaml` only when each is a regular file, not a symlink, owned by the user running Hermes, and not writable by group or others (`chmod 600` or `644`). If either fails that check, the gate denies every call until it is fixed. No grant lets a tool write those files, the decision log, or this plugin folder.
-
-### Repairing a refused config
-
-This is a manual step, run by you outside the agent. Replace the symlink or fix the owner and mode, for example `chmod 600 ~/.hermes/config.yaml`, then start a new Hermes session. The gate does not stop a process that already has terminal access as your user from doing the same thing, which is why `terminal` and `execute_code` stay behind approval. Not checked yet: a symlink in a parent folder, a hardlink to the config, and file owner and ACLs on Windows.
-
-## Kill switch
-
-`Gate.throw(reason)` creates a marker beside the decision log, the log path plus `.halt` (live: `~/.hermes/logs/capability-gate.jsonl.halt`), and appends one THROWN row to the hash-chained log. From the next call on, every call is denied and logged, with no restart. A second throw adds no row.
-
-- Every call reads the marker before the allowlist, so a gate that is already running stops on its next call. A marker the gate cannot read, for any reason other than "not there", is a deny.
-- No tool call may name the marker, switch on or off, so a granted write cannot clear it. The same holds for the folder that holds the marker or the log, any folder above it, and the gate's own log, lock, and witness files.
-- A switch that cannot be thrown counts as thrown: if no marker location is writable, every call is denied. `Gate` takes an operator-set `halt_path` outside the agent's grants, with the marker beside the log as the fallback, and `Gate.throw` raises `KillSwitchUnthrowable` when no location takes the marker.
-- Clearing is a manual step outside the agent: remove the marker. The gate never clears it, and the clear is not in the log.
-
-Limits, pinned in `tests/test_kill_switch.py`:
-
-- This is the gate, not the hook. The tests show `Gate.evaluate` denies after a throw. They do not show the live Hermes hook or a Claude Code hook calls the gate, and a plugin that is not loaded stops nothing.
-- Observe mode logs the kill switch deny and blocks nothing (`test_kill_switch_blocks_in_observe`, a strict expected failure). Throw it in enforce.
-- `terminal` and `execute_code` can remove the marker through a command the gate does not read as a path. A running gate whose logs folder was removed or replaced denies every call, but a gate started after that (a new Claude Code hook process, or a Hermes restart) starts a fresh log there. That is one more reason those tools stay behind approval.
-- The hooks do not yet pass an operator-set marker location; both use the marker beside the log.
-- An edit to the THROWN row is caught once a later row chains onto it. The chain does not anchor its last line.
-
-Claude Code on Windows: the same decider runs as a `PreToolUse` hook. Glob patterns that climb, including character-class and nested-brace obfuscations, are denied by a denylist, not a full Glob semantic model. See [adapters/CLAUDE-CODE.md](adapters/CLAUDE-CODE.md).
-
-## Status
-
-Honest about what runs versus what is planned.
-
-- **Working, tested.** Stage 1, the decider: deny-by-default allowlist enforcement over tool and path, fail-closed, fail-loud on unresolved policy, log-before-act, observe and enforce modes. The decision core is runtime-agnostic and covered by tests. CI runs the full suite with the sibling repositories checked out at the pins in `.github/workflows/floor.yml`; locally, `python scripts/run_full_suite.py` sets up the same pins from sibling clones beside this one (Hermes adapter tests skip without Hermes).
-- **Live.** On a Hermes profile this gate is configured in **enforce**. The chain to get there is documented: observe first, then a would-deny review, then adjudication, then the flip, with a named rollback path. The observe study covered the calls the gate saw across a one-month window, which was a small fraction of that agent's total tool traffic in the period, because the plugin was not resident throughout. The allowlist was distilled from what it did see, and it continued to train after the flip. Enforce does not mean a frozen grant set.
-- **Known limits (written up in the repo).** Path matching resolves the real path before it matches, and a request path that needs `~` or `$VAR` expansion is denied. Case `S1`, an in-grant symlink to an off-grant `.ssh`-shaped target, is CAUGHT. A hardlink to an off-grant inode is denied when the named regular file has more than one hard link. C1 provides `open_authorized_read`, which opens once, authorizes the Linux `/proc/self/fd` object, and keeps that descriptor bound while the host reads; the former strict xfail now passes. The pinned Hermes `read_file_tool` does not consume this primitive yet, so the repository does not claim a live host closure. T-ADV-04 runs 100 swaps in CI and exposes `--iterations 10000` for the held full campaign. The CG Stage-1 lab lives in this roof (`harness/lab_insufficiency_harness.py`, `harness/evidence_receipt.json`). `tests/test_harness_tally.py` asserts nineteen cases by id against `capability_gate.py`, counts derived from the harness sets: 15 deny-expected, 8 CAUGHT-NAIVE, 7 FALSE-ALLOW, 4 CORRECT-ALLOW, 0 FALSE-DENY. The seven that get through are not all composition: context-blindness and argument-level intent appear as well. One of the eight CAUGHT denials is an `ask` mapped to Stage-1 block semantics rather than a hard deny. C1 and R1 are `..` catches; they are not S1. Reproduce: [REPRODUCE.md](REPRODUCE.md). The Zenodo record `plugin-v0.1.0` (`10.5281/zenodo.22018053`) predates this kit; the concept DOI `10.5281/zenodo.22018052` resolves to the latest release.
-- **Tamper evidence is partial.** An attacker running as the same OS user as the agent can rewrite the log, the witness and the anchor together, and capability-gate does not detect it. Moving the anchor to another folder does not change this, because the same user can still write the new folder. A gate with a signed checkpoint configured denies that rewrite for every row the checkpoint covers: a CI-held key signs the log's Merkle root, and only for a log that extends the last signed one (`tests/test_c4_checkpoint.py`). Rows after the newest checkpoint, and a gate with no checkpoint configured, keep the limit; neither hook sets one yet. See [SECURITY.md](SECURITY.md).
-- **This repository is one layer.** Sibling work: [aegis-atoms](https://github.com/Steck43/aegis-atoms), [isolation-layer](https://github.com/Steck43/isolation-layer), [owasp-dual-top10-lab](https://github.com/Steck43/owasp-dual-top10-lab). Author: [Landen Stecker](https://github.com/Steck43). This gate does not consume them.
-
-## Four-plane path
-
-This roof is the allowlist baseline of the floor. The atom plane is a sibling roof in the same plane. The box and the judge sit on their own roofs. The ordering is design intent, not a forced invoke from `evaluate`. `always_invoked` stays false.
-
-```mermaid
-flowchart TD
-  CALL["Proposed tool call<br/>identity is the argument, not a fifth plane"] --> FLOOR["Floor: allowlist + atoms"]
-  FLOOR -->|"clean"| ENFORCE["Enforce on author Hermes profile"]
-  FLOOR -->|"rollup cannot settle"| BOX["Box: isolation-layer"]
-  BOX -->|"still contradicts"| JUDGE["Judge: subtract only"]
-  BOX -->|"absorbed"| ENFORCE
-  JUDGE -->|"concur / flag / tighten"| ENFORCE
-  JUDGE -.->|"cannot widen or approve"| ENFORCE
-  JUDGE -->|"low confidence"| HUMAN["Human"]
-  ENFORCE --> OUT["allow / deny / human"]
-  ENFORCE --> AUDIT["Audit: hash-chained, witness and anchor checked"]
-```
-
-![Figure 1. Box between floor and judge](assets/fig1-box-between.svg)
-
-This is a capability gate for one agent, not an operating system. The isolation idea it is built on is the same one that runs underneath every OS: let untrusted programs run on a machine without letting them wreck it or each other. Capability is what the model has. Freedom is what the system permits. Containment is the precondition for scale: more floor, more freedom, less residual risk. Authority only narrows down the tree. Kubernetes is not the scale story.
-
-The Stage-1 table is `Gate.evaluate` on named skills. Hermes sends the live hook no skill, so the hook resolves it as `UNLABELED`, which is denied unless the allowlist grants `UNLABELED` by name (`harness/d15_hermes_faithful.py`). That transfer is NON-TRANSFER; do not read the lab table as "the gate does." S1 is denied by name and by target (`tests/test_s1_distinguish.py`). Resolving the real path narrows S1; it is not the remedy for a swap between the check and the open. Alias ids S2–S5 (hardlink, junction, `/proc/self/root`, bind-mount) are a separate class. S4 (`/proc/self/root`) is denied because it resolves outside the grant; S2 (hardlink) is denied when `st_nlink > 1`.
-
-## Requirements
-
-- The decider (`capability_gate.py`) has zero third-party dependencies. Standard library only, by design, so the decision logic is testable without any runtime.
-- Tooling and tests require the packages in `requirements-dev.txt` (PyYAML for policy loading and reporting, pytest for the suite).
-- The Hermes adapter and its tests require a Hermes install. On a standalone clone those tests skip.
-- Tested on Python 3.12.
-
-To run the tests:
-
-    python3 -m venv .venv && . .venv/bin/activate
     pip install -r requirements-dev.txt
-    pytest -q
+    python3 -m pytest -q
+
+CI runs `make demo-all` on every push to main and every pull request, then
+`scripts/readme_proof.py check`, which fails if any number in the Proof section
+below differs from the `out/summary.json` that run just wrote.
+
+## Proof
+
+Generated by `python3 scripts/readme_proof.py write` from `out/summary.json`
+after `make demo-all`. Each row and each count line names its scenario and
+seed; rerun `make demo-all` to get the same numbers. REAL means the row drives
+the real gate (S09 drives the real Claude Code hook as a subprocess).
+
+<!-- proof:start -->
+| scenario | seed | result | REAL/STUBBED |
+|---|---|---|---|
+| S01-baseline-benign | 1301 | PASS | REAL |
+| S02-gate-deny-risky-command | 1302 | PASS | REAL |
+| S03-policy-allow-deny-ask | 1303 | PASS | REAL |
+| S04-kill-switch-mid-run | 1304 | PASS | REAL |
+| S08-receipt-chain-tamper | 1308 | PASS | REAL |
+| S09-gate-outage | 1309 | PASS | REAL |
+| S12-shadow-vs-enforce | 1312 | PASS | REAL |
+
+Counts from the same run (`actual` in out/summary.json):
+
+- S01-baseline-benign, seed 1301: events=200, allow=200, ask=0, chain_ok=1, deny=0, executed=200, log_rows=200
+- S02-gate-deny-risky-command, seed 1302: events=128, benign_allowed=120, executed=120, risky_denied=8, risky_executed=0, risky_with_rule_id=8
+- S03-policy-allow-deny-ask, seed 1303: events=84, allow=60, ask=9, ask_executed=0, ask_pending_human=9, deny=15, executed=60
+- S04-kill-switch-mid-run, seed 1304: events=300, allowed_before_kill=137, calls_after_kill=163, calls_before_kill=137, chain_ok=1, denied_after_kill=163, executed_after_kill=0, halt_marker_present=1, kill_receipts=1
+- S08-receipt-chain-tamper, seed 1308: events=20, log_unchanged_after_refusal=3, next_append_refused=3, records_written=20, tamper_cases=3, tamper_detected=3
+- S09-gate-outage, seed 1309: events=60, allowed_outside_outage=38, blocked_during_outage=22, calls=60, calls_during_outage=22, decided_after_recovery=15, executed_during_outage=0
+- S12-shadow-vs-enforce, seed 1312: events=110, enforce_blocked=10, enforce_risky_executed=0, flagged_sets_identical=1, same_events_both_runs=1, shadow_executed=110, shadow_would_block=10
+<!-- proof:end -->
+
+## Not shown yet
+
+These are listed in `not_supported` in `out/summary.json` and are not claimed
+here:
+
+- S05 secret in prompt: there is no secret redaction hook. The gate keeps
+  argument keys, paths and byte lengths in its log and drops argument content;
+  it does not redact prompts or count redactions.
+- S06 PII in the audit log: there is no PII redaction on the log write path.
+  Content is left out of the log, not redacted.
+- S10 phishing investigation and S11 alert triage: those workflows do not
+  exist yet.
+- S13 token usage: depends on S10 and S11 replay records, which do not exist
+  yet.
+- A real microVM boot: the sandbox side lives in
+  [isolation-layer](https://github.com/Steck43/isolation-layer), and its demo
+  rows run on a stub VM host today.
+- S08 does not assert the exact broken row: the gate reports a broken chain
+  or a witness mismatch without a row number. S08 asserts detection and that
+  the next append is refused.
+- S01 does not count alerts: there is no alerting layer yet.
+
+## Limits
+
+- An attacker running as the same OS user as the agent can rewrite the log, the witness and the anchor together, and capability-gate does not detect it.
+  A signed checkpoint covers the rows it signs; rows after the newest
+  checkpoint, and a gate with no checkpoint configured, keep this limit. See
+  [SECURITY.md](SECURITY.md).
+- The gate checks tool names and paths. It does not parse shell command text,
+  so tools such as `terminal` belong in `require_approval` or stay ungranted.
+- Hermes passes no skill label to the hook, and Claude Code passes none
+  either; both adapters judge such calls as the skill `UNLABELED`, which the
+  allowlist must grant by name.
+- A plugin that is not loaded mediates nothing, and the gate cannot prove its
+  own presence.
 
 ## License
 
-MIT. See LICENSE.
+MIT. See [LICENSE](LICENSE). Citation metadata is in
+[CITATION.cff](CITATION.cff).
