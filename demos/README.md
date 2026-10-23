@@ -2,13 +2,13 @@
 
 `make demo-all` runs every scenario in `demos/scenarios/` against the real gate
 (`capability_gate.py`, and for S09 the real Claude Code hook as a subprocess),
-prints a summary table and writes `out/summary.json` plus one receipt per
-scenario under `out/receipts/`. `make demo-test` runs the same scenarios as
+prints a summary table and writes `out/summary.json` plus one record per
+scenario under `out/runs/`. `make demo-test` runs the same scenarios as
 pytest assertions, with a changed seed, a determinism check and one mutation
 check per scenario (the control is removed and the scenario must go red).
 
 All traffic is synthetic and seeded (`random.Random(seed)`); the same seed gives
-the same events (`events_sha256` in each receipt). Nothing touches the network.
+the same events (`events_sha256` in each record). Nothing touches the network.
 Paths live in a temp sandbox that is removed after each scenario.
 
 Each YAML file has a `traffic:` block (what to generate) and an `expect:` block

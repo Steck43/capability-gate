@@ -7,6 +7,7 @@ targets must turn it red (one mutation check per scenario).
 
 from __future__ import annotations
 
+import importlib
 import shutil
 import sys
 from pathlib import Path
@@ -16,9 +17,9 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import synthtraffic as st  # noqa: E402
-
-import capability_gate as cg  # noqa: E402
+# Imported by name after the path insert above, so the module-level imports stay at the top.
+st = importlib.import_module("synthtraffic")
+cg = st.cg
 
 FILES = sorted((HERE / "scenarios").glob("*.yaml"))
 IDS = [f.stem for f in FILES]
@@ -64,7 +65,24 @@ def test_changed_seed_changes_events():
 
 
 def _wide_policy(sb):
-    return cg.load_policy({"skills": {st.SKILL: {"tools": ["read_file", "list_dir", "run_tests", "write_file", "deploy", "terminal", "send_email"], "paths": ["/**"]}}})
+    return cg.load_policy(
+        {
+            "skills": {
+                st.SKILL: {
+                    "tools": [
+                        "read_file",
+                        "list_dir",
+                        "run_tests",
+                        "write_file",
+                        "deploy",
+                        "terminal",
+                        "send_email",
+                    ],
+                    "paths": ["/**"],
+                }
+            }
+        }
+    )
 
 
 def test_mutation_s01_no_grants_goes_red(monkeypatch):
@@ -116,7 +134,9 @@ def test_mutation_s09_hook_fails_open_goes_red(tmp_path):
     hook.write_text(mutated, encoding="utf-8")
     shutil.copy2(st.ROOT / "capability_gate.py", tmp_path / "capability_gate.py")
     scn = _scn("S09-gate-outage")
-    res = st.run_scenario(scn, runner_override=lambda s, sb, seed: st.s_outage(s, sb, seed, hook=hook))
+    res = st.run_scenario(
+        scn, runner_override=lambda s, sb, seed: st.s_outage(s, sb, seed, hook=hook)
+    )
     assert res["status"] == "FAIL"
     assert res["actual"]["executed_during_outage"] > 0
 
