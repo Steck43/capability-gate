@@ -20,6 +20,7 @@ import argparse
 import ast
 import hashlib
 import importlib
+import importlib.util
 import json
 import os
 import random
@@ -54,7 +55,8 @@ def load_scenario(path: Path) -> dict:
 
 
 def _eval_expr(expr, names: dict) -> int:
-    """An expect value: an int, or a +/- expression over declared traffic counts."""
+    """An expect value: an int, or a +/- expression over declared traffic counts,
+    where a term may be an int times a parenthesised expression."""
     if isinstance(expr, bool):
         return int(expr)
     if isinstance(expr, int):
@@ -71,6 +73,13 @@ def _eval_expr(expr, names: dict) -> int:
         if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub)):
             a, b = ev(node.left), ev(node.right)
             return a + b if isinstance(node.op, ast.Add) else a - b
+        if (
+            isinstance(node, ast.BinOp)
+            and isinstance(node.op, ast.Mult)
+            and isinstance(node.left, ast.Constant)
+            and isinstance(node.left.value, int)
+        ):
+            return node.left.value * ev(node.right)
         raise ValueError(f"unsupported expect expression: {expr!r}")
 
     return ev(tree)
@@ -659,12 +668,363 @@ def s_outage(scn, sb, seed, hook: Path = HOOK) -> Result:
     )
 
 
+# --- isolate verdicts through the real plugin and the stub box door ----------
+
+# The plugin files a Hermes install carries for the isolate route.
+ISOLATE_PLUGIN_FILES = (
+    "__init__.py",
+    "capability_gate.py",
+    "adapters/isolate_route.py",
+)
+# Markers the stub door's guest reads from the task text (isolation-layer
+# demos/sandbox-demo/src/route.rs), one per isolate traffic class.
+ISOLATE_MARKERS = {
+    "clear": "",
+    "suspect": "SYNTH_MARKER_SUSPECT",
+    "failed": "SYNTH_MARKER_FAILED",
+    "hash_lie": "SYNTH_GUEST_HASH_LIE",
+    "malformed": "SYNTH_GUEST_MALFORMED",
+    "oversize": "SYNTH_GUEST_OVERSIZE",
+    "outage": "",
+    "replay": "SYNTH_REPLAY",
+    "kill": "SYNTH_KILL_DURING",
+}
+# The block message each class must end with, so a count needs the right cause.
+ISOLATE_EXPECT = {
+    "clear": "isolated: advance ",
+    "suspect": "isolate result held ",
+    "failed": "isolate result dropped ",
+    "hash_lie": "isolate result dropped ",
+    "malformed": "isolate result rejected by vestibule: ",
+    "oversize": "isolate result rejected by vestibule: ",
+    "outage": "isolate route unavailable: ",
+    "replay": "isolate receipt rejected: ",
+    "kill": "kill switch thrown during isolate: ",
+}
+_DOOR_CACHE: dict[str, Path] = {}
+
+
+def isolation_layer_root() -> Path:
+    raw = os.environ.get("ISOLATION_LAYER_ROOT", "").strip()
+    root = Path(raw) if raw else ROOT.parent / "isolation-layer"
+    if not (root / "demos" / "sandbox-demo" / "Cargo.toml").is_file():
+        raise RuntimeError(
+            "S14 needs the isolation-layer stub door: set CG_ISOLATE_DOOR to a "
+            "sandbox-demo binary or ISOLATION_LAYER_ROOT to a checkout"
+        )
+    return root.resolve()
+
+
+def build_door(crate: Path | None = None, target: Path | None = None) -> Path:
+    """The sandbox-demo binary: CG_ISOLATE_DOOR, else a cargo build of the crate."""
+    if crate is None:
+        given = os.environ.get("CG_ISOLATE_DOOR", "").strip()
+        if given:
+            return Path(given).resolve()
+        crate = isolation_layer_root() / "demos" / "sandbox-demo"
+    key = str(crate)
+    if key in _DOOR_CACHE:
+        return _DOOR_CACHE[key]
+    if target is None:
+        raw = os.environ.get("CARGO_TARGET_DIR", "").strip()
+        target = Path(raw) if raw else ROOT / ".tmp" / "door-target"
+    subprocess.run(
+        [
+            "cargo",
+            "build",
+            "--quiet",
+            "--locked",
+            "--manifest-path",
+            str(crate / "Cargo.toml"),
+            "--bin",
+            "sandbox-demo",
+        ],
+        env={**os.environ, "CARGO_TARGET_DIR": str(target)},
+        check=True,
+        timeout=600,
+    )
+    _DOOR_CACHE[key] = target / "debug" / "sandbox-demo"
+    return _DOOR_CACHE[key]
+
+
+_DOOR_WRAPPER = """
+import json, os, subprocess, sys
+D = os.path.dirname(os.path.abspath(__file__))
+raw = sys.stdin.buffer.read()
+task = json.loads(raw)
+def add(name, text):
+    with open(os.path.join(D, name), "a", encoding="utf-8") as f:
+        f.write(text.rstrip("\\n") + "\\n")
+add("tasks.jsonl", json.dumps(task, sort_keys=True))
+text = json.dumps(task.get("args"))
+if "SYNTH_REPLAY" in text:
+    # An old advanced receipt, sent back for a new call.
+    with open(os.path.join(D, "advanced.jsonl"), encoding="utf-8") as f:
+        sys.stdout.write(f.read().splitlines()[-1] + "\\n")
+    sys.exit(0)
+p = subprocess.run(
+    [os.path.join(D, "sandbox-demo"), "route", "--state", os.path.join(D, "state")],
+    input=raw, capture_output=True, timeout=60,
+)
+out = p.stdout.decode("utf-8", "replace").strip()
+if p.returncode == 0 and out:
+    add("receipt-log.jsonl", out.splitlines()[-1])
+    if json.loads(out.splitlines()[-1]).get("disposition") == "advance":
+        add("advanced.jsonl", out.splitlines()[-1])
+if "SYNTH_KILL_DURING" in text:
+    # The operator throws the kill switch while the box is working.
+    with open(HALT, "w", encoding="utf-8") as f:
+        f.write("synthetic demo: operator stop during isolate\\n")
+sys.stdout.write(out + "\\n")
+sys.exit(p.returncode)
+"""
+
+
+def _patched(src: str, rel: str, patches: dict | None) -> str:
+    for old, new in (patches or {}).get(rel, ()):
+        if old not in src:
+            raise RuntimeError(f"mutation text not found in {rel}: {old[:60]!r}")
+        src = src.replace(old, new, 1)
+    return src
+
+
+def isolate_events(scn: dict, sb_home: Path, seed: int) -> list[dict]:
+    rng = random.Random(seed)
+    t = scn["traffic"]
+    work = sb_home / "work"
+    files = sorted(p.name for p in work.iterdir())
+    events = [
+        {
+            "class": "benign",
+            "tool": "read_file",
+            "args": {"path": str(work / rng.choice(files))},
+        }
+        for _ in range(int(t["benign"]))
+    ]
+    for cls in (
+        "clear",
+        "suspect",
+        "failed",
+        "hash_lie",
+        "malformed",
+        "oversize",
+        "outage",
+    ):
+        for _ in range(int(t.get(cls, 0))):
+            code = f"print({rng.randrange(10**6)})"
+            mark = ISOLATE_MARKERS[cls]
+            events.append(
+                {
+                    "class": cls,
+                    "tool": "execute_code",
+                    "args": {"code": f"{code} # {mark}" if mark else code},
+                }
+            )
+    rng.shuffle(events)
+    # A replay needs an advanced receipt before it; the kill switch ends the run.
+    for cls in ("replay", "kill"):
+        for _ in range(int(t.get(cls, 0))):
+            events.append(
+                {
+                    "class": cls,
+                    "tool": "execute_code",
+                    "args": {"code": f"print(0) # {ISOLATE_MARKERS[cls]}"},
+                }
+            )
+    for i, ev in enumerate(events):
+        ev["id"] = f"call-{i:04d}"
+    return events
+
+
+def s_isolate(
+    scn, sb, seed, patches: dict | None = None, door: Path | None = None
+) -> Result:
+    door_bin = door or build_door()
+    home = sb.root / "hermes"
+    (home / "logs").mkdir(parents=True)
+    work = home / "work"
+    work.mkdir()
+    for i in range(8):
+        (work / f"note_{i}.txt").write_text(f"synthetic note {i}\n")
+    plugin = sb.root / "plugins" / "capability_gate"
+    (plugin / "adapters").mkdir(parents=True)
+    for rel in ISOLATE_PLUGIN_FILES:
+        src = (ROOT / rel).read_text(encoding="utf-8")
+        (plugin / rel).write_text(_patched(src, rel, patches), encoding="utf-8")
+    (plugin / "allowlist.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "skills": {
+                    "UNLABELED": {
+                        "tools": ["read_file", "execute_code"],
+                        "paths": ["$HERMES_HOME/work/**"],
+                    }
+                },
+                "isolate": ["execute_code"],
+            }
+        )
+    )
+    (home / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "plugins": {
+                    "enabled": ["capability-gate"],
+                    "entries": {"capability-gate": {"mode": "enforce"}},
+                }
+            }
+        )
+    )
+    log = home / "logs" / "capability-gate.jsonl"
+    doordir = sb.root / "door"
+    doordir.mkdir(mode=0o700)
+    (doordir / "state").mkdir()
+    shutil.copy2(door_bin, doordir / "sandbox-demo")
+    wrapper = doordir / "route"
+    wrapper.write_text(
+        f"#!{sys.executable}\nHALT = {cg.halt_marker_path(str(log))!r}\n{_DOOR_WRAPPER}",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o700)
+    route_cfg = {"door": [str(wrapper)], "real": False}
+    (plugin / "isolate_route.yaml").write_text(yaml.safe_dump(route_cfg))
+    events = isolate_events(scn, home, seed)
+
+    saved_home = os.environ.get("HERMES_HOME")
+    os.environ["HERMES_HOME"] = str(home)
+    name = "cg_demo_isolate_" + hashlib.sha256(str(plugin).encode()).hexdigest()[:16]
+    try:
+        spec = importlib.util.spec_from_file_location(
+            name, plugin / "__init__.py", submodule_search_locations=[str(plugin)]
+        )
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        hooks = {}
+
+        class _Ctx:
+            def register_hook(self, hook_name, fn):
+                hooks[hook_name] = fn
+
+        mod.register(_Ctx())
+        pre = hooks["pre_tool_call"]
+        rows = []
+        for ev in events:
+            away = wrapper.with_suffix(".away")
+            if ev["class"] == "outage":
+                wrapper.rename(away)
+            try:
+                res = pre(
+                    ev["tool"], ev["args"], "synth-task-14", tool_call_id=ev["id"]
+                )
+            finally:
+                if away.exists():
+                    away.rename(wrapper)
+            msg = res.get("message", "") if isinstance(res, dict) else ""
+            rows.append(
+                {
+                    "id": ev["id"],
+                    "class": ev["class"],
+                    "executed": res is None,
+                    "message": msg,
+                    "as_expected": msg.startswith(
+                        ISOLATE_EXPECT.get(ev["class"], "\0")
+                    ),
+                }
+            )
+        # A second answer for a ticket the gate already accepted must be refused.
+        router = mod._isolate_route()
+        cfg = router.load_config(route_cfg)
+        advanced = [json.loads(x) for x in _lines(doordir / "advanced.jsonl")]
+        tasks = {
+            t["route_ticket"]: t
+            for t in map(json.loads, _lines(doordir / "tasks.jsonl"))
+        }
+        reuse = 0
+        if advanced and advanced[0]["route_ticket"] in tasks:
+            again = router.verify_receipt(
+                tasks[advanced[0]["route_ticket"]],
+                advanced[0],
+                cfg,
+                router.TicketStore(str(log)),
+            )
+            reuse = int(again.message.startswith("isolate receipt replayed"))
+    finally:
+        sys.modules.pop(name, None)
+        if saved_home is None:
+            os.environ.pop("HERMES_HOME", None)
+        else:
+            os.environ["HERMES_HOME"] = saved_home
+
+    gate_rows = log_rows(log)
+    receipts = [json.loads(x) for x in _lines(doordir / "receipt-log.jsonl")]
+    iso_cls = [c for c in ISOLATE_MARKERS]
+
+    def ok(cls):
+        return sum(
+            1
+            for r in rows
+            if r["class"] == cls and r["as_expected"] and not r["executed"]
+        )
+
+    a = {
+        "isolate": sum(1 for r in gate_rows if r.get("verdict") == "isolate"),
+        "routed": len(_lines(doordir / "tasks.jsonl")),
+        "host_executed_isolate": sum(
+            1 for r in rows if r["class"] in iso_cls and r["executed"]
+        ),
+        "benign_allowed": sum(
+            1 for r in rows if r["class"] == "benign" and r["executed"]
+        ),
+        "advanced": ok("clear"),
+        "held": ok("suspect"),
+        "dropped": ok("failed") + ok("hash_lie"),
+        "vestibule_rejected": ok("malformed") + ok("oversize"),
+        "replay_refused": ok("replay"),
+        "reuse_refused": reuse,
+        "door_down_blocked": ok("outage"),
+        "kill_discarded": ok("kill"),
+        "door_receipts_real": sum(1 for r in receipts if r.get("real") is not False),
+        "door_chain_rows": len(_lines(doordir / "state" / "decision-chain.jsonl")),
+        "chain_ok": chain_ok(log),
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            [
+                {
+                    **e,
+                    "args": {
+                        k: sb.rel(v).replace(str(home), "<home>")
+                        for k, v in e["args"].items()
+                    },
+                }
+                for e in events
+            ],
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    return Result(
+        a,
+        {
+            "events_sha256": digest,
+            "real": False,
+            "rows": rows,
+        },
+    )
+
+
+def _lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return [x for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+
 RUNNERS = {
     "policy": s_policy,
     "kill": s_kill,
     "shadow": s_shadow,
     "tamper": s_tamper,
     "outage": s_outage,
+    "isolate": s_isolate,
 }
 
 
@@ -731,7 +1091,8 @@ def run_scenario(scn: dict, seed: int | None = None, runner_override=None) -> di
         "control": scn["control"],
         "seed": seed,
         "events": events,
-        "real": True,
+        # A runner on a stub says so; the table then shows STUBBED.
+        "real": bool(res.detail.get("real", True)),
         "expected": {c["assert"].split(" == ")[0]: c["expected"] for c in checks},
         "actual": {c["assert"].split(" == ")[0]: c["actual"] for c in checks},
         "checks": checks,
