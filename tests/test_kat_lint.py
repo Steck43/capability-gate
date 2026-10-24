@@ -2626,14 +2626,14 @@ HOLE_ASSERT = {
     "in_every_verdict": (
         _plain(
             "assert d.verdict in "
-            "(Verdict.ALLOW, Verdict.DENY, Verdict.ASK, Verdict.THROWN)"
+            "(Verdict.ALLOW, Verdict.DENY, Verdict.ASK, Verdict.THROWN, Verdict.ISOLATE)"
         ),
         "tautological assert",
     ),
     "in_every_verdict_list": (
         _plain(
             "assert d.verdict in "
-            "[Verdict.THROWN, Verdict.DENY, Verdict.ASK, Verdict.ALLOW]"
+            "[Verdict.THROWN, Verdict.ISOLATE, Verdict.DENY, Verdict.ASK, Verdict.ALLOW]"
         ),
         "tautological assert",
     ),
