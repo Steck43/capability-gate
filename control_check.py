@@ -65,11 +65,17 @@ def _tool_list(value, where: str) -> frozenset[str]:
     return frozenset(value)
 
 
+def _top(mapping, where: str, body: str) -> None:
+    # bool is an int in Python and 1.0 == 1, so compare the type as well.
+    _need(isinstance(mapping, Mapping), f"{where}: must be a mapping")
+    version = mapping.get("version")
+    _need(type(version) is int and version == 1, f"{where}: version must be 1")
+    extra = set(mapping) - {"version", body}
+    _need(not extra, f"{where}: unknown top-level keys {sorted(map(str, extra))}")
+
+
 def load_catalog(mapping: Mapping) -> dict[str, dict]:
-    _need(
-        isinstance(mapping, Mapping) and mapping.get("version") == 1,
-        "catalog: version must be 1",
-    )
+    _top(mapping, "catalog", "controls")
     rows = mapping.get("controls")
     _need(
         isinstance(rows, list) and rows, "catalog: 'controls' must be a non-empty list"
@@ -102,10 +108,7 @@ def load_catalog(mapping: Mapping) -> dict[str, dict]:
 
 
 def load_profile(mapping: Mapping, catalog: Mapping[str, dict]) -> dict[str, Required]:
-    _need(
-        isinstance(mapping, Mapping) and mapping.get("version") == 1,
-        "profile: version must be 1",
-    )
+    _top(mapping, "profile", "requires")
     rows = mapping.get("requires")
     _need(
         isinstance(rows, list) and rows, "profile: 'requires' must be a non-empty list"
@@ -263,7 +266,14 @@ def check(
                     "why": [_weaker(cur, req)],
                 }
             )
-    return {"verdict": verdict, "controls": controls}
+    either = _granted(old) | _granted(new)
+    warnings = [
+        f"{key}: approval_for names {t!r}, which neither policy grants"
+        for key, req in profile.items()
+        for t in sorted(req.obligations.get("approval_for", ()))
+        if t not in either
+    ]
+    return {"verdict": verdict, "controls": controls, "warnings": warnings}
 
 
 def _read(path: str) -> dict:
