@@ -12,6 +12,7 @@ import os
 import re
 import stat
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -476,6 +477,9 @@ def _log_path() -> str:
     return os.path.join(_hermes_home(), "logs", "capability-gate.jsonl")
 
 
+_ROUTE_LOAD_LOCK = threading.Lock()
+
+
 def _isolate_route():
     """Load adapters/isolate_route.py by its path beside this file.
 
@@ -491,21 +495,29 @@ def _isolate_route():
         "capability_gate_isolate_route_"
         + hashlib.sha256(path.encode()).hexdigest()[:16]
     )
+    # The module sits in sys.modules while it runs, so a second thread could
+    # see it half loaded. Only a module marked ready is handed out; the rest
+    # wait on the lock for the load in progress.
     loaded = sys.modules.get(name)
-    if loaded is not None:
+    if loaded is not None and getattr(loaded, "_gate_route_ready", False):
         return loaded
-    _read_trusted(path)  # same ownership and mode rule as the gate's other files
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module  # dataclasses look the module up while it runs
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(name, None)
-        raise
-    return module
+    with _ROUTE_LOAD_LOCK:
+        loaded = sys.modules.get(name)
+        if loaded is not None and getattr(loaded, "_gate_route_ready", False):
+            return loaded
+        _read_trusted(path)  # same ownership and mode rule as the gate's other files
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module  # dataclasses look the module up while it runs
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+        module._gate_route_ready = True
+        return module
 
 
 def _route_config() -> dict | None:
