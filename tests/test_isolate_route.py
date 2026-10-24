@@ -532,13 +532,39 @@ def test_observe_isolate_semantics(tmp_path, monkeypatch):
     assert "route_ticket" not in rows[-1]
 
 
+D5_ALLOWLISTS = {
+    "route_yaml_only": (
+        True,
+        "skills: {'*': {tools: [execute_code], paths: []}}\nbroken: [\n",
+    ),
+    "allowlist_block": (
+        False,
+        (
+            "skills: {'*': {tools: [execute_code], paths: []}}\n"
+            "isolate: [execute_code]\nbroken: [\n"
+        ),
+    ),
+    "allowlist_flow": (
+        False,
+        (
+            '{"isolate": ["execute_code"], '
+            '"skills": {"*": {"tools": ["execute_code"], "paths": 7}}}\n'
+        ),
+    ),
+    "allowlist_bom": (False, "\ufeffisolate: [execute_code]\nskills: 7\n"),
+}
+
+
+@pytest.mark.parametrize("signal", sorted(D5_ALLOWLISTS))
 @pytest.mark.parametrize("mode", ["enforce", "observe"])
-def test_gate_load_failure_with_isolate_configured(tmp_path, monkeypatch, mode):
-    """Class: a gate that fails to load lets an isolate tool run on the host in observe (D5)."""
-    sb = Sandbox(tmp_path, monkeypatch, mode=mode)
-    (sb.plugin / "allowlist.yaml").write_text(
-        "skills: {'*': {tools: [execute_code], paths: []}}\nisolate: [execute_code]\nbroken: [\n"
-    )
+def test_gate_load_failure_with_isolate_configured(tmp_path, monkeypatch, mode, signal):
+    """Class: a gate that fails to load lets an isolate tool run on the host in observe (D5).
+
+    Each signal is set alone, so dropping either half of the detector fails a case.
+    """
+    route, text = D5_ALLOWLISTS[signal]
+    sb = Sandbox(tmp_path, monkeypatch, mode=mode, route=route)
+    (sb.plugin / "allowlist.yaml").write_text(text, encoding="utf-8")
     hook = sb._hook()
     res = hook("execute_code", {"code": "1"}, "t", tool_call_id="c")
     assert _blocked(res)
@@ -556,6 +582,33 @@ def test_gate_load_failure_without_isolate_keeps_observe_passthrough(
     )
     hook = sb._hook()
     assert hook("terminal", {"command": "true"}, "t", tool_call_id="c") is None
+
+
+@pytest.mark.parametrize("mode", ["enforce", "observe"])
+def test_misspelled_isolate_key_blocks(tmp_path, monkeypatch, mode):
+    """Class: a misspelled isolate key loads as no isolate list, so the tool runs on the host (N7)."""
+    policy = _policy()
+    policy["isloate"] = policy.pop("isolate")
+    sb = Sandbox(tmp_path, monkeypatch, mode=mode, policy=policy)
+    msg = _blocked(sb.call())
+    assert "unknown top-level allowlist keys: isloate" in msg, msg
+    assert sb.door_calls() == []
+
+
+def test_unknown_policy_keys_are_refused():
+    """Class: the loader ignores a top-level key it does not know (N7)."""
+    with pytest.raises(
+        cg.PolicyError, match="unknown top-level allowlist keys: isloate"
+    ):
+        cg.load_policy({"skills": {}, "isloate": ["execute_code"]})
+    # Control: the top-level keys the shipped examples use are all known.
+    for rel in (
+        "allowlist.example.yaml",
+        "adapters/claude_code_allowlist.example.yaml",
+    ):
+        keys = set(cg.load_yaml_mapping((ROOT / rel).read_text()))
+        assert keys and keys <= cg.POLICY_KEYS, (rel, keys)
+    cg.load_policy({"version": 1, "skills": {}, "require_approval": [], "isolate": []})
 
 
 # --- RT14, RT17: door path and flood -----------------------------------------
@@ -709,3 +762,56 @@ def test_route_is_the_sole_box_caller():
     for rel in ("__init__.py", "capability_gate.py", "adapters/claude_code_hook.py"):
         text = (ROOT / rel).read_text(encoding="utf-8").lower()
         assert not [w for w in _BOX_WORDS if w in text], rel
+
+
+# --- B2, B3: ticket store across processes, row tickets under threads ---------
+
+_BARRIER = None
+
+
+def _child_init(barrier):
+    global _BARRIER
+    _BARRIER = barrier
+
+
+def _consume_in_child(args):
+    path, log, ticket = args
+    spec = importlib.util.spec_from_file_location("isolate_route_child", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    _BARRIER.wait()
+    return mod.TicketStore(log).consume(ticket)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fork and fcntl")
+def test_ticket_single_use_across_processes(tmp_path):
+    """Class: a ticket is accepted twice when processes race the store, or each keeps its own."""
+    import multiprocessing as mp
+
+    ctx = mp.get_context("fork")
+    n = 16
+    log = str(tmp_path / "capability-gate.jsonl")
+    path = str(ROOT / "adapters" / "isolate_route.py")
+    for _ in range(20):
+        ticket = os.urandom(16).hex()
+        with ctx.Pool(n, initializer=_child_init, initargs=(ctx.Barrier(n),)) as pool:
+            got = pool.map(_consume_in_child, [(path, log, ticket)] * n, chunksize=1)
+        assert sum(got) == 1, got
+
+
+def test_parallel_isolate_rows_keep_their_own_ticket(tmp_path, monkeypatch):
+    """Class: under parallel calls a denial row records another call's route ticket."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    sb = Sandbox(tmp_path, monkeypatch)
+    with ThreadPoolExecutor(8) as ex:
+        list(ex.map(lambda i: sb.call(call_id=f"c{i}"), range(64)))
+    rows = sb.rows()
+    iso = {
+        r["tool_call_id"]: r["route_ticket"] for r in rows if r["verdict"] == "isolate"
+    }
+    deny = {
+        r["tool_call_id"]: r.get("route_ticket") for r in rows if r["verdict"] == "deny"
+    }
+    assert len(iso) == 64 and deny == iso
