@@ -264,6 +264,27 @@ def test_profile_with_weakened_obligations_denies():
     assert dropped == {key: ["obligations weakened"] for key in PROFILE}
 
 
+def test_approval_for_a_tool_no_policy_grants_is_a_warning():
+    typo = _profile(
+        [
+            {
+                "control": "atlas-aml-m0029",
+                "level": "adopted",
+                "obligations": {"approval_for": ["termnal"]},
+            }
+        ]
+    )
+    r = _run(BASE, profile=typo)
+    assert r["verdict"] == "ALLOW"
+    assert r["warnings"] == [
+        "atlas-aml-m0029: approval_for names 'termnal', which neither policy grants"
+    ]
+    assert _run(BASE)["warnings"] == [
+        f"{key}: approval_for names 'execute_code', which neither policy grants"
+        for key in ("eu-ai-act-art-14-4", "atlas-aml-m0029")
+    ]
+
+
 def test_same_profile_on_both_sides_allows():
     assert _run(BASE, profile=PROFILE, old_profile=PROFILE)["verdict"] == "ALLOW"
 
@@ -415,6 +436,18 @@ BAD_PROFILES = [
 ]
 
 
+GOOD_ROW = {
+    "control": "atlas-aml-m0028",
+    "level": "adopted",
+    "obligations": {"no_new_grants": True},
+}
+BAD_PROFILES += [
+    {"version": True, "requires": [GOOD_ROW]},
+    {"version": 1.0, "requires": [GOOD_ROW]},
+    {"version": 1, "requires": [GOOD_ROW], "notes": "x"},
+]
+
+
 @pytest.mark.parametrize("bad", BAD_PROFILES)
 def test_bad_profile_is_a_policy_error(bad):
     with pytest.raises(PolicyError):
@@ -439,6 +472,17 @@ def _catalog_with(**change):
 def test_bad_catalog_row_is_a_policy_error(change):
     with pytest.raises(PolicyError):
         cc.load_catalog(_catalog_with(**change))
+
+
+@pytest.mark.parametrize(
+    "top",
+    [{"version": True}, {"version": 1.0}, {"version": 1, "source": "x"}],
+    ids=["version-bool", "version-float", "unknown-key"],
+)
+def test_bad_catalog_top_level_is_a_policy_error(top):
+    rows = list(CATALOG.values())
+    with pytest.raises(PolicyError):
+        cc.load_catalog({"version": 1, "controls": rows, **top})
 
 
 def test_duplicate_catalog_key_is_a_policy_error():
