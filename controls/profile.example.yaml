@@ -1,0 +1,34 @@
+# Example profile for allowlist.example.yaml: the controls this deployment
+# requires and the policy obligation that stands for each.
+# level: mandatory (a drop is DENY) or adopted (a drop is ASK).
+# A catalog row bound as mandatory must be required as mandatory.
+#
+# Obligations:
+#   approval_for: [tools]   each tool is in require_approval or granted to no skill
+#   never_granted: [tools]  no skill grants the tool
+#   no_new_grants: true     the new policy grants no skill, tool or path glob
+#                           that the old policy did not, drops no approval
+#                           for a tool it still grants, and takes no tool it
+#                           still grants out of isolate
+version: 1
+requires:
+  - control: eu-ai-act-art-14-4
+    level: mandatory
+    obligations:
+      approval_for: [terminal, execute_code]
+  - control: atlas-aml-m0029
+    level: adopted
+    obligations:
+      approval_for: [terminal, execute_code]
+  - control: atlas-aml-m0028
+    level: adopted
+    obligations:
+      no_new_grants: true
+  - control: owasp-llm-2026-llm03
+    level: adopted
+    obligations:
+      no_new_grants: true
+  - control: iso-27001-a-8-2
+    level: adopted
+    obligations:
+      never_granted: [execute_code]
