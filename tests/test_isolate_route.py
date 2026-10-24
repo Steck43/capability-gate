@@ -629,6 +629,12 @@ def test_door_in_a_writable_folder_is_refused(tmp_path, monkeypatch):
     assert sb.door_calls() == []
 
 
+def _reap(pid: int) -> None:
+    """Kill a leftover door child so a failed run does not leave it sleeping."""
+    with contextlib.suppress(OSError):
+        os.kill(pid, signal.SIGKILL)
+
+
 def _gone(pid: int, wait_s: float = 2.0) -> bool:
     """Whether pid has exited (a zombie waiting for its reaper counts)."""
     end = time.monotonic() + wait_s
@@ -667,8 +673,7 @@ def test_timed_out_door_takes_its_children_with_it(tmp_path, monkeypatch):
     try:
         assert _gone(pid), f"door child {pid} still running after the timeout"
     finally:
-        with contextlib.suppress(OSError):
-            os.kill(pid, signal.SIGKILL)
+        _reap(pid)
     assert took < 4, took
 
 
