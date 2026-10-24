@@ -3,6 +3,13 @@
 # requires and the policy obligation that stands for each one.
 # binding: mandatory (law), advisory (guidance), advisory_as_selected (ISO
 # Annex A, applies when chosen in the statement of applicability).
+# Mandatory has a scope and a start date. EU AI Act Art. 14 binds high-risk
+# AI systems, from 2027-12-02 for Annex III systems and from 2028-08-02 for
+# Annex I systems (Art. 113 as amended). EU CRA Annex I applies to products
+# with digital elements from 2027-12-11. Outside that scope a profile may
+# still require these rows; the law does not.
+# ISO/IEC 27001:2022 Annex A takes its control numbers and titles from
+# ISO/IEC 27002:2022, so the ISO/IEC 27001 rows cite the ISO/IEC 27002 page.
 version: 1
 controls:
   - key: owasp-llm-2026-llm03
@@ -43,10 +50,10 @@ controls:
     control_id: MAP 3.5
     title: >-
       Processes for human oversight are defined, assessed, and documented in
-      accordance with organizational policies from the govern function.
+      accordance with organizational policies from the GOVERN function.
     binding: advisory
     grade: A
-    source_url: https://airc.nist.gov/airmf-resources/airmf/5-sec-core/
+    source_url: https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf
   - key: nist-ai-rmf-manage-2-4
     framework: NIST AI RMF
     edition: "1.0"
@@ -57,7 +64,7 @@ controls:
       demonstrate performance or outcomes inconsistent with intended use.
     binding: advisory
     grade: A
-    source_url: https://airc.nist.gov/airmf-resources/airmf/5-sec-core/
+    source_url: https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf
   - key: eu-ai-act-art-14-1-3
     framework: EU AI Act (Regulation (EU) 2024/1689)
     edition: consolidated 2026-07-27
