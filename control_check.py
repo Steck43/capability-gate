@@ -10,8 +10,8 @@ Gate.evaluate.
 
 Verdicts: ALLOW when every required control holds in the new policy; ASK when
 an adopted control does not; DENY when a mandatory one does not, or when the
-profile itself drops or downgrades a required control. Anything malformed
-raises PolicyError, and the CLI exits 2.
+profile itself drops, downgrades or weakens a required control. Anything
+malformed raises PolicyError, and the CLI exits 2 on any error.
 """
 
 from __future__ import annotations
@@ -156,7 +156,8 @@ def _granted(policy: Policy) -> frozenset[str]:
 def widening(old: Policy, new: Policy) -> list[str]:
     """Every way new grants more than old: a new skill, a tool or path glob a
     skill did not have, or an approval dropped for a tool that is still
-    granted. A changed glob counts as new even when it is narrower."""
+    granted, or a still granted tool taken out of isolate. A changed glob
+    counts as new even when it is narrower."""
     found = []
     for name, rule in new.skills.items():
         before = old.skills.get(name)
@@ -178,6 +179,12 @@ def widening(old: Policy, new: Policy) -> list[str]:
         for t in sorted(old.require_approval - new.require_approval)
         if t in still
     ]
+    # Out of isolate, a granted tool runs on the host instead of the box.
+    found += [
+        f"tool {t!r} leaves isolate while still granted"
+        for t in sorted(old.isolate - new.isolate)
+        if t in still
+    ]
     return found
 
 
@@ -193,6 +200,22 @@ def unmet(req: Required, policy: Policy, old: Policy | None = None) -> list[str]
     if req.obligations.get("no_new_grants") and old is not None:
         why += widening(old, policy)
     return why
+
+
+def _covers(cur: Mapping, old: Mapping) -> bool:
+    """True when cur keeps every obligation of old, with the same or more tools."""
+    return all(
+        name in cur and (not isinstance(val, frozenset) or val <= cur[name])
+        for name, val in old.items()
+    )
+
+
+def _weaker(cur: Required | None, req: Required) -> str:
+    if cur is None:
+        return "removed from the profile"
+    if LEVELS.index(cur.level) < LEVELS.index(req.level):
+        return f"downgraded to {cur.level!r}"
+    return "obligations weakened"
 
 
 def check(
@@ -225,7 +248,11 @@ def check(
         )
     for key, req in (old_profile or {}).items():
         cur = profile.get(key)
-        if cur is None or LEVELS.index(cur.level) < LEVELS.index(req.level):
+        if (
+            cur is None
+            or LEVELS.index(cur.level) < LEVELS.index(req.level)
+            or not _covers(cur.obligations, req.obligations)
+        ):
             verdict = "DENY"
             controls.append(
                 {
@@ -233,11 +260,7 @@ def check(
                     "level": req.level,
                     "status": "PROFILE_DROPPED",
                     "verdict": "DENY",
-                    "why": [
-                        "removed from the profile"
-                        if cur is None
-                        else f"downgraded to {cur.level!r}"
-                    ],
+                    "why": [_weaker(cur, req)],
                 }
             )
     return {"verdict": verdict, "controls": controls}
@@ -272,8 +295,8 @@ def main(argv: list[str] | None = None) -> int:
             catalog,
             old_profile,
         )
-    except PolicyError as e:
-        print(json.dumps({"verdict": "DENY", "error": str(e)}))
+    except Exception as e:  # fail closed: any error is exit 2, never 1 (ASK)
+        print(json.dumps({"verdict": "DENY", "error": f"{type(e).__name__}: {e}"}))
         return 2
     print(json.dumps(report, indent=2))
     return EXIT[report["verdict"]]
