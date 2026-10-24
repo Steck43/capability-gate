@@ -15,29 +15,56 @@ a different question: did this edit drop a control the deployment depends on?
   ISO/IEC 27001:2022, NIST CSF 2.0, EU Cyber Resilience Act). Each row holds
   key, framework, edition, control_id, the published title, binding
   (`mandatory`, `advisory`, `advisory_as_selected`), grade and an https
-  source. No paraphrase text.
+  source. No paraphrase text. `mandatory` means law within its scope: EU AI
+  Act Art. 14 binds high-risk AI systems from 2027-12-02 (Annex III) and
+  2028-08-02 (Annex I), and EU CRA Annex I applies from 2027-12-11. The
+  catalog header gives the detail.
 - A profile (`controls/profile.example.yaml`): the controls a deployment
   requires, each with a level (`mandatory` or `adopted`) and obligations. A
   catalog row bound as mandatory law must be required as mandatory.
+- Both files need `version: 1` as an integer (`true` and `1.0` are refused)
+  and refuse any top-level key other than `version` and `controls` or
+  `requires`. A misspelled key is an error, never a silent default.
 - The old and new policy, read with the strict YAML loader and `load_policy`.
 
 ## Obligations
 
 | Obligation | Met when |
 | --- | --- |
-| `approval_for: [tools]` | each tool is in `require_approval`, or no skill grants it (an approval for an ungranted tool is inert, since `_decide` checks the grant before approval) |
+| `approval_for: [tools]` | each tool is in `require_approval`, or no skill grants it (an approval for an ungranted tool is inert, since `_decide` checks the grant before approval). A granted tool in `isolate` counts as unapproved, since a tool cannot be in both lists; require it under `no_new_grants` instead |
 | `never_granted: [tools]` | no skill grants the tool |
-| `no_new_grants: true` | the new policy adds no skill, no tool to a skill, no path glob to a skill, and drops no approval for a tool it still grants; a changed glob counts as new even when narrower |
+| `no_new_grants: true` | the new policy adds no skill, no tool to a skill, no path glob to a skill, drops no approval for a tool it still grants, and takes no tool it still grants out of `isolate` (that moves the call from the box to the host); a changed glob counts as new even when narrower |
 
 ## Verdicts
 
 Per control: `KEPT` (met in new), `DROPPED` (met in old, not in new),
 `UNMET` (met in neither). An unmet mandatory control is DENY and an unmet
 adopted control is ASK. With `--old-profile`, a required control removed from
-the profile or lowered from mandatory to adopted is DENY. The overall verdict
-is the strictest. CLI exit codes: 0 ALLOW, 1 ASK, 3 DENY, 2 for any load
-error (malformed YAML, duplicate keys, unknown control, empty profile,
-unknown obligation, bad catalog row, missing file), which also prints DENY.
+the profile, lowered from mandatory to adopted, or kept with fewer
+obligations or tools than before is DENY. The overall verdict is the
+strictest.
+
+CLI exit codes: 0 ALLOW, 1 ASK, 3 DENY, and 2 for any error while loading or
+checking (malformed YAML, duplicate keys, unknown control, empty profile,
+unknown obligation, bad catalog row, missing file, or any other exception),
+which also prints DENY. Exit 1 means ASK: a person decides. A CI job should
+fail on any exit code other than 0, so a crash outside the check can never
+pass as ASK.
+
+The report also carries `warnings`: an `approval_for` tool that neither
+policy grants. Such an obligation is met by default, so a typo in a tool name
+would otherwise pass unseen. A warning does not change the verdict.
+
+## Running it
+
+Run from the repository root, since the catalog and profile defaults are
+relative paths. `HERMES_HOME` must be set, because the allowlist globs use
+it and an unresolved variable is a load error (exit 2).
+
+```
+python control_check.py old-allowlist.yaml allowlist.yaml \
+  --profile controls/profile.example.yaml --old-profile old-profile.yaml
+```
 
 The check runs at load time or in CI. `Gate.evaluate` does not call it, so
 decision latency and the decision path are unchanged.
@@ -71,9 +98,17 @@ decision latency and the decision path are unchanged.
 25. `test_cli_exit_codes` (ALLOW, ASK, DENY)
 26. `test_cli_malformed_policy_exits_2` (4 shapes)
 27. `test_cli_missing_file_exits_2`
+28. `test_profile_with_weakened_obligations_denies`
+29. `test_same_profile_on_both_sides_allows`
+30. `test_approval_for_a_tool_no_policy_grants_is_a_warning`
+31. `test_tool_taken_out_of_isolate_is_widening`
+32. `test_tool_put_into_isolate_allows`
+33. `test_bad_catalog_top_level_is_a_policy_error` (3 shapes)
+34. `test_cli_any_load_error_exits_2_not_ask` (3 shapes)
 
 Each check has a mutant (the clause removed or inverted) that turns at least
-one of these red.
+one of these red. `python design/required-controls/mutants.py` runs all 32
+and prints which were killed.
 
 ## Not done yet
 
@@ -82,5 +117,10 @@ one of these red.
   exit code other than 0. That is a separate CI change.
 - The profile is an example. Which controls a deployment requires, and at
   what level, is an owner decision.
-- Obligations cover tool grants, approvals and path globs. Controls that are
-  about logging, the kill switch or checkpoints have no obligation type yet.
+- Obligations cover tool grants, approvals, isolation and path globs.
+  Controls that are about logging, the kill switch or checkpoints have no
+  obligation type yet.
+- The catalog is read once, not compared old vs new. A pull request that
+  rebinds a mandatory row to advisory would let that control be required as
+  adopted, so its drop reads ASK, not DENY. The CI job should load the
+  catalog from the base branch.

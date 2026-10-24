@@ -7,8 +7,9 @@
 #   approval_for: [tools]   each tool is in require_approval or granted to no skill
 #   never_granted: [tools]  no skill grants the tool
 #   no_new_grants: true     the new policy grants no skill, tool or path glob
-#                           that the old policy did not, and drops no approval
-#                           for a tool it still grants
+#                           that the old policy did not, drops no approval
+#                           for a tool it still grants, and takes no tool it
+#                           still grants out of isolate
 version: 1
 requires:
   - control: eu-ai-act-art-14-4
