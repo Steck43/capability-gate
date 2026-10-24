@@ -40,7 +40,9 @@ so every S14 row is STUBBED. The run builds it with cargo from
 named in `CG_ISOLATE_DOOR`. With no door, S14 is a FAIL row. The planted box
 outcomes are clear, suspect, failed, hash lie, malformed and oversize results,
 a door that is down, a replayed receipt and a kill switch thrown while the
-task is in the box. `make demo-isolate` runs S14 alone.
+task is in the box. `make demo-isolate` runs S14 alone. A door command
+passes the state folder as its own argument, `--state DIR`; the route
+refuses `--state=DIR`, because that argument is not an absolute path.
 
 Note on S09: the log store outage is simulated with `chmod 000` on the log
 folder, which has no effect when the tests run as root. The expected outage
