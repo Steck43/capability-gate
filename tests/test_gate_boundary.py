@@ -43,7 +43,7 @@ _ENV = {
 # Same commits floor.yml checks out. Move both together, forward only.
 _PINS = {
     _ATOMS: "4a724a23ed90185e626bf85052738021e9585407",
-    _ISOLATION: "ce2353cd78fa8c729da1daf45559743fa0a91286",
+    _ISOLATION: "5a70034808e5824325c80469206b83cce4389a8a",
 }
 _DECISION_PARAMS = (
     "decision",
@@ -433,6 +433,15 @@ def _run_chain(
         box_hits,
         receipt,
     )
+
+
+@pytest.fixture(autouse=True)
+def _decision_chain(tmp_path: Path, monkeypatch) -> None:
+    """box_entry keeps its spent store beside the decision chain. The default
+    folder is under /var/lib, which a test cannot write, so each test gets its own."""
+    chain = tmp_path / "decision-chain" / "decision-chain.jsonl"
+    chain.parent.mkdir(mode=0o700)
+    monkeypatch.setenv("AEGIS_DECISION_CHAIN", str(chain))
 
 
 def _env(tmp_path: Path) -> dict:
