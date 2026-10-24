@@ -26,7 +26,7 @@ import os
 import signal
 import stat
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -232,11 +232,28 @@ def _not_swappable(path: str, what: str, want_dir: bool) -> str | None:
     return None
 
 
-def _door_problem(door: str) -> str | None:
-    problem = _not_swappable(door, "door", want_dir=False)
-    if problem is None:
-        problem = _not_swappable(os.path.dirname(door), "door folder", want_dir=True)
-    return problem
+def _door_problem(door: Sequence[str]) -> str | None:
+    """Why someone else could swap what the door command runs, or None.
+
+    The binary and every later argument that names a path get the same
+    checks, so an interpreter door cannot run a script from a folder others
+    can write. A later argument with no slash is a flag or a word, unless a
+    file by that name sits in the current folder, which is refused too.
+    """
+    for i, arg in enumerate(door):
+        what = "door" if i == 0 else f"door argument {i}"
+        if i and os.sep not in arg:
+            if os.path.lexists(arg):
+                return f"{what} {arg!r} is a relative path"
+            continue
+        problem = _not_swappable(arg, what, want_dir=False)
+        if problem is None:
+            problem = _not_swappable(
+                os.path.dirname(arg), f"{what} folder", want_dir=True
+            )
+        if problem is not None:
+            return problem
+    return None
 
 
 def _run_door(cfg: RouteConfig, task_bytes: bytes) -> tuple[str | None, bytes]:
@@ -256,10 +273,17 @@ def _run_door(cfg: RouteConfig, task_bytes: bytes) -> tuple[str | None, bytes]:
     try:
         out, _ = proc.communicate(task_bytes, timeout=cfg.deadline_s)
     except subprocess.TimeoutExpired:
+        # The door leads its own session (start_new_session), so the kill
+        # takes every child still in its process group. Only the door itself
+        # is waited for: a child that left the group could hold stdout open.
         with contextlib.suppress(OSError):
             os.killpg(proc.pid, signal.SIGKILL)
+        for pipe in (proc.stdin, proc.stdout):
+            with contextlib.suppress(OSError):
+                if pipe is not None:
+                    pipe.close()
         with contextlib.suppress(Exception):
-            proc.communicate(timeout=5)
+            proc.wait(timeout=5)
         return f"isolate route timed out after {cfg.deadline_s:g} s", b""
     if proc.returncode != 0:
         return f"isolate route failed: exit {proc.returncode}", b""
@@ -415,7 +439,7 @@ def route_isolate(
         cfg = load_config(config)
     except RouteConfigError as exc:
         return Outcome(f"isolate route unavailable: {exc}", ticket)
-    problem = _door_problem(cfg.door[0])
+    problem = _door_problem(cfg.door)
     if problem is not None:
         return Outcome(f"isolate route unavailable: {problem}", ticket)
     token = _folder_token(log_path)
