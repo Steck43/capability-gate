@@ -406,8 +406,21 @@ def test_mutation_s14_m7_lax_vestibule_door_goes_red(tmp_path):
     toml.write_text(text, encoding="utf-8")
     route = crate / "src" / "route.rs"
     src = route.read_text(encoding="utf-8")
-    old = "let mode = if m.vestibule_disabled { ParseMode::Disabled } else { ParseMode::Enforce };"
-    assert old in src
+    # rustfmt splits the line over five; the one-line form is the older pinned
+    # isolation-layer commit. Drop it once the pin moves past that rustfmt pass.
+    forms = (
+        (
+            "let mode = if m.vestibule_disabled {\n"
+            "        ParseMode::Disabled\n"
+            "    } else {\n"
+            "        ParseMode::Enforce\n"
+            "    };"
+        ),
+        "let mode = if m.vestibule_disabled { ParseMode::Disabled } else { ParseMode::Enforce };",
+    )
+    found = [f for f in forms if f in src]
+    assert len(found) == 1, "route.rs vestibule mode line not found"
+    old = found[0]
     route.write_text(
         src.replace(old, "let mode = ParseMode::Disabled;", 1), encoding="utf-8"
     )
