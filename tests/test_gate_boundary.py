@@ -435,10 +435,11 @@ def _run_chain(
     )
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _decision_chain(tmp_path: Path, monkeypatch) -> None:
     """box_entry keeps its spent store beside the decision chain. The default
-    folder is under /var/lib, which a test cannot write, so each test gets its own."""
+    folder is under /var/lib, which a test cannot write, so a test that runs the
+    chain asks for a folder of its own."""
     chain = tmp_path / "decision-chain" / "decision-chain.jsonl"
     chain.parent.mkdir(mode=0o700)
     monkeypatch.setenv("AEGIS_DECISION_CHAIN", str(chain))
@@ -467,6 +468,7 @@ _PINNED_MISSES = [MISS_DECISION, MISS_ATOMS, MISS_BOX] * 2 + [MISS_ATOMS]
 # Cleared at Step 8: atoms records the gate decision, issues a ticket, and
 # box_entry returns a prove-shaped receipt bound to this call. Fake / replay /
 # wrong-call-id denials live on isolation-layer tests/test_box_entry_bind.py.
+@pytest.mark.usefixtures("_decision_chain")
 def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
     sib = _siblings_or_skip()
     gate = _shipped_gate(tmp_path, monkeypatch)
@@ -529,6 +531,7 @@ def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
     assert replay is None, "the box door accepted a spent ticket"
 
 
+@pytest.mark.usefixtures("_decision_chain")
 def test_atoms_block_never_reaches_box(tmp_path: Path, monkeypatch) -> None:
     sib = _siblings_or_skip()
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
