@@ -9,14 +9,17 @@ the S14 demo runs that door end to end.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import json
 import os
 import shutil
+import signal
 import stat
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -624,6 +627,75 @@ def test_door_in_a_writable_folder_is_refused(tmp_path, monkeypatch):
         sb.door.parent.chmod(0o755)
     assert msg.startswith("isolate route unavailable"), msg
     assert sb.door_calls() == []
+
+
+def _gone(pid: int, wait_s: float = 2.0) -> bool:
+    """Whether pid has exited (a zombie waiting for its reaper counts)."""
+    end = time.monotonic() + wait_s
+    while True:
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except (OSError, IndexError):
+            return True
+        if state == "Z":
+            return True
+        if time.monotonic() > end:
+            return False
+        time.sleep(0.05)
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="reads /proc")
+def test_timed_out_door_takes_its_children_with_it(tmp_path, monkeypatch):
+    """Class: a door that times out leaves a child running after the route returns (gate N3)."""
+    pidfile = tmp_path / "grandchild.pid"
+    sb = Sandbox(tmp_path, monkeypatch)
+    sb.write_door(
+        "",
+        body=(
+            "import subprocess, sys, time\n"
+            "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+            f"open({str(pidfile)!r}, 'w').write(str(p.pid))\n"
+            "time.sleep(60)\n"
+        ),
+    )
+    sb.write_route({"door": [str(sb.door)], "real": False, "deadline_s": 1})
+    t0 = time.monotonic()
+    msg = _blocked(sb.call())
+    took = time.monotonic() - t0
+    assert msg.startswith("isolate route timed out"), msg
+    pid = int(pidfile.read_text())
+    try:
+        assert _gone(pid), f"door child {pid} still running after the timeout"
+    finally:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+    assert took < 4, took
+
+
+def test_door_script_in_a_writable_folder_is_refused(tmp_path, monkeypatch):
+    """Class: an interpreter door runs a script from a folder others can write (gate N4)."""
+    sb = Sandbox(tmp_path, monkeypatch)
+    folder = tmp_path / "scripts"
+    folder.mkdir()
+    script = folder / "door.py"
+    script.write_text(sb.door.read_text())
+    script.chmod(0o600)
+    interpreter = os.path.realpath(sys.executable)
+    sb.write_route({"door": [interpreter, str(script)], "real": False})
+    folder.chmod(0o777)
+    try:
+        msg = _blocked(sb.call())
+    finally:
+        folder.chmod(0o755)
+    assert msg.startswith("isolate route unavailable: door argument 1 folder"), msg
+    assert sb.door_calls() == []
+    # Control: the same script from a folder only this user can write runs.
+    ok = _blocked(sb.call(call_id="call-2"))
+    assert ok.startswith("isolated: advance"), ok
+    for arg in ("rel/door.py", "--script=/tmp/door.py"):
+        sb.write_route({"door": [interpreter, arg], "real": False})
+        msg = _blocked(sb.call(call_id=f"call-{arg}"))
+        assert msg.startswith("isolate route unavailable: door argument 1"), msg
 
 
 def test_one_route_at_a_time(tmp_path, monkeypatch):
