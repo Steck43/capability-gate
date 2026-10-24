@@ -520,7 +520,8 @@ def _isolate_configured() -> bool:
     """Whether this install routes any tool to the box (D5).
 
     Read without the policy loader, which is what failed: a route config on
-    disk, or an allowlist that names an isolate list at the top level.
+    disk, or an allowlist that names an isolate key in any spelling (block or
+    flow style, after a BOM). A stray match fails closed.
     """
     if os.path.lexists(os.path.join(_HERE, "isolate_route.yaml")):
         return True
@@ -529,7 +530,7 @@ def _isolate_configured() -> bool:
             text = f.read()
     except OSError:
         return False
-    return re.search(r"(?m)^[\"']?isolate[\"']?\s*:", text) is not None
+    return re.search(r"\bisolate[\"']?\s*:", text) is not None
 
 
 def _build_gate(mode: str) -> Gate:

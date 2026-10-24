@@ -936,9 +936,17 @@ class PolicyError(ValueError):
 # --- policy loading -------------------------------------------------------
 
 
+POLICY_KEYS = frozenset({"version", "skills", "require_approval", "isolate"})
+
+
 def load_policy(mapping: Mapping) -> Policy:
     if not isinstance(mapping, Mapping):
         raise PolicyError("policy root must be a mapping")
+    # A misspelled key would load as an empty list; for 'isolate' that turns
+    # isolation off without a word, so every unknown key is refused.
+    unknown = sorted(str(k) for k in mapping if k not in POLICY_KEYS)
+    if unknown:
+        raise PolicyError("unknown top-level allowlist keys: " + ", ".join(unknown))
     skills_in = mapping.get("skills", {})
     if not isinstance(skills_in, Mapping):
         raise PolicyError("'skills' must be a mapping")
