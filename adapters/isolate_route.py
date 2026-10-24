@@ -237,7 +237,8 @@ def _door_problem(door: Sequence[str]) -> str | None:
 
     The binary and every later argument that names a path get the same
     checks, so an interpreter door cannot run a script from a folder others
-    can write. A later argument with no slash is a flag or a word, unless a
+    can write. A later argument that is a folder, such as the door's
+    ``--state`` folder, gets the folder checks. A later argument with no slash is a flag or a word, unless a
     file by that name sits in the current folder, which is refused too.
     """
     for i, arg in enumerate(door):
@@ -246,7 +247,7 @@ def _door_problem(door: Sequence[str]) -> str | None:
             if os.path.lexists(arg):
                 return f"{what} {arg!r} is a relative path"
             continue
-        problem = _not_swappable(arg, what, want_dir=False)
+        problem = _not_swappable(arg, what, want_dir=i > 0 and os.path.isdir(arg))
         if problem is None:
             problem = _not_swappable(
                 os.path.dirname(arg), f"{what} folder", want_dir=True
