@@ -33,7 +33,7 @@ MUTANTS = [
     ),
     ("load error exits 1", "        return 2\n", "        return 1\n"),
     (
-        "only PolicyError fails closed",
+        "PolicyError alone fails closed",
         "except Exception as e:",
         "except PolicyError as e:",
     ),
