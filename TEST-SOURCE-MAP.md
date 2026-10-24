@@ -39,6 +39,26 @@ checked by `tests/test_source_map.py::test_source_map_nodes_exist`.
 | T-ADV-02 | `tests/test_wave2_offline_scaffolds.py:97::test_t_adv_02_tool_output_cannot_supply_privilege_metadata` | `adapters/agentdojo_adapter.py:28::map_agentdojo_call` |
 | T-ADV-03 | `tests/test_wave2_offline_scaffolds.py:114::test_t_adv_03_outside_set_glob_canaries_are_denied` | `adapters/claude_code_hook.py:170::_glob_climbs` |
 
+## Isolate route locators
+
+Tests for the isolate verdict and its route to the box door. Names are given
+without line numbers.
+
+| Plan item | Test node | Source node |
+| --- | --- | --- |
+| T1 isolate verdict | `tests/test_isolate_route.py::test_isolate_verdict_for_listed_tool` | `capability_gate.py::_decide` |
+| T2 path deny wins | `tests/test_isolate_route.py::test_path_deny_beats_isolate` | `capability_gate.py::_decide` |
+| T3 host blocked | `tests/test_isolate_route.py::test_isolate_blocks_host_in_enforce` | `__init__.py::pre_tool_call` |
+| T4 routed to the door | `tests/test_isolate_route.py::test_isolate_routes_to_door` | `adapters/isolate_route.py::route_isolate` |
+| T5 route errors block | `tests/test_isolate_route.py::test_each_route_error_blocks` | `adapters/isolate_route.py::route_isolate` |
+| T6 single-use receipt | `tests/test_isolate_route.py::test_receipt_single_use_across_calls` | `adapters/isolate_route.py::TicketStore` |
+| T7 kill switch during route | `tests/test_isolate_route.py::test_kill_switch_during_route_discards_result` | `adapters/isolate_route.py::route_isolate` |
+| T8 observe semantics (D4) | `tests/test_isolate_route.py::test_observe_isolate_semantics` | `__init__.py::pre_tool_call` |
+| T9 load failure (D5) | `tests/test_isolate_route.py::test_gate_load_failure_with_isolate_configured` | `__init__.py::pre_tool_call` |
+| T10 decider names no box word | `tests/test_fig1_box_uncalled.py` | `capability_gate.py` |
+| T11 wiring | `tests/test_live_wiring.py`, `tests/wiring_manifest.json` | `__init__.py::pre_tool_call`, `adapters/claude_code_hook.py::_pre` |
+| S14 and mutations | `demos/test_demos.py::test_mutation_s14_goes_red`, `demos/test_demos.py::test_mutation_s14_m7_lax_vestibule_door_goes_red` | `demos/synthtraffic.py::s_isolate` |
+
 ## Not measured
 
 Live Hermes doors, a live AgentDojo suite, test box execution, judge apply,

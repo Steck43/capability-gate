@@ -23,6 +23,7 @@ Each YAML file has a `traffic:` block (what to generate) and an `expect:` block
 | S08 receipt chain tamper | hash chain, witness; edit, truncate and delete are detected and the next append is refused |
 | S09 gate outage | hook fails closed while the policy store or log store is down |
 | S12 shadow vs enforce | observe mode records the same decisions, enforce blocks |
+| S14 isolate route | isolate verdict; each call goes through the plugin hook to the stub box door (`real: false`), each planted box outcome blocks with its own message, none run on the host |
 
 Not supported by the code at this commit (listed in `out/summary.json`):
 S05, S06, S10, S11, S13, the broken row index for S08 (the gate reports that
@@ -32,6 +33,14 @@ alerting). S07 lives in the isolation-layer repo.
 Note on S02: the gate does not parse command text. Risky shell commands are
 denied because the shell tool is not granted to the skill, and the rule id says
 so.
+
+Note on S14: the box door is the isolation-layer stub (`sandbox-demo route`),
+so every S14 row is STUBBED. The run builds it with cargo from
+`../isolation-layer`, or `ISOLATION_LAYER_ROOT`, or uses the built binary
+named in `CG_ISOLATE_DOOR`. With no door, S14 is a FAIL row. The planted box
+outcomes are clear, suspect, failed, hash lie, malformed and oversize results,
+a door that is down, a replayed receipt and a kill switch thrown while the
+task is in the box. `make demo-isolate` runs S14 alone.
 
 Note on S09: the log store outage is simulated with `chmod 000` on the log
 folder, which has no effect when the tests run as root. The expected outage

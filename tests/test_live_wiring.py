@@ -597,8 +597,10 @@ ALLOWED_ENV = {
         "CG_CC_DEADLINE_S",
         "CG_CC_ALLOWLIST",
         "CG_CC_LOG",
+        "CG_CC_ISOLATE_SPOOL",
     },
     "__init__.py": {"HERMES_HOME"},
+    "adapters/isolate_route.py": set(),
 }
 
 

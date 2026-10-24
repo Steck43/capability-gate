@@ -254,6 +254,200 @@ def test_readme_proof_check_goes_red_on_a_changed_number(tmp_path, capsys):
     assert "numbers: 201 != 200" in capsys.readouterr().out
 
 
+# --- S14: isolate route mutations (M1 to M8) ---------------------------------
+# Each mutation is applied to the plugin copy the scenario installs, never to
+# the repo files, and must flip the scenario to FAIL on the count it names.
+
+S14 = "S14-isolate-route"
+
+S14_MUTATIONS = {
+    # M1 the decider has no isolate branch: the tool is allowed and runs on the host.
+    "M1-isolate-branch-removed": (
+        {
+            "capability_gate.py": [
+                ("    if tool in policy.isolate:\n", "    if False:\n")
+            ]
+        },
+        "host_executed_isolate",
+    ),
+    # M2 the plugin hands an isolate call back to the host.
+    "M2-adapter-passes-through": (
+        {
+            "__init__.py": [
+                (
+                    "                router = _isolate_route()\n",
+                    "                return None\n                router = _isolate_route()\n",
+                ),
+            ]
+        },
+        "host_executed_isolate",
+    ),
+    # M3 the route call is dropped: the call is blocked but never reaches the box.
+    "M3-route-call-dropped": (
+        {
+            "__init__.py": [
+                (
+                    "                    outcome = router.route_isolate(\n",
+                    (
+                        "                    outcome = (\n"
+                        '                        router.Outcome("isolate route dropped", decision.route_ticket)\n'
+                        "                        if True\n"
+                        "                        else router.route_isolate(\n"
+                    ),
+                ),
+                (
+                    "                        halted=gate._halt_state,\n                    )\n",
+                    "                        halted=gate._halt_state,\n                    ))\n",
+                ),
+            ]
+        },
+        "routed",
+    ),
+    # M4 the receipt binding check always passes: a replayed receipt advances.
+    "M4-receipt-check-passes": (
+        {
+            "adapters/isolate_route.py": [
+                (
+                    "        if receipt.get(key) != task.get(key):\n",
+                    "        if False:\n",
+                ),
+                (
+                    '    if receipt.get("task_sha256") != task_sha256(task):\n',
+                    "    if False:\n",
+                ),
+            ]
+        },
+        "replay_refused",
+    ),
+    # M5 the ticket store forgets: a ticket is accepted twice.
+    "M5-ticket-store-forgets": (
+        {
+            "adapters/isolate_route.py": [
+                (
+                    "            if ticket in seen:\n                return False\n",
+                    "            if ticket in seen:\n                return True\n",
+                ),
+            ]
+        },
+        "reuse_refused",
+    ),
+    # M6 a route error is mapped to allow: a door that is down lets the host run the call.
+    "M6-route-error-allows": (
+        {
+            "__init__.py": [
+                (
+                    "                    message = outcome.message\n",
+                    (
+                        "                    message = outcome.message\n"
+                        '                    if message.startswith("isolate route unavailable"):\n'
+                        "                        return None\n"
+                    ),
+                ),
+            ]
+        },
+        "door_down_blocked",
+    ),
+    # M7 is the lax vestibule door, below: it needs a rebuilt door, not a plugin patch.
+    # M8 no kill switch check after the door: a result after the throw is delivered.
+    "M8-halt-recheck-removed": (
+        {
+            "adapters/isolate_route.py": [
+                (
+                    "        stop = halted() if halted is not None else None\n",
+                    "        stop = None\n",
+                ),
+                (
+                    "        stop = halted() if halted is not None else None\n",
+                    "        stop = None\n",
+                ),
+            ]
+        },
+        "kill_discarded",
+    ),
+    # M9 the disposition is ignored: held, dropped and rejected results all advance.
+    "M9-disposition-ignored": (
+        {
+            "adapters/isolate_route.py": [
+                ('    if disposition == "advance":\n', "    if True:\n")
+            ]
+        },
+        "held",
+    ),
+}
+
+
+@pytest.mark.parametrize("mid", sorted(S14_MUTATIONS))
+def test_mutation_s14_goes_red(mid):
+    patches, key = S14_MUTATIONS[mid]
+    res = st.run_scenario(
+        _scn(S14),
+        runner_override=lambda s, sb, seed: st.s_isolate(s, sb, seed, patches=patches),
+    )
+    assert res["status"] == "FAIL", mid
+    assert "error" not in res["detail"], res["detail"]
+    assert res["actual"][key] != res["expected"][key], (mid, key, res["actual"])
+
+
+def test_mutation_s14_m7_lax_vestibule_door_goes_red(tmp_path):
+    # M7: the door built from a copy of the sandbox-demo crate whose route
+    # parses the guest frame with the vestibule disabled. The checkout is untouched.
+    try:
+        iso = st.isolation_layer_root()
+    except RuntimeError as exc:
+        pytest.fail(str(exc))
+    crate = tmp_path / "sandbox-demo"
+    shutil.copytree(
+        iso / "demos" / "sandbox-demo", crate, ignore=shutil.ignore_patterns("target")
+    )
+    toml = crate / "Cargo.toml"
+    text = toml.read_text(encoding="utf-8").replace(
+        'path = "../../crates/', f'path = "{iso}/crates/'
+    )
+    toml.write_text(text, encoding="utf-8")
+    route = crate / "src" / "route.rs"
+    src = route.read_text(encoding="utf-8")
+    # rustfmt splits the line over five; the one-line form is the older pinned
+    # isolation-layer commit. Drop it once the pin moves past that rustfmt pass.
+    forms = (
+        (
+            "let mode = if m.vestibule_disabled {\n"
+            "        ParseMode::Disabled\n"
+            "    } else {\n"
+            "        ParseMode::Enforce\n"
+            "    };"
+        ),
+        "let mode = if m.vestibule_disabled { ParseMode::Disabled } else { ParseMode::Enforce };",
+    )
+    found = [f for f in forms if f in src]
+    assert len(found) == 1, "route.rs vestibule mode line not found"
+    old = found[0]
+    route.write_text(
+        src.replace(old, "let mode = ParseMode::Disabled;", 1), encoding="utf-8"
+    )
+    door = st.build_door(crate, target=st.ROOT / ".tmp" / "door-target-m7")
+    res = st.run_scenario(
+        _scn(S14),
+        runner_override=lambda s, sb, seed: st.s_isolate(s, sb, seed, door=door),
+    )
+    assert res["status"] == "FAIL"
+    assert res["actual"]["vestibule_rejected"] < res["expected"]["vestibule_rejected"]
+
+
+def test_s14_rows_are_marked_stubbed():
+    res = st.run_scenario(_scn(S14))
+    assert res["real"] is False
+    assert "| STUBBED |" in st.table([res])
+    assert res["actual"]["door_receipts_real"] == 0
+
+
+def test_s14_without_a_door_is_a_fail_row(monkeypatch, tmp_path):
+    monkeypatch.delenv("CG_ISOLATE_DOOR", raising=False)
+    monkeypatch.setenv("ISOLATION_LAYER_ROOT", str(tmp_path / "absent"))
+    res = st.run_scenario(_scn(S14))
+    assert res["status"] == "FAIL"
+    assert "isolation-layer stub door" in res["detail"]["error"]
+
+
 def test_an_empty_expect_block_is_refused(tmp_path):
     p = tmp_path / "S99-empty.yaml"
     p.write_text(
