@@ -80,7 +80,14 @@ scenario's control once to show the row goes red. See
 The full test suite:
 
     pip install -r requirements-dev.txt
-    python3 -m pytest -q
+    python3 scripts/run_full_suite.py
+
+The boundary tests load aegis-atoms and isolation-layer at the commits pinned
+in `tests/test_gate_boundary.py`. `scripts/run_full_suite.py` finds clones of
+both beside this repo, or at `AEGIS_ATOMS_SRC` and `ISOLATION_LAYER_SRC`,
+makes detached worktrees at the pins and runs pytest against them. A bare
+`python3 -m pytest -q` uses those clones as they stand, so
+`test_siblings_pinned` fails unless they sit at the pins.
 
 CI runs `make demo-all` on every push to main and every pull request, then
 `scripts/readme_proof.py check`, which fails if any number in the Proof section
@@ -154,7 +161,9 @@ here:
   allowlist must grant by name.
 - The isolate route runs against a stub VM host: S14 checks the gate side of
   the route and the receipt checks, not a microVM boot. The real door waits
-  on a KVM host.
+  on a KVM host. S14 does not run isolation-layer `scripts/box_entry.py`;
+  `test_one_write_needs_three_receipts` checks that its spent store refuses a
+  box ticket handed over twice.
 - A plugin that is not loaded mediates nothing, and the gate cannot prove its
   own presence.
 
