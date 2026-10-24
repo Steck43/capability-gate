@@ -16,3 +16,4 @@ expect:
   ask_executed: 0
   ask_pending_human: ask
   executed: benign
+  chain_ok: 1

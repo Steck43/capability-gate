@@ -283,8 +283,22 @@ def _grant_reaches_own_files(policy) -> str | None:
     return None
 
 
+def _isolate_route():
+    """adapters/isolate_route.py, loaded by its path beside this file."""
+    import importlib.util
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "isolate_route.py")
+    spec = importlib.util.spec_from_file_location("capability_gate_isolate_route", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclasses look the module up while it runs
+    spec.loader.exec_module(module)
+    return module
+
+
 def _pre(event: dict) -> None:
-    from capability_gate import Gate, Verdict
+    from capability_gate import Decision, Gate, Verdict, record_decision
 
     tool = str(event.get("tool_name", ""))
     ti = event.get("tool_input") or {}
@@ -302,6 +316,32 @@ def _pre(event: dict) -> None:
     if refused is None and tool in _WRITE_TOOLS:
         refused = _own_file_hit(paths)
     decision = gate.evaluate(SKILL, tool, paths, trace=trace, args=ti, refuse=refused)
+    if decision.verdict is Verdict.ISOLATE:
+        # D8: a VM boot does not fit inside the hook deadline, so the task is
+        # queued for the box and this call is denied on the host.
+        router = _isolate_route()
+        outcome = router.route_isolate(
+            decision,
+            tool_call_id=str(event.get("tool_use_id") or ""),
+            args=ti,
+            log_path=_log_path(),
+            queue_only=True,
+            spool=os.environ.get("CG_CC_ISOLATE_SPOOL"),
+        )
+        record_decision(
+            _log_path(),
+            "enforce",
+            Decision(
+                Verdict.DENY,
+                outcome.message,
+                SKILL,
+                tool,
+                tuple(paths),
+                route_ticket=outcome.ticket or decision.route_ticket,
+            ),
+            trace=trace,
+        )
+        _deny(outcome.message)
     if decision.verdict is not Verdict.ALLOW:
         _deny(f"{decision.verdict.value}: {decision.reason}")
     if event.get("tool_use_id"):

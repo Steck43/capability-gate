@@ -187,6 +187,7 @@ _LOG_ALLOWED = frozenset(
         "output",
         "score",
         "run_id",
+        "route_ticket",
     }
 )
 
@@ -811,6 +812,7 @@ class Verdict(str, Enum):
     DENY = "deny"
     ASK = "ask"  # reserved for Stage 3; the Stage 1 adapter maps ASK -> block
     THROWN = "thrown"  # kill switch arming row; not a tool-call decision
+    ISOLATE = "isolate"  # the call runs in the isolation box, never on the host
 
 
 ENFORCE = "enforce"
@@ -895,9 +897,12 @@ class Decision:
     tool: str
     paths: tuple[str, ...] = ()
     enforced: bool = True  # in observe mode this is False; a non-allow verdict is logged but not acted on
+    # Set on an enforced ISOLATE verdict: the single-use ticket the route to
+    # the box must answer, and on the denial row that records the outcome.
+    route_ticket: str | None = None
 
     def as_dict(self) -> dict:
-        return {
+        out = {
             "verdict": self.verdict.value,
             "reason": self.reason,
             "skill": self.skill,
@@ -905,6 +910,9 @@ class Decision:
             "paths": list(self.paths),
             "enforced": self.enforced,
         }
+        if self.route_ticket is not None:
+            out["route_ticket"] = self.route_ticket
+        return out
 
 
 @dataclass(frozen=True)
@@ -917,6 +925,7 @@ class SkillRule:
 class Policy:
     skills: Mapping[str, SkillRule]
     require_approval: frozenset[str] = field(default_factory=frozenset)
+    isolate: frozenset[str] = field(default_factory=frozenset)
 
 
 class PolicyError(ValueError):
@@ -927,9 +936,17 @@ class PolicyError(ValueError):
 # --- policy loading -------------------------------------------------------
 
 
+POLICY_KEYS = frozenset({"version", "skills", "require_approval", "isolate"})
+
+
 def load_policy(mapping: Mapping) -> Policy:
     if not isinstance(mapping, Mapping):
         raise PolicyError("policy root must be a mapping")
+    # A misspelled key would load as an empty list; for 'isolate' that turns
+    # isolation off without a word, so every unknown key is refused.
+    unknown = sorted(str(k) for k in mapping if k not in POLICY_KEYS)
+    if unknown:
+        raise PolicyError("unknown top-level allowlist keys: " + ", ".join(unknown))
     skills_in = mapping.get("skills", {})
     if not isinstance(skills_in, Mapping):
         raise PolicyError("'skills' must be a mapping")
@@ -960,7 +977,17 @@ def load_policy(mapping: Mapping) -> Policy:
     approval = mapping.get("require_approval", [])
     if not isinstance(approval, Sequence) or isinstance(approval, str):
         raise PolicyError("'require_approval' must be a list")
-    return Policy(skills=skills, require_approval=frozenset(str(t) for t in approval))
+    isolate = mapping.get("isolate", [])
+    if not isinstance(isolate, Sequence) or isinstance(isolate, str):
+        raise PolicyError("'isolate' must be a list")
+    isolate_set = frozenset(str(t) for t in isolate)
+    approval_set = frozenset(str(t) for t in approval)
+    both = sorted(isolate_set & approval_set)
+    if both:
+        raise PolicyError(
+            "tools listed in both 'isolate' and 'require_approval': " + ", ".join(both)
+        )
+    return Policy(skills=skills, require_approval=approval_set, isolate=isolate_set)
 
 
 # --- path expansion and glob matching -------------------------------------
@@ -1240,6 +1267,14 @@ def _decide(
             escape = _tree_escape(p, rule.path_globs)
             if escape is not None:
                 return Decision(Verdict.DENY, escape, skill, tool, ptuple)
+    if tool in policy.isolate:
+        return Decision(
+            Verdict.ISOLATE,
+            f"tool '{tool}' runs in the isolation box",
+            skill,
+            tool,
+            ptuple,
+        )
     if tool in policy.require_approval:
         return Decision(
             Verdict.ASK, f"tool '{tool}' requires human approval", skill, tool, ptuple
@@ -1397,7 +1432,15 @@ class Gate:
         if _same_file_name(a, self._anchor_path):
             return f"path '{p}' is the audit log anchor"
         token = os.path.join(os.path.dirname(log), FOLDER_TOKEN_NAME)
-        own = (log, log + ".lock", log + ".witness", token)
+        own = (
+            log,
+            log + ".lock",
+            log + ".witness",
+            log + ".route-tickets",
+            log + ".route-tickets.lock",
+            log + ".route.lock",
+            token,
+        )
         if any(_same_file_name(a, f) for f in own):
             return f"path '{p}' is the gate's own decision log file"
         folders = {os.path.dirname(h) for h in self._halt_paths}
@@ -1476,6 +1519,8 @@ class Gate:
                 )
             # observe mode records the true verdict but does not act on it
             decision = replace(decision, enforced=(self._mode == ENFORCE))
+            if decision.verdict is Verdict.ISOLATE and decision.enforced:
+                decision = replace(decision, route_ticket=secrets.token_hex(16))
             if not self._log_folder_lost:
                 self._log(decision, trace=norm_trace, arg_summary=arg_summary)
             return decision

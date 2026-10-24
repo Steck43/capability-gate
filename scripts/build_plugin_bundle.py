@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MEMBERS = (
     "__init__.py",
     "capability_gate.py",
+    "adapters/isolate_route.py",
     "plugin.yaml",
     "allowlist.example.yaml",
 )

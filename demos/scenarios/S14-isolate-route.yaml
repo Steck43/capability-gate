@@ -1,0 +1,36 @@
+# Calls the policy lists for isolation go through the real plugin hook to the
+# stub box door from isolation-layer (sandbox-demo route, real: false): the
+# host never runs them, and each planted box outcome comes back as its own
+# block message. Benign reads keep running on the host.
+name: S14-isolate-route
+control: isolate verdict and route to the box (stub door)
+runner: isolate
+seed: 1414
+actor: {agent_id: synth-agent-14, user_id: synth-user-05}
+traffic:
+  benign: 40
+  clear: 6
+  suspect: 2
+  failed: 2
+  hash_lie: 2
+  malformed: 2
+  oversize: 2
+  outage: 1
+  replay: 1
+  kill: 1
+expect:
+  isolate: clear + suspect + failed + hash_lie + malformed + oversize + outage + replay + kill
+  routed: clear + suspect + failed + hash_lie + malformed + oversize + replay + kill
+  host_executed_isolate: 0
+  benign_allowed: benign
+  advanced: clear
+  held: suspect
+  dropped: failed + hash_lie
+  vestibule_rejected: malformed + oversize
+  replay_refused: replay
+  reuse_refused: 1
+  door_down_blocked: outage
+  kill_discarded: kill
+  door_receipts_real: 0
+  door_chain_rows: 3 * (clear + suspect + failed + hash_lie + malformed + oversize + kill)
+  chain_ok: 1

@@ -12,6 +12,7 @@ import os
 import re
 import stat
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -476,6 +477,74 @@ def _log_path() -> str:
     return os.path.join(_hermes_home(), "logs", "capability-gate.jsonl")
 
 
+_ROUTE_LOAD_LOCK = threading.Lock()
+
+
+def _isolate_route():
+    """Load adapters/isolate_route.py by its path beside this file.
+
+    Loaded when an ISOLATE verdict comes in, inside the hook's error boundary, so
+    a broken route module blocks the call instead of failing open.
+    """
+    import hashlib
+    import importlib.util
+
+    path = os.path.join(_HERE, "adapters", "isolate_route.py")
+    # One module per plugin folder, so two installs never share a route.
+    name = (
+        "capability_gate_isolate_route_"
+        + hashlib.sha256(path.encode()).hexdigest()[:16]
+    )
+    # The module sits in sys.modules while it runs, so a second thread could
+    # see it half loaded. Only a module marked ready is handed out; the rest
+    # wait on the lock for the load in progress.
+    loaded = sys.modules.get(name)
+    if loaded is not None and getattr(loaded, "_gate_route_ready", False):
+        return loaded
+    with _ROUTE_LOAD_LOCK:
+        loaded = sys.modules.get(name)
+        if loaded is not None and getattr(loaded, "_gate_route_ready", False):
+            return loaded
+        _read_trusted(path)  # same ownership and mode rule as the gate's other files
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module  # dataclasses look the module up while it runs
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+        module._gate_route_ready = True
+        return module
+
+
+def _route_config() -> dict | None:
+    """isolate_route.yaml beside the plugin, or None when there is none."""
+    path = os.path.join(_HERE, "isolate_route.yaml")
+    if not os.path.lexists(path):
+        return None
+    return load_yaml_mapping(_read_trusted(path))
+
+
+def _isolate_configured() -> bool:
+    """Whether this install routes any tool to the box (D5).
+
+    Read without the policy loader, which is what failed: a route config on
+    disk, or an allowlist that names an isolate key in any spelling (block or
+    flow style, after a BOM). A stray match fails closed.
+    """
+    if os.path.lexists(os.path.join(_HERE, "isolate_route.yaml")):
+        return True
+    try:
+        with open(os.path.join(_HERE, "allowlist.yaml"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return False
+    return re.search(r"\bisolate[\"']?\s*:", text) is not None
+
+
 def _build_gate(mode: str) -> Gate:
     # Guarantee HERMES_HOME before policy expansion so grants resolve the same
     # way the log path does. Without this, an unset var makes every grant match
@@ -529,6 +598,7 @@ def _record_failclosed(
     args: Any = None,
     *,
     enforced: bool = True,
+    route_ticket: str | None = None,
 ) -> None:
     """Record a denial that never reached Gate.evaluate().
 
@@ -551,6 +621,7 @@ def _record_failclosed(
                 str(tool_name),
                 paths,
                 enforced=enforced,
+                route_ticket=route_ticket,
             ),
             trace=_extract_trace(kwargs if isinstance(kwargs, dict) else {}, task_id),
             arg_summary=arg_summary,
@@ -588,6 +659,13 @@ def register(ctx) -> None:
                     return _BLOCK(unresolved2)
                 if mode2 == "enforce":
                     _record_failclosed("enforce", tool_name, msg, kwargs, task_id, args)
+                    return _BLOCK(msg)
+                if _isolate_configured():
+                    # D5: with isolation configured, a gate that cannot load
+                    # cannot tell which calls belong in the box, so observe
+                    # blocks too rather than running them on the host.
+                    msg = f"capability-gate failed to load with isolation configured, failing closed: {load_error}"
+                    _record_failclosed("observe", tool_name, msg, kwargs, task_id, args)
                     return _BLOCK(msg)
                 _record_failclosed(
                     "observe",
@@ -643,6 +721,36 @@ def register(ctx) -> None:
                 refuse=refused,
                 base_dir=base_dir,
             )
+            if decision.verdict is Verdict.ISOLATE:
+                # Loaded in both modes, so a broken route module blocks even
+                # in observe (D5); observe then just records (D4).
+                router = _isolate_route()
+                if decision.enforced:
+                    outcome = router.route_isolate(
+                        decision,
+                        tool_call_id=str(
+                            kwargs.get("tool_call_id", "")
+                            or kwargs.get("toolCallId", "")
+                        ),
+                        args=args,
+                        log_path=_log_path(),
+                        config=_route_config(),
+                        halted=gate._halt_state,
+                    )
+                    message = outcome.message
+                    mode_after, unresolved_after = resolve_capability_gate_mode()
+                    if unresolved_after or mode_after != "enforce":
+                        message += "; mode changed during isolate, call stays blocked"
+                    _record_failclosed(
+                        "enforce",
+                        tool_name,
+                        message,
+                        kwargs,
+                        task_id,
+                        args,
+                        route_ticket=outcome.ticket or decision.route_ticket,
+                    )
+                    return _BLOCK(message)
             if decision.verdict.value == "allow":
                 # E3: reconfirm before observe allow-passthrough (same TOCTOU as deny).
                 if mode == "observe":

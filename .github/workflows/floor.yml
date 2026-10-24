@@ -142,9 +142,8 @@ jobs:
     # The boundary test needs aegis-atoms and isolation-layer beside this roof.
     # Each repo gets its own directory and pytest runs from capability-gate, so
     # pytest never collects the siblings' tests. Pins are full SHAs, moved by
-    # hand and never backward to make a test pass. The isolation pin sits on
-    # spine1/live-box: isolation-layer main stores one receipt with line endings
-    # its own attributes rewrite, so a checkout of main is never clean.
+    # hand and never backward to make a test pass. The isolation pin is the
+    # stub route door S14 builds with cargo (demos/sandbox-demo).
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -159,7 +158,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Steck43/isolation-layer
-          ref: a27c8ee424d96a18a9147bab5689a78e819b7184 # spine1/live-box, merge of #24
+          ref: 00ef3f904ffa382810c4457ab4283b55bb96f68c # main, merge of #60
           path: isolation-layer
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -214,18 +213,31 @@ jobs:
     name: demo (make demo-all)
     timeout-minutes: 10
     runs-on: ubuntu-latest
+    # S14 builds the isolation-layer stub door with the cargo the runner image
+    # ships, from ../isolation-layer, so the sibling sits beside this repo at
+    # the same pin as the tests job.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: capability-gate
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Steck43/isolation-layer
+          ref: 00ef3f904ffa382810c4457ab4283b55bb96f68c # main, merge of #60
+          path: isolation-layer
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - run: python -I -m pip install --require-hashes --no-deps -r requirements-ci.lock
+      - working-directory: capability-gate
+        run: python -I -m pip install --require-hashes --no-deps -r requirements-ci.lock
       # Exits non-zero on any FAIL row and writes out/summary.json.
-      - run: make demo-all PYTHON="python -I"
+      - working-directory: capability-gate
+        run: make demo-all PYTHON="python -I"
       # Every number in the README Proof section must match that summary.
-      - run: python -I scripts/readme_proof.py check
+      - working-directory: capability-gate
+        run: python -I scripts/readme_proof.py check
 
   lint:
     name: lint (ruff)

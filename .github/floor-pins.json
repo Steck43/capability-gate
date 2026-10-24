@@ -26,7 +26,7 @@
     },
     {
       "path": ".github/workflows/floor.yml",
-      "sha256": "9bfec7cd9e59f00f85a387cdd838901e8e09fc57f8c232a94a2c14e35a7c6cc8"
+      "sha256": "f40704982fa79e36d5532fd7c06ae242977033df74d318bbbcec22556e0ddc77"
     },
     {
       "path": ".github/workflows/plugin-bundle.yml",
@@ -46,7 +46,7 @@
     },
     {
       "path": ".pre-commit-config.yaml",
-      "sha256": "6e2a4c6e7857ff3931fdb42d383d21df199c938cc788306355f4e2b99df895b5"
+      "sha256": "ec8d8468df98a70fa6dbdafab5269391660f1a2675197047025ed5bc4800834b"
     },
     {
       "path": "conftest.py",
@@ -98,7 +98,7 @@
     },
     {
       "path": "tests/test_kat_lint.py",
-      "sha256": "1f848ec5b729391ec1d57e6d618653cb488964d5f2497e41afd51cb380adfa2c"
+      "sha256": "1441f628e1ff112fe182c24437053bebb7806c44c20a4f9397bc97e08f724cd2"
     },
     {
       "path": "tests/test_public_text_paths.py",
@@ -128,7 +128,7 @@
     },
     {
       "job": "demo",
-      "sha256": "df9b75f7bf700594a2381c422ae1df0e563eadc4df5d1f53fe96038924274e23"
+      "sha256": "b2127118c1c401a9256d33a32bee437055f11351d5133656b90962e30d4c1a7d"
     },
     {
       "job": "floor-guard",
@@ -156,7 +156,7 @@
     },
     {
       "job": "tests",
-      "sha256": "5b1fa34c53619c0952f6baef18dcaa5f699ac6db0cd642ced0176d7695faa1c7"
+      "sha256": "bf67710240bb012a62078a24000a4fa2c3393ba8632e0e4d856ee7918178e2dc"
     },
     {
       "job": "workflow-lint",
