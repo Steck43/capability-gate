@@ -28,8 +28,11 @@
 #
 # FALSE GREEN, measured 2026-08-18: `gitleaks protect --staged` reads the index.
 # `pre-commit run --all-files` stages nothing → 0 bytes scanned, exit 0. The
-# pre-push `gitleaks dir .` hook closes that for the push path. CI full-history
-# remains the control.
+# pre-push hook closes that for the push path with `gitleaks git`, which scans
+# history the way CI does, so the commit-bound ignores in .gitleaksignore apply.
+# `gitleaks dir .` did not: its file:line fingerprints missed those ignores and
+# it also read untracked __pycache__ files, so it rejected every push. CI
+# full-history remains the control.
 
 repos:
   - repo: local
@@ -40,9 +43,9 @@ repos:
         language: system
         pass_filenames: false
 
-      - id: gitleaks-dir-pre-push
-        name: gitleaks (working tree on push)
-        entry: gitleaks dir . --redact --no-banner
+      - id: gitleaks-git-pre-push
+        name: gitleaks (git history on push)
+        entry: gitleaks git --redact --no-banner
         language: system
         pass_filenames: false
         stages: [pre-push]
