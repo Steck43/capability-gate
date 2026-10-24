@@ -172,6 +172,7 @@ Known gaps, tracked and not closed by this PR:
 - Adapter extracts every path argument. A notes path plus `target=/etc/passwd` is denied.
 
 ### Changed
+- CI and the full suite runner pin isolation-layer to the merge of #59 on main (`5a70034`). The gate boundary tests give box_entry a decision chain folder of their own, since box_entry now keeps its spent store beside the chain. The demos README says the door takes the state folder as its own argument; `--state=DIR` is refused.
 - The policy loader refuses an unknown top-level allowlist key (anything other than `version`, `skills`, `require_approval` and `isolate`). A misspelled `isolate` key now fails the load instead of loading as an empty list and turning isolation off.
 - The isolate route checks every door argument that names a path, as well as the door program. A script or file in a folder others can write, a relative path that exists, or a path inside an option such as `--script=/tmp/door.py` is refused before the door runs. A folder argument, such as the door's `--state` folder, gets the folder checks, so `sandbox-demo route --state DIR` runs and a state folder others can write is refused. On a timeout the route kills the door's whole process group and then waits for the door alone, so a child that left the group cannot hold the call open.
 - The Hermes plugin hands out the route module once it has finished loading. Before, a second thread could get the half-loaded module while the early isolate calls were loading it and block its call with a gate error and no route ticket.

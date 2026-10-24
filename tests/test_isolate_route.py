@@ -957,6 +957,28 @@ def test_door_state_folder_argument(tmp_path, monkeypatch):
     assert msg.startswith("isolate route unavailable: door argument 3"), msg
 
 
+def test_door_state_folder_in_an_open_parent_is_refused(tmp_path, monkeypatch):
+    """Class: a 0700 state folder inside a 0777 parent can be swapped by anyone."""
+    sb = Sandbox(tmp_path, monkeypatch)
+    parent = tmp_path / "parent"
+    parent.mkdir(mode=0o700)
+    state = parent / "state"
+    state.mkdir(mode=0o700)
+    sb.write_route(
+        {"door": [str(sb.door), "route", "--state", str(state)], "real": False}
+    )
+    # Control: the same folders with a 0700 parent are accepted.
+    ok = _blocked(sb.call())
+    assert ok.startswith("isolated: advance"), ok
+    parent.chmod(0o777)
+    try:
+        msg = _blocked(sb.call(call_id="call-2"))
+    finally:
+        parent.chmod(0o700)
+    assert msg.startswith("isolate route unavailable: door argument 3 folder"), msg
+    assert "is writable by group or others" in msg, msg
+
+
 def test_bare_door_argument_naming_a_file_in_the_cwd_is_refused(tmp_path, monkeypatch):
     """Class: a bare door argument runs whatever file of that name sits in the current folder."""
     sb = Sandbox(tmp_path, monkeypatch)
