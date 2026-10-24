@@ -43,7 +43,7 @@ _ENV = {
 # Same commits floor.yml checks out. Move both together, forward only.
 _PINS = {
     _ATOMS: "4a724a23ed90185e626bf85052738021e9585407",
-    _ISOLATION: "5a70034808e5824325c80469206b83cce4389a8a",
+    _ISOLATION: "00ef3f904ffa382810c4457ab4283b55bb96f68c",
 }
 _DECISION_PARAMS = (
     "decision",
