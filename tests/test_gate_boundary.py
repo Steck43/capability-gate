@@ -512,6 +512,22 @@ def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
     if misses:
         raise PinnedMiss("; ".join(dict.fromkeys(misses)))
 
+    # The same ticket handed to the box door again is refused. The door module
+    # is loaded fresh, so the refusal comes from box_entry's spent store beside
+    # the decision chain, not from memory in this process.
+    earlier, path, content = runs[0]
+    entry = _box_entry(sib.isolation_root)
+    assert entry is not None, "fixture: box_entry.run is missing"
+    module, name = entry
+    replay = getattr(module, name)(
+        atoms_result=earlier.atoms_result,
+        decision=earlier.decision,
+        tool="write_file",
+        path=path,
+        content=content,
+    )
+    assert replay is None, "the box door accepted a spent ticket"
+
 
 def test_atoms_block_never_reaches_box(tmp_path: Path, monkeypatch) -> None:
     sib = _siblings_or_skip()
