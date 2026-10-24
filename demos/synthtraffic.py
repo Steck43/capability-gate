@@ -49,6 +49,9 @@ def load_scenario(path: Path) -> dict:
     for key in ("name", "control", "seed", "actor", "traffic", "expect"):
         if key not in data:
             raise ValueError(f"{path.name}: missing '{key}'")
+    if not isinstance(data["expect"], dict) or not data["expect"]:
+        # An empty expect block asserts nothing, so it would always PASS.
+        raise ValueError(f"{path.name}: expect must name at least one count")
     data["_file"] = path.name
     return data
 
@@ -795,6 +798,10 @@ def main(argv=None) -> int:
         if args.scenarios.is_dir()
         else [args.scenarios]
     )
+    if not files:
+        # Zero scenarios would make all_pass true over nothing.
+        print(f"no scenario files in {args.scenarios}", file=sys.stderr)
+        return 2
     results = [run_scenario(load_scenario(f), args.seed) for f in files]
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "runs").mkdir(exist_ok=True)

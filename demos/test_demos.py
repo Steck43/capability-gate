@@ -252,3 +252,17 @@ def test_readme_proof_check_goes_red_on_a_changed_number(tmp_path, capsys):
     readme.write_text(text.replace("events=200", "events=201", 1), encoding="utf-8")
     assert rp.main(["check", "--readme", str(readme), "--summary", str(summary)]) == 1
     assert "numbers: 201 != 200" in capsys.readouterr().out
+
+
+def test_an_empty_expect_block_is_refused(tmp_path):
+    p = tmp_path / "S99-empty.yaml"
+    p.write_text(
+        "name: S99-empty\ncontrol: none\nrunner: policy\nseed: 1\n"
+        "actor: {agent_id: a, user_id: u}\ntraffic: {benign: 1}\nexpect: {}\n"
+    )
+    with pytest.raises(ValueError, match="expect must name"):
+        st.load_scenario(p)
+
+
+def test_zero_scenarios_is_exit_2(tmp_path):
+    assert st.main(["run", str(tmp_path), "--out", str(tmp_path / "out")]) == 2

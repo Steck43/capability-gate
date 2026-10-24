@@ -16,3 +16,4 @@ expect:
   risky_executed: 0
   benign_allowed: benign
   executed: benign
+  chain_ok: 1
