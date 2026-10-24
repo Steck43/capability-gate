@@ -14,6 +14,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import signal
 import stat
@@ -555,6 +556,10 @@ D5_ALLOWLISTS = {
         ),
     ),
     "allowlist_bom": (False, "\ufeffisolate: [execute_code]\nskills: 7\n"),
+    "allowlist_flow_not_first": (
+        False,
+        "{skills: {'*': {tools: [execute_code], paths: 7}}, isolate: [execute_code]}\n",
+    ),
 }
 
 
@@ -587,14 +592,15 @@ def test_gate_load_failure_without_isolate_keeps_observe_passthrough(
     assert hook("terminal", {"command": "true"}, "t", tool_call_id="c") is None
 
 
+@pytest.mark.parametrize("key", ["isloate", "Isolate"])
 @pytest.mark.parametrize("mode", ["enforce", "observe"])
-def test_misspelled_isolate_key_blocks(tmp_path, monkeypatch, mode):
+def test_misspelled_isolate_key_blocks(tmp_path, monkeypatch, mode, key):
     """Class: a misspelled isolate key loads as no isolate list, so the tool runs on the host (N7)."""
     policy = _policy()
-    policy["isloate"] = policy.pop("isolate")
+    policy[key] = policy.pop("isolate")
     sb = Sandbox(tmp_path, monkeypatch, mode=mode, policy=policy)
     msg = _blocked(sb.call())
-    assert "unknown top-level allowlist keys: isloate" in msg, msg
+    assert f"unknown top-level allowlist keys: {key}" in msg, msg
     assert sb.door_calls() == []
 
 
@@ -682,10 +688,12 @@ def test_door_script_in_a_writable_folder_is_refused(tmp_path, monkeypatch):
     sb = Sandbox(tmp_path, monkeypatch)
     folder = tmp_path / "scripts"
     folder.mkdir()
-    script = folder / "door.py"
-    script.write_text(sb.door.read_text())
+    script = folder / "door.sh"
+    script.write_text(f"exec {shlex.quote(str(sb.door))}\n")
     script.chmod(0o600)
-    interpreter = os.path.realpath(sys.executable)
+    # CI's Python can sit in a group-writable tool cache, which the door
+    # check refuses as door[0]; /bin/sh is a root-owned system binary.
+    interpreter = os.path.realpath("/bin/sh")
     sb.write_route({"door": [interpreter, str(script)], "real": False})
     folder.chmod(0o777)
     try:
@@ -929,3 +937,39 @@ def test_route_module_first_load_is_safe_across_threads(tmp_path, monkeypatch):
             assert got == [True] * 16, (n, got)
     finally:
         sys.modules.pop(name, None)
+
+
+def test_door_state_folder_argument(tmp_path, monkeypatch):
+    """Class: the documented door command (sandbox-demo route --state DIR) is refused, or a writable state folder is accepted."""
+    sb = Sandbox(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    sb.write_route(
+        {"door": [str(sb.door), "route", "--state", str(state)], "real": False}
+    )
+    ok = _blocked(sb.call())
+    assert ok.startswith("isolated: advance"), ok
+    state.chmod(0o777)
+    try:
+        msg = _blocked(sb.call(call_id="call-2"))
+    finally:
+        state.chmod(0o700)
+    assert msg.startswith("isolate route unavailable: door argument 3"), msg
+
+
+def test_bare_door_argument_naming_a_file_in_the_cwd_is_refused(tmp_path, monkeypatch):
+    """Class: a bare door argument runs whatever file of that name sits in the current folder."""
+    sb = Sandbox(tmp_path, monkeypatch)
+    cwd = tmp_path / "cwd"
+    cwd.mkdir(mode=0o700)
+    (cwd / "door.py").write_text("print(1)\n")
+    monkeypatch.chdir(cwd)
+    sb.write_route({"door": [str(sb.door), "door.py"], "real": False})
+    msg = _blocked(sb.call())
+    assert msg.startswith(
+        "isolate route unavailable: door argument 1 'door.py' is a relative path"
+    ), msg
+    # Control: a bare word with no file of that name is a flag, and the door runs.
+    sb.write_route({"door": [str(sb.door), "route"], "real": False})
+    ok = _blocked(sb.call(call_id="call-2"))
+    assert ok.startswith("isolated: advance"), ok
