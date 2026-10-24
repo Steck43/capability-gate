@@ -242,6 +242,60 @@ def test_profile_raising_a_control_allows():
     assert _run(BASE, profile=up, old_profile=PROFILE)["verdict"] == "ALLOW"
 
 
+def test_profile_with_weakened_obligations_denies():
+    gutted = _profile(
+        [
+            {
+                "control": key,
+                "level": req.level,
+                "obligations": {"approval_for": ["no_such_tool"]},
+            }
+            for key, req in PROFILE.items()
+        ]
+    )
+    new = _edit(lambda m: m["require_approval"].remove("terminal"))
+    r = _run(new, profile=gutted, old_profile=PROFILE)
+    assert r["verdict"] == "DENY"
+    dropped = {
+        c["control"]: c["why"]
+        for c in r["controls"]
+        if c["status"] == "PROFILE_DROPPED"
+    }
+    assert dropped == {key: ["obligations weakened"] for key in PROFILE}
+
+
+def test_same_profile_on_both_sides_allows():
+    assert _run(BASE, profile=PROFILE, old_profile=PROFILE)["verdict"] == "ALLOW"
+
+
+# Isolation counts as a control
+
+NO_NEW_GRANTS = [
+    {
+        "control": "atlas-aml-m0028",
+        "level": "mandatory",
+        "obligations": {"no_new_grants": True},
+    }
+]
+ISOLATED = _edit(
+    lambda m: (m.update(isolate=["terminal"]), m["require_approval"].remove("terminal"))
+)
+HOST = _edit(lambda m: m["require_approval"].remove("terminal"))
+
+
+def test_tool_taken_out_of_isolate_is_widening():
+    r = _run(HOST, old=ISOLATED, profile=_profile(NO_NEW_GRANTS))
+    assert r["verdict"] == "DENY"
+    assert _status(r, "atlas-aml-m0028")["why"] == [
+        "tool 'terminal' leaves isolate while still granted"
+    ]
+
+
+def test_tool_put_into_isolate_allows():
+    r = _run(ISOLATED, old=HOST, profile=_profile(NO_NEW_GRANTS))
+    assert r["verdict"] == "ALLOW"
+
+
 # Load errors fail loudly
 
 BAD_PROFILES = [
@@ -502,3 +556,23 @@ def test_cli_missing_file_exits_2(tmp_path, capsys):
         str(ROOT / "controls/profile.example.yaml"),
     ]
     assert cc.main(args) == 2
+
+
+DEEP = "requires: " + "[" * 5000 + "]" * 5000 + "\n"
+ROW_TAIL = "  level: mandatory\n  obligations: {no_new_grants: true}\n"
+CONTROL_LIST = "version: 1\nrequires:\n- control: [eu-ai-act-art-14-4]\n" + ROW_TAIL
+CONTROL_MAP = "version: 1\nrequires:\n- control: {a: b}\n" + ROW_TAIL
+
+
+@pytest.mark.parametrize(
+    "text",
+    [CONTROL_LIST, CONTROL_MAP, "version: 1\n" + DEEP],
+    ids=["control-list", "control-mapping", "deep-nesting"],
+)
+def test_cli_any_load_error_exits_2_not_ask(tmp_path, capsys, text):
+    bad = tmp_path / "profile.yaml"
+    bad.write_text(text)
+    old = _write(tmp_path, "old.yaml", BASE)
+    args = [old, old, "--catalog", str(ROOT / "controls/catalog.yaml")]
+    assert cc.main([*args, "--profile", str(bad)]) == 2
+    assert json.loads(capsys.readouterr().out)["verdict"] == "DENY"
