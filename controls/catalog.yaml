@@ -1,5 +1,5 @@
 # Required-controls catalog: seed rows for control_check.py.
-# Titles only, as published; no paraphrase. A profile names the rows it
+# Titles as published, with no paraphrase. A profile names the rows it
 # requires and the policy obligation that stands for each one.
 # binding: mandatory (law), advisory (guidance), advisory_as_selected (ISO
 # Annex A, applies when chosen in the statement of applicability).
