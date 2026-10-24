@@ -110,8 +110,8 @@ isolation-layer stub (`sandbox-demo route`, `real: false`), not a microVM.
 Counts from the same run (`actual` in out/summary.json):
 
 - S01-baseline-benign, seed 1301: events=200, allow=200, ask=0, chain_ok=1, deny=0, executed=200, log_rows=200
-- S02-gate-deny-risky-command, seed 1302: events=128, benign_allowed=120, executed=120, risky_denied=8, risky_executed=0, risky_with_rule_id=8
-- S03-policy-allow-deny-ask, seed 1303: events=84, allow=60, ask=9, ask_executed=0, ask_pending_human=9, deny=15, executed=60
+- S02-gate-deny-risky-command, seed 1302: events=128, benign_allowed=120, chain_ok=1, executed=120, risky_denied=8, risky_executed=0, risky_with_rule_id=8
+- S03-policy-allow-deny-ask, seed 1303: events=84, allow=60, ask=9, ask_executed=0, ask_pending_human=9, chain_ok=1, deny=15, executed=60
 - S04-kill-switch-mid-run, seed 1304: events=300, allowed_before_kill=137, calls_after_kill=163, calls_before_kill=137, chain_ok=1, denied_after_kill=163, executed_after_kill=0, halt_marker_present=1, kill_receipts=1
 - S08-receipt-chain-tamper, seed 1308: events=20, log_unchanged_after_refusal=3, next_append_refused=3, records_written=20, tamper_cases=3, tamper_detected=3
 - S09-gate-outage, seed 1309: events=60, allowed_outside_outage=38, blocked_during_outage=22, calls=60, calls_during_outage=22, decided_after_recovery=15, executed_during_outage=0

@@ -46,7 +46,7 @@
     },
     {
       "path": ".pre-commit-config.yaml",
-      "sha256": "dfe61671ae5919b0792c672915c358957793b7ce0be1421f5f364f3d55513b78"
+      "sha256": "ec8d8468df98a70fa6dbdafab5269391660f1a2675197047025ed5bc4800834b"
     },
     {
       "path": "conftest.py",
