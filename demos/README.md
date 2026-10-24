@@ -43,6 +43,12 @@ a door that is down, a replayed receipt and a kill switch thrown while the
 task is in the box. `make demo-isolate` runs S14 alone. A door command
 passes the state folder as its own argument, `--state DIR`; the route
 refuses `--state=DIR`, because that argument is not an absolute path.
+S14 does not run isolation-layer `scripts/box_entry.py`, so its
+`replay_refused` and `reuse_refused` counts come from the gate route's receipt
+checks against the stub door, not from box_entry's spent store. The boundary
+test `test_one_write_needs_three_receipts` in `tests/test_gate_boundary.py`
+checks that store at the pinned isolation-layer commit: the same box ticket
+handed to `box_entry.run` a second time is refused.
 
 Note on S09: the log store outage is simulated with `chmod 000` on the log
 folder, which has no effect when the tests run as root. The expected outage
