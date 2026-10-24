@@ -43,7 +43,7 @@ _ENV = {
 # Same commits floor.yml checks out. Move both together, forward only.
 _PINS = {
     _ATOMS: "4a724a23ed90185e626bf85052738021e9585407",
-    _ISOLATION: "5a70034808e5824325c80469206b83cce4389a8a",
+    _ISOLATION: "00ef3f904ffa382810c4457ab4283b55bb96f68c",
 }
 _DECISION_PARAMS = (
     "decision",
@@ -435,10 +435,11 @@ def _run_chain(
     )
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _decision_chain(tmp_path: Path, monkeypatch) -> None:
     """box_entry keeps its spent store beside the decision chain. The default
-    folder is under /var/lib, which a test cannot write, so each test gets its own."""
+    folder is under /var/lib, which a test cannot write, so a test that runs the
+    chain asks for a folder of its own."""
     chain = tmp_path / "decision-chain" / "decision-chain.jsonl"
     chain.parent.mkdir(mode=0o700)
     monkeypatch.setenv("AEGIS_DECISION_CHAIN", str(chain))
@@ -467,6 +468,7 @@ _PINNED_MISSES = [MISS_DECISION, MISS_ATOMS, MISS_BOX] * 2 + [MISS_ATOMS]
 # Cleared at Step 8: atoms records the gate decision, issues a ticket, and
 # box_entry returns a prove-shaped receipt bound to this call. Fake / replay /
 # wrong-call-id denials live on isolation-layer tests/test_box_entry_bind.py.
+@pytest.mark.usefixtures("_decision_chain")
 def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
     sib = _siblings_or_skip()
     gate = _shipped_gate(tmp_path, monkeypatch)
@@ -512,7 +514,24 @@ def test_one_write_needs_three_receipts(tmp_path: Path, monkeypatch) -> None:
     if misses:
         raise PinnedMiss("; ".join(dict.fromkeys(misses)))
 
+    # The same ticket handed to the box door again is refused. The door module
+    # is loaded fresh, so the refusal comes from box_entry's spent store beside
+    # the decision chain, not from memory in this process.
+    earlier, path, content = runs[0]
+    entry = _box_entry(sib.isolation_root)
+    assert entry is not None, "fixture: box_entry.run is missing"
+    module, name = entry
+    replay = getattr(module, name)(
+        atoms_result=earlier.atoms_result,
+        decision=earlier.decision,
+        tool="write_file",
+        path=path,
+        content=content,
+    )
+    assert replay is None, "the box door accepted a spent ticket"
 
+
+@pytest.mark.usefixtures("_decision_chain")
 def test_atoms_block_never_reaches_box(tmp_path: Path, monkeypatch) -> None:
     sib = _siblings_or_skip()
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
