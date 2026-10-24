@@ -887,3 +887,40 @@ def test_parallel_isolate_rows_keep_their_own_ticket(tmp_path, monkeypatch):
         r["tool_call_id"]: r.get("route_ticket") for r in rows if r["verdict"] == "deny"
     }
     assert len(iso) == 64 and deny == iso
+
+
+def test_route_module_first_load_is_safe_across_threads(tmp_path, monkeypatch):
+    """Class: a thread uses the route module before it has finished loading."""
+    import threading
+
+    sb = Sandbox(tmp_path, monkeypatch)
+    path = os.path.join(sb.mod._HERE, "adapters", "isolate_route.py")
+    name = (
+        "capability_gate_isolate_route_"
+        + hashlib.sha256(path.encode()).hexdigest()[:16]
+    )
+    try:
+        for n in range(30):
+            sys.modules.pop(name, None)
+            barrier = threading.Barrier(16)
+            got = []
+
+            def go(barrier=barrier, got=got):
+                barrier.wait()
+                try:
+                    got.append(
+                        callable(
+                            getattr(sb.mod._isolate_route(), "route_isolate", None)
+                        )
+                    )
+                except Exception as exc:
+                    got.append(repr(exc))
+
+            threads = [threading.Thread(target=go) for _ in range(16)]
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
+            assert got == [True] * 16, (n, got)
+    finally:
+        sys.modules.pop(name, None)
