@@ -29,7 +29,16 @@ from capability_gate import Policy, PolicyError, load_policy, load_yaml_mapping
 BINDINGS = frozenset({"mandatory", "advisory", "advisory_as_selected"})
 LEVELS = ("adopted", "mandatory")
 OBLIGATIONS = frozenset({"approval_for", "never_granted", "no_new_grants"})
-_CATALOG_FIELDS = ("key", "framework", "edition", "control_id", "title", "binding", "grade", "source_url")
+_CATALOG_FIELDS = (
+    "key",
+    "framework",
+    "edition",
+    "control_id",
+    "title",
+    "binding",
+    "grade",
+    "source_url",
+)
 _RANK = {"ALLOW": 0, "ASK": 1, "DENY": 2}
 EXIT = {"ALLOW": 0, "ASK": 1, "DENY": 3}
 
@@ -47,51 +56,94 @@ def _need(cond: bool, msg: str) -> None:
 
 
 def _tool_list(value, where: str) -> frozenset[str]:
-    _need(isinstance(value, list) and value and all(isinstance(t, str) and t for t in value),
-          f"{where} must be a non-empty list of tool names")
+    _need(
+        isinstance(value, list)
+        and value
+        and all(isinstance(t, str) and t for t in value),
+        f"{where} must be a non-empty list of tool names",
+    )
     return frozenset(value)
 
 
 def load_catalog(mapping: Mapping) -> dict[str, dict]:
-    _need(isinstance(mapping, Mapping) and mapping.get("version") == 1, "catalog: version must be 1")
+    _need(
+        isinstance(mapping, Mapping) and mapping.get("version") == 1,
+        "catalog: version must be 1",
+    )
     rows = mapping.get("controls")
-    _need(isinstance(rows, list) and rows, "catalog: 'controls' must be a non-empty list")
+    _need(
+        isinstance(rows, list) and rows, "catalog: 'controls' must be a non-empty list"
+    )
     out: dict[str, dict] = {}
     for row in rows:
         _need(isinstance(row, Mapping), "catalog: each control must be a mapping")
-        missing = [f for f in _CATALOG_FIELDS if not isinstance(row.get(f), str) or not row.get(f)]
+        missing = [
+            f
+            for f in _CATALOG_FIELDS
+            if not isinstance(row.get(f), str) or not row.get(f)
+        ]
         _need(not missing, f"catalog: control {row.get('key')!r} lacks {missing}")
         extra = set(row) - set(_CATALOG_FIELDS)
-        _need(not extra, f"catalog: control {row['key']!r} has unknown fields {sorted(extra)}")
-        _need(row["binding"] in BINDINGS, f"catalog: control {row['key']!r} has binding {row['binding']!r}")
-        _need(row["source_url"].startswith("https://"), f"catalog: control {row['key']!r} needs an https source")
+        _need(
+            not extra,
+            f"catalog: control {row['key']!r} has unknown fields {sorted(extra)}",
+        )
+        _need(
+            row["binding"] in BINDINGS,
+            f"catalog: control {row['key']!r} has binding {row['binding']!r}",
+        )
+        _need(
+            row["source_url"].startswith("https://"),
+            f"catalog: control {row['key']!r} needs an https source",
+        )
         _need(row["key"] not in out, f"catalog: duplicate key {row['key']!r}")
         out[row["key"]] = dict(row)
     return out
 
 
 def load_profile(mapping: Mapping, catalog: Mapping[str, dict]) -> dict[str, Required]:
-    _need(isinstance(mapping, Mapping) and mapping.get("version") == 1, "profile: version must be 1")
+    _need(
+        isinstance(mapping, Mapping) and mapping.get("version") == 1,
+        "profile: version must be 1",
+    )
     rows = mapping.get("requires")
-    _need(isinstance(rows, list) and rows, "profile: 'requires' must be a non-empty list")
+    _need(
+        isinstance(rows, list) and rows, "profile: 'requires' must be a non-empty list"
+    )
     out: dict[str, Required] = {}
     for row in rows:
-        _need(isinstance(row, Mapping) and set(row) <= {"control", "level", "obligations"},
-              "profile: each entry has control, level and obligations")
+        _need(
+            isinstance(row, Mapping)
+            and set(row) <= {"control", "level", "obligations"},
+            "profile: each entry has control, level and obligations",
+        )
         key, level, obs = row.get("control"), row.get("level"), row.get("obligations")
         _need(key in catalog, f"profile: unknown control {key!r}")
         _need(key not in out, f"profile: control {key!r} listed twice")
-        _need(level in LEVELS, f"profile: control {key!r} level must be one of {LEVELS}")
-        _need(not (catalog[key]["binding"] == "mandatory" and level != "mandatory"),
-              f"profile: control {key!r} is mandatory law and cannot be required as {level!r}")
-        _need(isinstance(obs, Mapping) and obs, f"profile: control {key!r} needs obligations")
-        _need(set(obs) <= OBLIGATIONS, f"profile: control {key!r} has unknown obligations {sorted(set(obs) - OBLIGATIONS)}")
+        _need(
+            level in LEVELS, f"profile: control {key!r} level must be one of {LEVELS}"
+        )
+        _need(
+            not (catalog[key]["binding"] == "mandatory" and level != "mandatory"),
+            f"profile: control {key!r} is mandatory law and cannot be required as {level!r}",
+        )
+        _need(
+            isinstance(obs, Mapping) and obs,
+            f"profile: control {key!r} needs obligations",
+        )
+        _need(
+            set(obs) <= OBLIGATIONS,
+            f"profile: control {key!r} has unknown obligations {sorted(set(obs) - OBLIGATIONS)}",
+        )
         clean: dict = {}
         for name in ("approval_for", "never_granted"):
             if name in obs:
                 clean[name] = _tool_list(obs[name], f"profile: {key} {name}")
         if "no_new_grants" in obs:
-            _need(obs["no_new_grants"] is True, f"profile: {key} no_new_grants must be true")
+            _need(
+                obs["no_new_grants"] is True,
+                f"profile: {key} no_new_grants must be true",
+            )
             clean["no_new_grants"] = True
         out[key] = Required(key, level, clean)
     return out
@@ -111,11 +163,21 @@ def widening(old: Policy, new: Policy) -> list[str]:
         if before is None:
             found.append(f"new skill {name!r}")
             continue
-        found += [f"skill {name!r} gains tool {t!r}" for t in sorted(rule.tools - before.tools)]
-        found += [f"skill {name!r} gains path {g!r}" for g in rule.path_globs if g not in before.path_globs]
+        found += [
+            f"skill {name!r} gains tool {t!r}"
+            for t in sorted(rule.tools - before.tools)
+        ]
+        found += [
+            f"skill {name!r} gains path {g!r}"
+            for g in rule.path_globs
+            if g not in before.path_globs
+        ]
     still = _granted(new)
-    found += [f"tool {t!r} leaves require_approval while still granted"
-              for t in sorted(old.require_approval - new.require_approval) if t in still]
+    found += [
+        f"tool {t!r} leaves require_approval while still granted"
+        for t in sorted(old.require_approval - new.require_approval)
+        if t in still
+    ]
     return found
 
 
@@ -133,8 +195,13 @@ def unmet(req: Required, policy: Policy, old: Policy | None = None) -> list[str]
     return why
 
 
-def check(old: Policy, new: Policy, profile: Mapping[str, Required], catalog: Mapping[str, dict],
-          old_profile: Mapping[str, Required] | None = None) -> dict:
+def check(
+    old: Policy,
+    new: Policy,
+    profile: Mapping[str, Required],
+    catalog: Mapping[str, dict],
+    old_profile: Mapping[str, Required] | None = None,
+) -> dict:
     """Compare old and new against the profile. Returns the report; its
     verdict is the strictest of the per-control verdicts."""
     controls, verdict = [], "ALLOW"
@@ -145,14 +212,34 @@ def check(old: Policy, new: Policy, profile: Mapping[str, Required], catalog: Ma
         v = "ALLOW" if not now else ("DENY" if req.level == "mandatory" else "ASK")
         verdict = max(verdict, v, key=_RANK.get)
         row = catalog[key]
-        controls.append({"control": key, "framework": row["framework"], "control_id": row["control_id"],
-                         "level": req.level, "status": status, "verdict": v, "why": now})
+        controls.append(
+            {
+                "control": key,
+                "framework": row["framework"],
+                "control_id": row["control_id"],
+                "level": req.level,
+                "status": status,
+                "verdict": v,
+                "why": now,
+            }
+        )
     for key, req in (old_profile or {}).items():
         cur = profile.get(key)
         if cur is None or LEVELS.index(cur.level) < LEVELS.index(req.level):
             verdict = "DENY"
-            controls.append({"control": key, "level": req.level, "status": "PROFILE_DROPPED", "verdict": "DENY",
-                             "why": ["removed from the profile" if cur is None else f"downgraded to {cur.level!r}"]})
+            controls.append(
+                {
+                    "control": key,
+                    "level": req.level,
+                    "status": "PROFILE_DROPPED",
+                    "verdict": "DENY",
+                    "why": [
+                        "removed from the profile"
+                        if cur is None
+                        else f"downgraded to {cur.level!r}"
+                    ],
+                }
+            )
     return {"verdict": verdict, "controls": controls}
 
 
@@ -175,9 +262,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         catalog = load_catalog(_read(a.catalog))
         profile = load_profile(_read(a.profile), catalog)
-        old_profile = load_profile(_read(a.old_profile), catalog) if a.old_profile else None
-        report = check(load_policy(_read(a.old_policy)), load_policy(_read(a.new_policy)), profile, catalog,
-                       old_profile)
+        old_profile = (
+            load_profile(_read(a.old_profile), catalog) if a.old_profile else None
+        )
+        report = check(
+            load_policy(_read(a.old_policy)),
+            load_policy(_read(a.new_policy)),
+            profile,
+            catalog,
+            old_profile,
+        )
     except PolicyError as e:
         print(json.dumps({"verdict": "DENY", "error": str(e)}))
         return 2
