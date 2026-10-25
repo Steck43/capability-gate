@@ -8,9 +8,10 @@ checkout. Do not push to main.
 | Field | Value |
 | --- | --- |
 | Branch | `steck43/control-check-cli-old-profile-febc` |
-| Head SHA | see `git rev-parse HEAD` on this branch after fetch |
+| Head SHA | `ad8751f168eed811ad3d697fc213e7e901517054` (refresh after this file if the tip moved) |
 | Code SHA | `24fdf938e5cb93f5b781f723c4b75f0b581ecb4d` (behavior change) |
 | Base SHA | `13ada55fded50f2244ddabb52b4a2e2259e87a2a` (`main`, merge of #130) |
+| Draft PR | https://github.com/Steck43/capability-gate/pull/132 (draft; do not merge from this agent) |
 | Remote | `origin` (`Steck43/capability-gate`) |
 
 Confirm with `git log --oneline 13ada55fded50f2244ddabb52b4a2e2259e87a2a..HEAD`.
@@ -85,5 +86,7 @@ Deferred:
 
 - RED: `test_cli_empty_old_profile_exits_2` was exit 0 on `""`; mixed row was DROPPED
 - GREEN: `pytest -q tests/test_control_check.py` → 151 passed
+- GREEN: `pytest -q tests/test_control_check.py test_capability_gate.py test_report.py tests/test_run_full_suite_pins.py tests/test_public_text_paths.py` → 373 passed
 - `python3 design/required-controls/mutants.py` → 42 of 42 killed
 - `ruff check` / `ruff format --check` on the touched Python files: clean
+- Full `pytest` without sibling clones is not the CI suite (boundary tests need the pins). Floor CI on the draft PR is the green bar.
