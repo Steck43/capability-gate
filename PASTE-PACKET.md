@@ -11,10 +11,10 @@ This is `Steck43/capability-gate`. The path is `demos/` in this repo
 
 ## Git
 
-- Branch: `steck43/s11-alert-triage-replay-ff74`
+- Branch: `steck43/s11-alert-triage-replay2-ff74`
 - Base SHA: `13ada55fded50f2244ddabb52b4a2e2259e87a2a` (`main`)
 - Head SHA: tip of this branch (`git rev-parse HEAD`; also on the draft PR)
-- Draft PR: https://github.com/Steck43/capability-gate/pull/131
+- Draft PR: see the draft on this branch (the first draft could not be rewritten; repo rules block force-push)
 
 RED then GREEN is on the branch: first commit is the failing assertions,
 later commit is the replay runner.
@@ -24,12 +24,12 @@ later commit is the replay runner.
 From a `capability-gate` clone. Never push `main`.
 
     git fetch origin
-    git checkout steck43/s11-alert-triage-replay-ff74
+    git checkout steck43/s11-alert-triage-replay2-ff74
     # if the branch is only on origin yet:
-    git checkout -B steck43/s11-alert-triage-replay-ff74 origin/steck43/s11-alert-triage-replay-ff74
+    git checkout -B steck43/s11-alert-triage-replay2-ff74 origin/steck43/s11-alert-triage-replay2-ff74
 
     # after local edits, push the feature branch only:
-    git push origin steck43/s11-alert-triage-replay-ff74
+    git push origin steck43/s11-alert-triage-replay2-ff74
 
 Do not `git push origin main`. Do not merge the draft PR.
 
@@ -53,7 +53,7 @@ Summary no longer lists S11 as unsupported.
 
 | date | item | owner | repo | state | branch | testers | proofs |
 |---|---|---|---|---|---|---|---|
-| 2026-10-25 | S11 alert-triage REPLAY | sprint task 2 | capability-gate | BRANCH (draft PR, not main) | steck43/s11-alert-triage-replay-ff74 | two tester roles named in the sprint brief | fresh-clone |
+| 2026-10-25 | S11 alert-triage REPLAY | sprint task 2 | capability-gate | BRANCH (draft PR, not main) | steck43/s11-alert-triage-replay2-ff74 | two tester roles named in the sprint brief | fresh-clone |
 
 ## Tester ask
 
