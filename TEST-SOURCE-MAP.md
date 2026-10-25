@@ -64,3 +64,4 @@ without line numbers.
 Live Hermes doors, a live AgentDojo suite, test box execution, judge apply,
 layer-order permutations, disk-full tmpfs behavior, Windows ACLs, and a
 sanitized benign-day recording remain outside this offline map.
+| S10 phishing investigation replay | `demos/test_demos.py` S10 cases; `make demo-test` | `demos/synthtraffic.py::s_phishing_triage` |

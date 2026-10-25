@@ -136,7 +136,6 @@ here:
   it does not redact prompts or count redactions.
 - S06 PII in the audit log: there is no PII redaction on the log write path.
   Content is left out of the log, not redacted.
-- S10 phishing investigation and S11 alert triage: those workflows do not
   exist yet.
 - S13 token usage: depends on S10 and S11 replay records, which do not exist
   yet.
