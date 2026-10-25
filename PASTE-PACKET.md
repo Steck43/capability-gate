@@ -7,11 +7,11 @@ checkout. Do not push to main.
 
 | Field | Value |
 | --- | --- |
-| Branch | `steck43/control-check-cli-old-profile-febc` |
-| Head SHA | `ad8751f168eed811ad3d697fc213e7e901517054` (refresh after this file if the tip moved) |
-| Code SHA | `24fdf938e5cb93f5b781f723c4b75f0b581ecb4d` (behavior change) |
+| Branch | `steck43/control-check-cli-nits-clean` |
+| Head SHA | current tip of PR #134 (`git rev-parse HEAD`; this file cannot name its own commit) |
+| Code SHA | `c3308c35e7504a443ec126bf300cbb5ceac045f7` (behavior change) |
 | Base SHA | `13ada55fded50f2244ddabb52b4a2e2259e87a2a` (`main`, merge of #130) |
-| Draft PR | https://github.com/Steck43/capability-gate/pull/132 (draft; do not merge from this agent) |
+| PR | https://github.com/Steck43/capability-gate/pull/134 (do not merge from this agent) |
 | Remote | `origin` (`Steck43/capability-gate`) |
 
 Confirm with `git log --oneline 13ada55fded50f2244ddabb52b4a2e2259e87a2a..HEAD`.
@@ -26,26 +26,20 @@ Confirm with `git log --oneline 13ada55fded50f2244ddabb52b4a2e2259e87a2a..HEAD`.
 
 ## How to push from the operator PC
 
-This checkout already pushed the branch to `origin` (draft PR). From the
+This checkout already pushed the branch to `origin` (PR #134). From the
 operator PC, review then merge later. Never push to `main` from here.
 
 ```
-git fetch origin steck43/control-check-cli-old-profile-febc
-git checkout steck43/control-check-cli-old-profile-febc
+git fetch origin steck43/control-check-cli-nits-clean
+git checkout steck43/control-check-cli-nits-clean
 git log --oneline 13ada55fded50f2244ddabb52b4a2e2259e87a2a..HEAD
 python3 -m pytest -q tests/test_control_check.py
 python3 design/required-controls/mutants.py
 ```
 
-To replay the commit under the usual author (optional, before merge):
-
-```
-git -c core.hooksPath=/dev/null commit --amend --reset-author --no-edit
-```
-
-Then `git push --force-with-lease origin steck43/control-check-cli-old-profile-febc`
-only if you rewrote that commit. Prefer a new commit if the draft already has
-reviewers.
+Any follow-up change goes in a new commit under the usual author. Never
+disable hooks, never amend or rewrite pushed commits, and never force-push
+this branch.
 
 Merge from the PC when Seat A (gate) and floor are green. Do not merge from this agent.
 
@@ -53,7 +47,7 @@ Merge from the PC when Seat A (gate) and floor are green. Do not merge from this
 
 | Date | Roof | Item | Status | Pointer |
 | --- | --- | --- | --- | --- |
-| 2026-10-25 | capability-gate | BH-130 leftover nits (CLI `--old-profile`, mutant honesty) | BRANCH | `steck43/control-check-cli-old-profile-febc` @ `24fdf93` (base `13ada55`) |
+| 2026-10-25 | capability-gate | BH-130 leftover nits (CLI `--old-profile`, mutant honesty) | BRANCH | `steck43/control-check-cli-nits-clean` @ `c3308c3` code (PR #134; base `13ada55`) |
 
 ## Tester ask
 
@@ -89,4 +83,4 @@ Deferred:
 - GREEN: `pytest -q tests/test_control_check.py test_capability_gate.py test_report.py tests/test_run_full_suite_pins.py tests/test_public_text_paths.py` → 373 passed
 - `python3 design/required-controls/mutants.py` → 42 of 42 killed
 - `ruff check` / `ruff format --check` on the touched Python files: clean
-- Full `pytest` without sibling clones is not the CI suite (boundary tests need the pins). Floor CI on the draft PR is the green bar.
+- Full `pytest` without sibling clones is not the CI suite (boundary tests need the pins). Floor CI on PR #134 is the green bar.
