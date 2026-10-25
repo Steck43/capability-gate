@@ -8,13 +8,13 @@ checkout. Do not push to main.
 | Field | Value |
 | --- | --- |
 | Branch | `steck43/control-check-cli-nits-clean` |
-| Head SHA | `87a2c351f93b8807225c48ea157c351d8732da1c` (refresh after this file if the tip moved) |
+| Head SHA | `a426bbd8d9f276a110b36bf4dbe2d4bff7546ef9` (refresh after this file if the tip moved) |
 | Code SHA | `c3308c35e7504a443ec126bf300cbb5ceac045f7` (behavior change) |
-| Base SHA | `13ada55fded50f2244ddabb52b4a2e2259e87a2a` (`main` at branch point; merge of #130) |
+| Base SHA | `7f174bdf9daeaf957ed4dde126ee3f3903c9f268` (`main` at branch point; includes S11 merge #133) |
 | Draft PR | https://github.com/Steck43/capability-gate/pull/134 (draft; do not merge from this agent) |
 | Remote | `origin` (`Steck43/capability-gate`) |
 
-Confirm with `git log --oneline 13ada55fded50f2244ddabb52b4a2e2259e87a2a..HEAD`.
+Confirm with `git log --oneline 7f174bdf9daeaf957ed4dde126ee3f3903c9f268..HEAD`.
 
 ## Files touched
 
@@ -32,7 +32,7 @@ operator PC, review then merge later. Never push to `main` from here.
 ```
 git fetch origin steck43/control-check-cli-nits-clean
 git checkout steck43/control-check-cli-nits-clean
-git log --oneline 13ada55fded50f2244ddabb52b4a2e2259e87a2a..HEAD
+git log --oneline 7f174bdf9daeaf957ed4dde126ee3f3903c9f268..HEAD
 python3 -m pytest -q tests/test_control_check.py
 python3 design/required-controls/mutants.py
 ```
@@ -43,7 +43,7 @@ Merge from the PC when Seat A (gate) and floor are green. Do not merge from this
 
 | Date | Roof | Item | Status | Pointer |
 | --- | --- | --- | --- | --- |
-| 2026-10-25 | capability-gate | BH-130 leftover nits (CLI `--old-profile`, mutant honesty) | BRANCH | `steck43/control-check-cli-nits-clean` @ tip of draft PR #134 (code `c3308c35e7504a443ec126bf300cbb5ceac045f7`, base `13ada55`) |
+| 2026-10-25 | capability-gate | BH-130 leftover nits (CLI `--old-profile`, mutant honesty) | BRANCH | `steck43/control-check-cli-nits-clean` @ tip of draft PR #134 (code `c3308c3`, base `7f174bd`) |
 
 ## Tester ask
 
