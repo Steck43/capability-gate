@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- S11 alert-triage replay in `demos/`. Seeded burst of 500 synthetic SIEM
+  alerts with duplicate families and one true positive. Local dedup and rank,
+  recorded reasons, no model call and no network. Expect: unique groups match
+  the burst math, the true positive is in the top 3, auto-closed == 0. Bad
+  YAML or a live-mode file exits 2 with a message, not a traceback. Mutation
+  checks remove dedup, flatten rank, or auto-close noise and the row goes
+  red. Path is this repo's `demos/`; there is no sibling workflow tree. S10
+  and S13 stay unsupported.
 - Isolate verdict and route to the box (S14). A policy `isolate` list gives the listed tools the verdict `isolate` once their grant and path checks pass; a tool in both `isolate` and `require_approval` is refused at load. In enforce the Hermes plugin blocks the host run and `adapters/isolate_route.py` sends the call to the door named in `isolate_route.yaml`. The receipt must carry the route ticket, tool call id, decision digest and task digest of this call, and each ticket is accepted once across calls. Every route error, a held, dropped or rejected result, a mode change and a kill switch thrown during the route all block, each with its own message. In observe the verdict is logged and the call runs on the host; a gate that fails to load with `isolate` tools configured blocks in both modes, and the check finds an `isolate` key in a block or flow-style allowlist and after a BOM. The Claude Code hook queues the task in a spool folder and denies. `make demo-isolate` runs S14 against the isolation-layer stub door (`real: false`), so the S14 row is STUBBED.
 - Demo scenarios S02 and S03 now assert `chain_ok: 1`, so a broken audit chain in either one is a FAIL row. The README Proof counts gain `chain_ok=1` for both.
 - Required controls check (`control_check.py`, `controls/catalog.yaml`, `controls/profile.example.yaml`). It diffs the old and new allowlist against a profile of required controls and refuses a change that leaves one unmet: a granted tool dropped from `require_approval`, a new skill, tool or path glob, a granted tool taken out of `isolate`, or a grant of a tool the profile keeps ungranted. An unmet mandatory control is DENY, an adopted one ASK, and with `--old-profile` a profile that drops, downgrades or weakens a control is DENY; any load or check error exits 2, never 1 (ASK). Profile and catalog need an integer `version: 1` and refuse unknown top-level keys; an approval named for a tool no policy grants is reported as a warning. It runs at load time or in CI, not in `Gate.evaluate`. Design, usage and test list in `design/required-controls/README.md`, mutant runner in `design/required-controls/mutants.py`. `tests/test_control_check.py`.
