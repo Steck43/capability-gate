@@ -1,0 +1,16 @@
+Return-Path: <service@paypa1.com>
+Authentication-Results: mx.corp.example; spf=pass dkim=pass dmarc=pass
+From: PayPal Billing <service@paypa1.com>
+To: synth-user-01@corp.example
+Subject: Your account is limited
+Date: Sun, 25 Oct 2026 09:00:00 +0000
+Message-ID: <p01-paypa1-lookalike@synth.example>
+MIME-Version: 1.0
+X-Synthetic: capability-gate demo S10; not a real message
+Content-Type: multipart/mixed; boundary="SYNTHBOUNDARY"
+
+--SYNTHBOUNDARY
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>We noticed unusual activity.</p><a href="https://paypa1.com/verify">Restore access</a></body></html>
+--SYNTHBOUNDARY--

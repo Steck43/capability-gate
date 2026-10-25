@@ -1,0 +1,16 @@
+Return-Path: <orders@amaz0n-billing.com>
+Authentication-Results: mx.corp.example; spf=pass dkim=pass dmarc=none
+From: Order Billing <orders@amaz0n-billing.com>
+To: synth-user-01@corp.example
+Subject: Order cancelled: refund pending
+Date: Sun, 25 Oct 2026 09:00:00 +0000
+Message-ID: <p04-amaz0n-lookalike@synth.example>
+MIME-Version: 1.0
+X-Synthetic: capability-gate demo S10; not a real message
+Content-Type: multipart/mixed; boundary="SYNTHBOUNDARY"
+
+--SYNTHBOUNDARY
+Content-Type: text/html; charset=utf-8
+
+<html><body><a href="https://amaz0n-billing.com/refund">Claim refund</a></body></html>
+--SYNTHBOUNDARY--

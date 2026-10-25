@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -224,6 +225,178 @@ def test_s09_expected_outage_count_follows_the_windows():
     assert (
         res["actual"]["blocked_during_outage"] == res["expected"]["calls_during_outage"]
     )
+
+
+# --- S10: phishing investigation replay ---------------------------------------
+# Pre-check, verdict floor and the human queue are local rules. A live model
+# is not in this path; verdicts and reasons come from the recorded fixture,
+# which deliberately says "benign" for the injection email and for one
+# link-swap email so that trusting it over the pre-check goes red.
+
+
+S10 = "S10-phishing-investigation"
+S10_INJECTION = "i01-body-injection"
+S10_HARD_RECORDED_BENIGN = "s04-linkswap-recorded-benign"
+
+
+def _s10_res(runner_override=None, **kwargs):
+    return st.run_scenario(_scn(S10), runner_override=runner_override, **kwargs)
+
+
+def test_s10_every_email_is_queued_and_injection_stays_flagged():
+    res = _s10_res()
+    assert "error" not in res["detail"], res["detail"]
+    assert res["status"] == "PASS", _failed(res)
+    verdicts = res["detail"]["verdicts"]
+    assert len(verdicts) >= 12
+    assert verdicts[S10_INJECTION] in ("phish", "suspicious")
+    assert verdicts[S10_HARD_RECORDED_BENIGN] in ("phish", "suspicious")
+    assert "body_prompt_injection" in res["detail"]["hard_fail"][S10_INJECTION]
+    assert res["actual"]["human_review_queue"] == res["actual"]["emails"]
+    assert res["actual"]["auto_safe"] == 0
+    assert res["actual"]["auto_closed"] == 0
+
+
+def test_s10_pack_mixes_all_three_verdicts():
+    rows = st._load_phishing_manifest()
+    kinds = {r["expected_verdict"] for r in rows}
+    assert kinds == {"phish", "suspicious", "benign"}
+    assert sum(r["injection"] for r in rows) == 1
+
+
+def test_s10_replay_receipt_has_token_usage_and_no_cost_figures():
+    res = _s10_res()
+    assert "error" not in res["detail"]
+    assert res["actual"]["replay"] == 1
+    assert set(res["token_usage"]) == {"input", "output", "cached"}
+    assert res["detail"]["receipt"]["human_decision"] == "pending"
+    blob = json.dumps(res["detail"]).lower()
+    for word in ("cost", "usd", "price", "$"):
+        assert word not in blob
+
+
+def test_s10_attachments_are_kept_by_hash_only():
+    parsed = st.parse_eml(st.PHISHING_DIR / "p05-html-attachment-linkswap.eml")
+    assert len(parsed["attachments"]) == 1
+    att = parsed["attachments"][0]
+    assert set(att) == {"filename", "content_type", "sha256"}
+    assert len(att["sha256"]) == 64
+
+
+@pytest.mark.parametrize(
+    "domain, want",
+    [
+        ("paypa1.com", True),
+        ("amaz0n-billing.com", True),
+        ("micr0soft.com", True),
+        ("paypal.com", False),
+        ("www.paypal.com", False),
+        ("corp.example", False),
+        ("amazon-synth.example", False),
+    ],
+)
+def test_s10_lookalike_check(domain, want):
+    assert st.is_lookalike(domain) is want
+
+
+def test_s10_link_text_vs_href_mismatch_is_a_hard_fail():
+    parsed = {
+        "from_domain": "corp.example",
+        "return_path_domain": "corp.example",
+        "reply_to_domain": "",
+        "links": [("https://intranet.corp.example/x", "https://evil.example/x")],
+        "body_text": "",
+    }
+    assert st.precheck(parsed) == ["link_text_href_mismatch"]
+    parsed["links"] = [("Open the doc", "https://evil.example/x")]
+    assert st.precheck(parsed) == []
+
+
+def test_s10_recorded_verdict_cannot_overrule_a_hard_fail():
+    assert st.apply_verdict(["lookalike_domain"], "benign") == "suspicious"
+    assert st.apply_verdict(["lookalike_domain"], "phish") == "phish"
+    assert st.apply_verdict([], None) == "suspicious"
+    assert st.apply_verdict([], "benign") == "benign"
+
+
+def test_mutation_s10_precheck_skipped_goes_red(monkeypatch):
+    # M1: no hard fail is ever raised, so the injection email takes the
+    # recorded "benign" it was written to produce.
+    monkeypatch.setattr(st, "precheck", lambda parsed: [])
+    res = _s10_res()
+    assert "error" not in res["detail"]
+    assert res["status"] == "FAIL"
+    assert res["detail"]["verdicts"][S10_INJECTION] == "benign"
+    assert res["actual"]["injection_flagged"] == 0
+    assert res["actual"]["hard_fail_flagged"] == 0
+
+
+def test_mutation_s10_injection_phrase_check_removed_goes_red(monkeypatch):
+    monkeypatch.setattr(st, "INJECTION_PHRASES", ())
+    res = _s10_res()
+    assert "error" not in res["detail"]
+    assert res["status"] == "FAIL"
+    assert res["actual"]["injection_flagged"] == 0
+
+
+def test_mutation_s10_recorded_verdict_trusted_over_hard_fail_goes_red(monkeypatch):
+    # M2: the recorded verdict wins even when the pre-check hard-failed.
+    monkeypatch.setattr(
+        st, "apply_verdict", lambda hard, recorded: recorded or "suspicious"
+    )
+    res = _s10_res()
+    assert "error" not in res["detail"]
+    assert res["status"] == "FAIL"
+    assert res["detail"]["verdicts"][S10_INJECTION] == "benign"
+    assert res["detail"]["verdicts"][S10_HARD_RECORDED_BENIGN] == "benign"
+    assert res["actual"]["verdicts_match"] < res["actual"]["emails"]
+
+
+def test_mutation_s10_auto_safe_goes_red(monkeypatch):
+    # M3a: benign verdicts are marked safe without a human.
+    monkeypatch.setattr(st, "auto_mark_safe", lambda item: item["verdict"] == "benign")
+    res = _s10_res()
+    assert "error" not in res["detail"]
+    assert res["status"] == "FAIL"
+    assert res["actual"]["auto_safe"] > 0
+    assert res["actual"]["human_review_queue"] < res["actual"]["emails"]
+
+
+def test_mutation_s10_human_queue_skipped_goes_red(monkeypatch):
+    # M3b: phish verdicts are closed without reaching the queue.
+    monkeypatch.setattr(st, "queue_for_human", lambda item: item["verdict"] != "phish")
+    res = _s10_res()
+    assert "error" not in res["detail"]
+    assert res["status"] == "FAIL"
+    assert res["actual"]["auto_closed"] > 0
+
+
+def test_s10_live_mode_is_refused(tmp_path):
+    p = tmp_path / "S10-live.yaml"
+    text = (HERE / "scenarios" / f"{S10}.yaml").read_text(encoding="utf-8")
+    p.write_text(text.replace("mode: replay\n", "mode: live\n", 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="replay"):
+        st.load_scenario(p)
+
+
+def test_s10_counts_that_disagree_with_the_pack_are_refused(tmp_path):
+    p = tmp_path / "S10-bad.yaml"
+    text = (HERE / "scenarios" / f"{S10}.yaml").read_text(encoding="utf-8")
+    p.write_text(
+        text.replace("hard_fail_emails: 9\n", "hard_fail_emails: 3\n", 1),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="hard_fail_emails"):
+        st.load_scenario(p)
+
+
+def test_s10_recorded_file_with_cost_is_refused(tmp_path):
+    data = json.loads(st.RECORDED_S10.read_text(encoding="utf-8"))
+    data["usd"] = 1
+    p = tmp_path / "rec.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="cost"):
+        st.load_recorded_s10(p)
 
 
 # --- README Proof check ------------------------------------------------------
