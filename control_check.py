@@ -233,7 +233,7 @@ def check(
     controls, verdict = [], "ALLOW"
     for key, req in profile.items():
         now = unmet(req, new, old)
-        before = unmet(req, old) if "no_new_grants" not in req.obligations else []
+        before = unmet(req, old)
         status = "KEPT" if not now else ("UNMET" if before else "DROPPED")
         v = "ALLOW" if not now else ("DENY" if req.level == "mandatory" else "ASK")
         verdict = max(verdict, v, key=_RANK.get)
@@ -295,9 +295,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         catalog = load_catalog(_read(a.catalog))
         profile = load_profile(_read(a.profile), catalog)
-        old_profile = (
-            load_profile(_read(a.old_profile), catalog) if a.old_profile else None
-        )
+        old_profile = None
+        if a.old_profile is not None:
+            if not a.old_profile.strip():
+                raise PolicyError("--old-profile must be a non-empty path")
+            old_profile = load_profile(_read(a.old_profile), catalog)
         report = check(
             load_policy(_read(a.old_policy)),
             load_policy(_read(a.new_policy)),

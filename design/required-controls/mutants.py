@@ -129,6 +129,59 @@ MUTANTS = [
     ),
     ("fewer tools still covers", "val <= cur[name]", "True"),
     ("no warning for ungranted approval", "if t not in either", "if False"),
+    (
+        "cli old-profile ignored",
+        "            old_profile = load_profile(_read(a.old_profile), catalog)\n",
+        "            old_profile = None\n",
+    ),
+    (
+        "cli old-profile truthy check",
+        "        if a.old_profile is not None:\n",
+        "        if a.old_profile:\n",
+    ),
+    (
+        "cli empty old-profile allowed",
+        "            if not a.old_profile.strip():\n",
+        "            if False:\n",
+    ),
+    (
+        "mixed no_new_grants forces DROPPED",
+        "        before = unmet(req, old)\n",
+        "        before = []\n",
+    ),
+    (
+        "catalog empty list ok",
+        "        isinstance(rows, list) and rows, \"catalog: 'controls' must be a non-empty list\"",
+        "        isinstance(rows, list), \"catalog: 'controls' must be a non-empty list\"",
+    ),
+    (
+        "catalog row-is-mapping off",
+        '_need(isinstance(row, Mapping), "catalog: each control must be a mapping")',
+        '_need(True, "catalog: each control must be a mapping")',
+    ),
+    (
+        "top mapping check off",
+        '_need(isinstance(mapping, Mapping), f"{where}: must be a mapping")',
+        '_need(True, f"{where}: must be a mapping")',
+    ),
+    (
+        "isolate-leave drops still filter",
+        (
+            '        f"tool {t!r} leaves isolate while still granted"\n'
+            "        for t in sorted(old.isolate - new.isolate)\n"
+            "        if t in still"
+        ),
+        (
+            '        f"tool {t!r} leaves isolate while still granted"\n'
+            "        for t in sorted(old.isolate - new.isolate)"
+        ),
+    ),
+    ("superset obligations refused", "val <= cur[name]", "val == cur[name]"),
+    (
+        "non-str tool list ok",
+        "        and all(isinstance(t, str) and t for t in value),",
+        "        and all(True for t in value),",
+    ),
 ]
 
 RUN = (

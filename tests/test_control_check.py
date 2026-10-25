@@ -68,7 +68,7 @@ def test_unchanged_policy_allows():
 
 
 def test_granted_tool_dropped_from_approval_denies():
-    """Review finding F2: terminal granted and removed from require_approval went ASK to ALLOW silently."""
+    """terminal granted and removed from require_approval went ASK to ALLOW silently."""
     r = _run(_edit(lambda m: m["require_approval"].remove("terminal")))
     assert r["verdict"] == "DENY"
     art14 = _status(r, "eu-ai-act-art-14-4")
@@ -91,7 +91,7 @@ def test_same_drop_under_an_adopted_control_asks():
 
 
 def test_approval_dropped_for_a_tool_no_skill_grants_allows():
-    """Review correction: an approval for an ungranted tool is inert, so dropping it widens nothing."""
+    """An approval for an ungranted tool is inert, so dropping it widens nothing."""
     r = _run(_edit(lambda m: m["require_approval"].remove("execute_code")))
     assert r["verdict"] == "ALLOW"
 
@@ -155,6 +155,26 @@ def test_granting_a_never_granted_tool_asks_or_denies_by_level():
 def test_control_unmet_before_and_after_is_unmet_not_allowed():
     old = _edit(lambda m: m["require_approval"].remove("terminal"))
     r = _run(old, old=old)
+    art14 = _status(r, "eu-ai-act-art-14-4")
+    assert (art14["status"], r["verdict"]) == ("UNMET", "DENY")
+
+
+def test_mixed_no_new_grants_unmet_in_both_is_unmet_not_dropped():
+    """A row with no_new_grants plus another obligation stays UNMET when both sides fail it."""
+    prof = _profile(
+        [
+            {
+                "control": "eu-ai-act-art-14-4",
+                "level": "mandatory",
+                "obligations": {
+                    "approval_for": ["terminal"],
+                    "no_new_grants": True,
+                },
+            }
+        ]
+    )
+    old = _edit(lambda m: m["require_approval"].remove("terminal"))
+    r = _run(old, old=old, profile=prof)
     art14 = _status(r, "eu-ai-act-art-14-4")
     assert (art14["status"], r["verdict"]) == ("UNMET", "DENY")
 
@@ -289,6 +309,28 @@ def test_same_profile_on_both_sides_allows():
     assert _run(BASE, profile=PROFILE, old_profile=PROFILE)["verdict"] == "ALLOW"
 
 
+def test_profile_with_stronger_obligations_allows():
+    extra = _profile(
+        [
+            {
+                "control": "eu-ai-act-art-14-4",
+                "level": "mandatory",
+                "obligations": {"approval_for": ["terminal", "execute_code", "patch"]},
+            }
+        ]
+    )
+    old = _profile(
+        [
+            {
+                "control": "eu-ai-act-art-14-4",
+                "level": "mandatory",
+                "obligations": {"approval_for": ["terminal"]},
+            }
+        ]
+    )
+    assert _run(BASE, profile=extra, old_profile=old)["verdict"] == "ALLOW"
+
+
 # Isolation counts as a control
 
 NO_NEW_GRANTS = [
@@ -315,6 +357,13 @@ def test_tool_taken_out_of_isolate_is_widening():
 def test_tool_put_into_isolate_allows():
     r = _run(ISOLATED, old=HOST, profile=_profile(NO_NEW_GRANTS))
     assert r["verdict"] == "ALLOW"
+
+
+def test_ungranted_tool_leaving_isolate_is_not_widening():
+    isolated = _edit(lambda m: m.update(isolate=["camera"]))
+    r = _run(BASE, old=isolated, profile=_profile(NO_NEW_GRANTS))
+    assert r["verdict"] == "ALLOW"
+    assert cc.widening(_pol(isolated), _pol(BASE)) == []
 
 
 # Load errors fail loudly
@@ -374,6 +423,26 @@ BAD_PROFILES = [
                 "control": "atlas-aml-m0028",
                 "level": "adopted",
                 "obligations": {"approval_for": []},
+            }
+        ],
+    },
+    {
+        "version": 1,
+        "requires": [
+            {
+                "control": "atlas-aml-m0028",
+                "level": "adopted",
+                "obligations": {"approval_for": [1]},
+            }
+        ],
+    },
+    {
+        "version": 1,
+        "requires": [
+            {
+                "control": "atlas-aml-m0028",
+                "level": "adopted",
+                "obligations": {"approval_for": [""]},
             }
         ],
     },
@@ -489,6 +558,21 @@ def test_duplicate_catalog_key_is_a_policy_error():
     row = next(iter(CATALOG.values()))
     with pytest.raises(PolicyError):
         cc.load_catalog({"version": 1, "controls": [row, row]})
+
+
+def test_empty_catalog_list_is_a_policy_error():
+    with pytest.raises(PolicyError, match="non-empty"):
+        cc.load_catalog({"version": 1, "controls": []})
+
+
+def test_catalog_row_must_be_a_mapping():
+    with pytest.raises(PolicyError, match="mapping"):
+        cc.load_catalog({"version": 1, "controls": ["not-a-row"]})
+
+
+def test_catalog_root_must_be_a_mapping():
+    with pytest.raises(PolicyError, match="mapping"):
+        cc.load_catalog(["not-a-mapping"])
 
 
 def _dup(tmp_path):
@@ -620,3 +704,57 @@ def test_cli_any_load_error_exits_2_not_ask(tmp_path, capsys, text):
     args = [old, old, "--catalog", str(ROOT / "controls/catalog.yaml")]
     assert cc.main([*args, "--profile", str(bad)]) == 2
     assert json.loads(capsys.readouterr().out)["verdict"] == "DENY"
+
+
+def _cli_args(tmp_path, *, profile, old_profile=None):
+    old = _write(tmp_path, "old.yaml", BASE)
+    args = [
+        old,
+        _write(tmp_path, "new.yaml", BASE),
+        "--catalog",
+        str(ROOT / "controls/catalog.yaml"),
+        "--profile",
+        profile,
+    ]
+    if old_profile is not None:
+        args += ["--old-profile", old_profile]
+    return args
+
+
+def test_cli_old_profile_weakened_denies(tmp_path, capsys):
+    """A profile that drops a required control is DENY only when --old-profile is set."""
+    smaller = _write(
+        tmp_path,
+        "new-profile.yaml",
+        {
+            "version": 1,
+            "requires": [
+                {
+                    "control": "atlas-aml-m0028",
+                    "level": "adopted",
+                    "obligations": {"no_new_grants": True},
+                }
+            ],
+        },
+    )
+    old_prof = str(ROOT / "controls/profile.example.yaml")
+    assert cc.main(_cli_args(tmp_path, profile=smaller, old_profile=old_prof)) == 3
+    out = json.loads(capsys.readouterr().out)
+    assert out["verdict"] == "DENY"
+    assert any(c.get("status") == "PROFILE_DROPPED" for c in out["controls"])
+
+
+@pytest.mark.parametrize("path", ["", "   ", "\t"], ids=["empty", "spaces", "tab"])
+def test_cli_empty_old_profile_exits_2(tmp_path, capsys, path):
+    """--old-profile with an empty or whitespace path is malformed, not 'no old profile'."""
+    args = _cli_args(
+        tmp_path,
+        profile=str(ROOT / "controls/profile.example.yaml"),
+        old_profile=path,
+    )
+    assert cc.main(args) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["verdict"] == "DENY"
+    assert "error" in out
+    assert "old-profile" in out["error"].lower()
+    assert "empty" in out["error"].lower()
