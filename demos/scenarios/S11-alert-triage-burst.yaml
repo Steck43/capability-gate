@@ -1,0 +1,24 @@
+# 500 synthetic SIEM alerts: duplicate bursts plus one true positive in the
+# noise. Replay only: local dedup and rank, recorded reasons, no model call.
+# Close stays a human decision; the runner never auto-closes.
+name: S11-alert-triage-burst
+control: alert triage (dedup, rank, never auto-close)
+runner: alert_triage
+mode: replay
+seed: 1311
+actor: {agent_id: synth-agent-11, user_id: synth-user-01}
+traffic:
+  alerts: 500
+fault:
+  true_positives: 1
+  duplicate_families: 20
+  copies_per_family: 15
+expect:
+  alerts: alerts
+  unique_groups: alerts - burst_duplicates
+  duplicates_grouped: burst_duplicates
+  true_positive_in_top_3: 1
+  auto_closed: 0
+  close_recommended: 0
+  human_review_queue: alerts - burst_duplicates
+  replay: 1
