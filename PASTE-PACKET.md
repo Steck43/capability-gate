@@ -8,10 +8,10 @@ checkout. Do not push to main.
 | Field | Value |
 | --- | --- |
 | Branch | `steck43/control-check-cli-old-profile-febc` |
-| Head SHA | `08dc430d94e910f3abf842a05f0549da083d3908` |
+| Head SHA | `1e3f5a008db79d8f6fa24af8641c6d2f3f1e9575` |
 | Code SHA | `24fdf938e5cb93f5b781f723c4b75f0b581ecb4d` (behavior change) |
 | Base SHA | `13ada55fded50f2244ddabb52b4a2e2259e87a2a` (`main`, merge of #130) |
-| Draft PR | https://github.com/Steck43/capability-gate/pull/132 (draft; do not merge from this checkout) |
+| Draft PR | https://github.com/Steck43/capability-gate/pull/135 (draft; do not merge from this checkout). Closed #132 held the denylist hit. |
 | Remote | `origin` (`Steck43/capability-gate`) |
 
 Confirm with `git log --oneline 13ada55fded50f2244ddabb52b4a2e2259e87a2a..HEAD`.
