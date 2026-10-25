@@ -8,10 +8,10 @@ checkout. Do not push to main.
 | Field | Value |
 | --- | --- |
 | Branch | `steck43/control-check-cli-old-profile-febc` |
-| Head SHA | `63d9e5e7fcd7beafbb3948d3b291989da0dbbf03` |
+| Head SHA | `08dc430d94e910f3abf842a05f0549da083d3908` |
 | Code SHA | `24fdf938e5cb93f5b781f723c4b75f0b581ecb4d` (behavior change) |
 | Base SHA | `13ada55fded50f2244ddabb52b4a2e2259e87a2a` (`main`, merge of #130) |
-| Draft PR | https://github.com/Steck43/capability-gate/pull/132 (draft; do not merge from this agent) |
+| Draft PR | https://github.com/Steck43/capability-gate/pull/132 (draft; do not merge from this checkout) |
 | Remote | `origin` (`Steck43/capability-gate`) |
 
 Confirm with `git log --oneline 13ada55fded50f2244ddabb52b4a2e2259e87a2a..HEAD`.
