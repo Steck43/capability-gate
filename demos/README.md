@@ -22,11 +22,12 @@ Each YAML file has a `traffic:` block (what to generate) and an `expect:` block
 | S04 kill switch mid run | halt marker; every call after the throw is denied |
 | S08 receipt chain tamper | hash chain, witness; edit, truncate and delete are detected and the next append is refused |
 | S09 gate outage | hook fails closed while the policy store or log store is down |
+| S11 alert triage burst | 500 synthetic SIEM alerts; duplicates grouped, one true positive in the top 3, auto-closed == 0. Replay only: local rules plus recorded reasons, no model call. Lives in this repo's `demos/`, not a sibling workflow tree. |
 | S12 shadow vs enforce | observe mode records the same decisions, enforce blocks |
 | S14 isolate route | isolate verdict; each call goes through the plugin hook to the stub box door (`real: false`), each planted box outcome blocks with its own message, none run on the host |
 
 Not supported by the code at this commit (listed in `out/summary.json`):
-S05, S06, S10, S11, S13, the broken row index for S08 (the gate reports that
+S05, S06, S10, S13, the broken row index for S08 (the gate reports that
 the chain is broken, not where) and an alerts count for S01 (the gate has no
 alerting). S07 lives in the isolation-layer repo.
 
