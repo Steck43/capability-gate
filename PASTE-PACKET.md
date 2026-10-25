@@ -13,7 +13,7 @@ Sprint 2026-10-25 sprint task (S10). Feature branch only. Do not merge or push t
 
 - Branch: `steck43/s10-phishing-investigation-pc`
 - Base SHA: `13ada55fded50f2244ddabb52b4a2e2259e87a2a` (`main`). Independent of the S11 PR.
-- Head SHA: `0b79b45cb100bbdc65ebc228292fcfd59367366b`
+- Head SHA: `6467de15f857c55e676763bf5a510da67b203f3d`
 - Draft PR: see the draft on this branch
 
 ## What it does
