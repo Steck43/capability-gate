@@ -1,0 +1,17 @@
+{
+  "mode": "replay",
+  "model": "recorded",
+  "prompt_version": "s11-alert-triage-v1",
+  "reasons": {
+    "auth_anomaly": "Repeated sign-in failures on one synth host; treat as lockout noise until a human says otherwise.",
+    "edr_detection": "Endpoint detect without a matching grant; queue for a human.",
+    "impossible_travel": "Travel pair on one synth principal; rank above lockout noise, do not close.",
+    "new_admin_grant": "Admin grant without a matching endpoint detect; queue for a human.",
+    "true_positive": "Synthetic admin grant, impossible travel and endpoint detect on one principal."
+  },
+  "token_usage": {
+    "cached": 0,
+    "input": 0,
+    "output": 0
+  }
+}

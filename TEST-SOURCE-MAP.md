@@ -58,6 +58,7 @@ without line numbers.
 | T10 decider names no box word | `tests/test_fig1_box_uncalled.py` | `capability_gate.py` |
 | T11 wiring | `tests/test_live_wiring.py`, `tests/wiring_manifest.json` | `__init__.py::pre_tool_call`, `adapters/claude_code_hook.py::_pre` |
 | S14 and mutations | `demos/test_demos.py::test_mutation_s14_goes_red`, `demos/test_demos.py::test_mutation_s14_m7_lax_vestibule_door_goes_red` | `demos/synthtraffic.py::s_isolate` |
+| S11 alert triage replay | `demos/test_demos.py` S11 cases; `make demo-test` | `demos/synthtraffic.py::s_alert_triage` |
 
 ## Not measured
 

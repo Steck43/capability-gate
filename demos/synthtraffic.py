@@ -54,6 +54,8 @@ def load_scenario(path: Path) -> dict:
         # An empty expect block asserts nothing, so it would always PASS.
         raise ValueError(f"{path.name}: expect must name at least one count")
     data["_file"] = path.name
+    if data.get("runner") == "alert_triage":
+        validate_alert_triage_scenario(data, path.name)
     return data
 
 
@@ -1021,6 +1023,234 @@ def _lines(path: Path) -> list[str]:
     return [x for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
 
 
+# --- S11 alert triage replay (local rules, recorded reasons, no model) --------
+
+ALERT_KINDS = (
+    "auth_anomaly",
+    "impossible_travel",
+    "new_admin_grant",
+    "edr_detection",
+)
+SIGNAL_WEIGHT = {
+    "auth_anomaly": 1,
+    "impossible_travel": 3,
+    "new_admin_grant": 4,
+    "edr_detection": 4,
+}
+RECORDED_S11 = ROOT / "demos" / "samples" / "recorded" / "S11-alert-triage-burst.json"
+
+
+def validate_alert_triage_scenario(data: dict, label: str) -> dict:
+    """Refuse live mode and a burst that cannot fit in traffic.alerts."""
+    mode = data.get("mode", "replay")
+    if mode != "replay":
+        raise ValueError(
+            f"{label}: alert triage supports mode=replay only (got {mode!r})"
+        )
+    traffic = data.get("traffic") or {}
+    fault = data.get("fault") or {}
+    try:
+        alerts = int(traffic["alerts"])
+        tp = int(fault["true_positives"])
+        families = int(fault["duplicate_families"])
+        copies = int(fault["copies_per_family"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{label}: alert triage needs integer traffic.alerts and "
+            "fault.true_positives, duplicate_families, copies_per_family"
+        ) from exc
+    if alerts < 1:
+        raise ValueError(f"{label}: traffic.alerts must be >= 1")
+    if tp != 1:
+        raise ValueError(f"{label}: fault.true_positives must be 1")
+    if families < 1 or copies < 2:
+        raise ValueError(
+            f"{label}: need duplicate_families >= 1 and copies_per_family >= 2"
+        )
+    planted = tp + families * copies
+    if planted > alerts:
+        raise ValueError(
+            f"{label}: true_positives + duplicate_families * copies_per_family "
+            f"({planted}) exceeds alerts ({alerts})"
+        )
+    return {
+        "alerts": alerts,
+        "true_positives": tp,
+        "duplicate_families": families,
+        "copies_per_family": copies,
+        "unique_noise": alerts - planted,
+    }
+
+
+def load_recorded_s11(path: Path = RECORDED_S11) -> dict:
+    if not path.is_file():
+        raise ValueError(f"alert triage replay: recorded file missing: {path.name}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"alert triage replay: recorded file is not JSON: {exc}"
+        ) from exc
+    if not isinstance(data, dict) or "reasons" not in data:
+        raise ValueError(
+            "alert triage replay: recorded file must be a mapping with reasons"
+        )
+    usage = data.get("token_usage") or {}
+    if any(k in json.dumps(data).lower() for k in ("cost", "dollar", "usd", "price")):
+        raise ValueError("alert triage replay: recorded file must not carry cost figures")
+    if not isinstance(usage, dict):
+        raise ValueError("alert triage replay: token_usage must be a mapping")
+    return data
+
+
+def _noise_alert(kind: str, family: str) -> dict:
+    return {
+        "class": "noise",
+        "kind": kind,
+        "principal": f"synth-principal-{family}",
+        "host": f"synth-host-{family}",
+        "source": "synth-siem",
+        "signals": [kind],
+        "rule": f"synth-{kind}",
+    }
+
+
+def _true_positive_alert() -> dict:
+    # Three signals on one principal: the ranker must put this above single-signal noise.
+    return {
+        "class": "true_positive",
+        "kind": "new_admin_grant",
+        "principal": "synth-principal-tp",
+        "host": "synth-host-tp",
+        "source": "synth-siem",
+        "signals": ["new_admin_grant", "impossible_travel", "edr_detection"],
+        "rule": "synth-admin-grant-plus-travel-plus-edr",
+    }
+
+
+def generate_alerts(scn: dict, seed: int) -> list[dict]:
+    plan = validate_alert_triage_scenario(scn, scn.get("_file") or scn.get("name", "S11"))
+    rng = random.Random(seed)
+    alerts: list[dict] = []
+    for i in range(plan["unique_noise"]):
+        kind = ALERT_KINDS[rng.randrange(len(ALERT_KINDS))]
+        alerts.append(_noise_alert(kind, f"noise-{i:03d}"))
+    for i in range(plan["duplicate_families"]):
+        kind = ALERT_KINDS[rng.randrange(len(ALERT_KINDS))]
+        family = f"burst-{i:02d}"
+        n_copies = plan["copies_per_family"]
+        alerts.extend(_noise_alert(kind, family) for _ in range(n_copies))
+    alerts.append(_true_positive_alert())
+    rng.shuffle(alerts)
+    for i, alert in enumerate(alerts):
+        alert["id"] = f"alert-{i:04d}"
+    return alerts
+
+
+def fingerprint(alert: dict) -> str:
+    return f"{alert['principal']}|{alert['kind']}|{alert['host']}"
+
+
+def group_alerts(alerts: list[dict]) -> list[list[dict]]:
+    """Cluster by fingerprint. A mutation that returns one alert per cluster goes red."""
+    buckets: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for alert in alerts:
+        fp = fingerprint(alert)
+        if fp not in buckets:
+            buckets[fp] = []
+            order.append(fp)
+        buckets[fp].append(alert)
+    return [buckets[fp] for fp in order]
+
+
+def cluster_to_group(cluster: list[dict]) -> dict:
+    head = cluster[0]
+    signals: list[str] = []
+    cls = "noise"
+    for alert in cluster:
+        for sig in alert.get("signals") or []:
+            if sig not in signals:
+                signals.append(sig)
+        if alert.get("class") == "true_positive":
+            cls = "true_positive"
+            signals = list(alert["signals"])
+    return {
+        "fingerprint": fingerprint(head),
+        "kind": head["kind"],
+        "class": cls,
+        "principal": head["principal"],
+        "host": head["host"],
+        "signals": signals,
+        "members": [alert["id"] for alert in cluster],
+    }
+
+
+def severity_score(group: dict) -> int:
+    signals = list(group.get("signals") or [])
+    base = sum(SIGNAL_WEIGHT.get(sig, 0) for sig in signals)
+    return base + 10 * max(len(set(signals)) - 1, 0)
+
+
+def recommend_close(group: dict) -> bool:
+    # Close is a human decision. The runner never takes it.
+    return False
+
+
+def rank_groups(groups: list[dict]) -> list[dict]:
+    return sorted(groups, key=lambda g: (-severity_score(g), g["fingerprint"]))
+
+
+def digest_alerts(alerts: list[dict]) -> str:
+    norm = [
+        {k: alert[k] for k in ("id", "class", "kind", "principal", "host", "signals")}
+        for alert in alerts
+    ]
+    return hashlib.sha256(json.dumps(norm, sort_keys=True).encode()).hexdigest()
+
+
+def s_alert_triage(scn, sb, seed) -> Result:
+    recorded = load_recorded_s11()
+    alerts = generate_alerts(scn, seed)
+    groups = [cluster_to_group(cluster) for cluster in group_alerts(alerts)]
+    ranked = rank_groups(groups)
+    closed = [g for g in ranked if recommend_close(g)]
+    reasons = recorded.get("reasons") or {}
+    for group in ranked:
+        key = "true_positive" if group["class"] == "true_positive" else group["kind"]
+        group["reason"] = reasons.get(key, "queue for a human")
+    usage = recorded.get("token_usage") or {"input": 0, "output": 0, "cached": 0}
+    receipt = {
+        "human_decision": "pending",
+        "mode": "replay",
+        "model": recorded.get("model", "recorded"),
+        "prompt_version": recorded.get("prompt_version", "s11-alert-triage-v1"),
+        "token_usage": usage,
+        "workflow": "alert-triage",
+    }
+    a = {
+        "alerts": len(alerts),
+        "auto_closed": len(closed),
+        "close_recommended": sum(1 for g in ranked if recommend_close(g)),
+        "duplicates_grouped": len(alerts) - len(groups),
+        "human_review_queue": len(groups) - len(closed),
+        "replay": 1,
+        "true_positive_in_top_3": int(
+            any(g["class"] == "true_positive" for g in ranked[:3])
+        ),
+        "unique_groups": len(groups),
+    }
+    return Result(
+        a,
+        {
+            "events_sha256": digest_alerts(alerts),
+            "receipt": receipt,
+            "token_usage": usage,
+            "top3": [g["fingerprint"] for g in ranked[:3]],
+        },
+    )
+
+
 RUNNERS = {
     "policy": s_policy,
     "kill": s_kill,
@@ -1028,6 +1258,7 @@ RUNNERS = {
     "tamper": s_tamper,
     "outage": s_outage,
     "isolate": s_isolate,
+    "alert_triage": s_alert_triage,
 }
 
 
@@ -1052,6 +1283,12 @@ def check(scn: dict, actual: dict) -> list[dict]:
         inside = {i for i in calls for w in outages if w["start"] <= i < w["end"]}
         names["fault_outage_calls"] = len(inside)
         names["fault_outage_end"] = min(max(w["end"] for w in outages), len(calls))
+    fam = names.get("fault_duplicate_families")
+    copies = names.get("fault_copies_per_family")
+    if fam is not None and copies is not None:
+        # Extra copies in each burst, so changing families or copies moves
+        # the expected unique-group count with the traffic.
+        names["burst_duplicates"] = fam * max(copies - 1, 0)
     out = []
     for key, expr in scn["expect"].items():
         want = _eval_expr(expr, names)
@@ -1072,8 +1309,8 @@ def run_scenario(scn: dict, seed: int | None = None, runner_override=None) -> di
     sb = make_sandbox(scn["name"].split("-")[0])
     events = sum(int(v) for k, v in scn["traffic"].items() if isinstance(v, int))
     try:
-        runner = runner_override or RUNNERS[scn["runner"]]
         try:
+            runner = runner_override or RUNNERS[scn["runner"]]
             res = runner(scn, sb, seed)
         except Exception as exc:
             # A control that raises gives a FAIL row with the error, not a
@@ -1101,7 +1338,7 @@ def run_scenario(scn: dict, seed: int | None = None, runner_override=None) -> di
         "checks": checks,
         "status": "PASS" if all(c["ok"] for c in checks) else "FAIL",
         "detail": detail,
-        "token_usage": None,
+        "token_usage": res.detail.get("token_usage"),
     }
 
 
@@ -1163,7 +1400,14 @@ def main(argv=None) -> int:
         # Zero scenarios would make all_pass true over nothing.
         print(f"no scenario files in {args.scenarios}", file=sys.stderr)
         return 2
-    results = [run_scenario(load_scenario(f), args.seed) for f in files]
+    results = []
+    for f in files:
+        try:
+            scn = load_scenario(f)
+        except (ValueError, yaml.YAMLError) as exc:
+            print(f"{f.name}: {exc}", file=sys.stderr)
+            return 2
+        results.append(run_scenario(scn, args.seed))
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "runs").mkdir(exist_ok=True)
     for res in results:
@@ -1214,12 +1458,8 @@ NOT_SUPPORTED = [
         "reason": "phishing investigation workflow does not exist yet",
     },
     {
-        "scenario": "S11-alert-triage-burst",
-        "reason": "alert triage workflow does not exist yet",
-    },
-    {
         "scenario": "S13-token-usage",
-        "reason": "depends on S10 and S11 replay receipts, which do not exist yet",
+        "reason": "depends on S10 replay receipts, which do not exist yet; S11 records usage but S13 is not built",
     },
     {
         "scenario": "S08 exact broken index",

@@ -251,7 +251,8 @@ def test_s11_expected_group_count_follows_the_burst():
     assert res["status"] == "PASS", _failed(res)
     assert res["expected"]["duplicates_grouped"] == 90
     assert res["actual"]["duplicates_grouped"] == 90
-    assert res["actual"]["unique_groups"] < base["actual"]["unique_groups"]
+    assert res["actual"]["unique_groups"] == 410
+    assert base["actual"]["unique_groups"] == 220
 
 
 def test_s11_replay_receipt_has_no_cost_figures():
