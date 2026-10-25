@@ -14,7 +14,8 @@ This is `Steck43/capability-gate`. The path is `demos/` in this repo
 
 - Branch: `steck43/s11-alert-triage-replay-ff74`
 - Base SHA: `13ada55fded50f2244ddabb52b4a2e2259e87a2a` (`main`)
-- Head SHA: tip of that branch (`git rev-parse HEAD`; also on the draft PR)
+- Head SHA: `905fb73d1abca2343b58fe648730fb4033601fe7` (runner + docs; branch tip may sit one packet commit above this)
+- Draft PR: https://github.com/Steck43/capability-gate/pull/131
 
 RED then GREEN is on the branch: first commit is the failing assertions,
 later commit is the replay runner.
@@ -44,6 +45,10 @@ No API key. No network.
 
 `make demo-all` still needs the isolation-layer sibling for S14 (same as
 before). S11 itself does not.
+
+Verified on this branch: `make demo-all` 9/9 PASS, README Proof matches,
+`python3 -m pytest -q -p no:cacheprovider demos/` 64 passed (S11 included).
+Summary no longer lists S11 as unsupported.
 
 ## Proposed STATUS row
 
