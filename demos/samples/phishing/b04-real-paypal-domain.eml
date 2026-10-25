@@ -1,0 +1,16 @@
+Return-Path: <service@paypal.com>
+Authentication-Results: mx.corp.example; spf=pass dkim=pass dmarc=pass
+From: PayPal <service@paypal.com>
+To: synth-user-01@corp.example
+Subject: You sent a payment
+Date: Sun, 25 Oct 2026 09:00:00 +0000
+Message-ID: <b04-real-paypal-domain@synth.example>
+MIME-Version: 1.0
+X-Synthetic: capability-gate demo S10; not a real message
+Content-Type: multipart/mixed; boundary="SYNTHBOUNDARY"
+
+--SYNTHBOUNDARY
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Details at <a href="https://www.paypal.com/activity">https://www.paypal.com/activity</a></p></body></html>
+--SYNTHBOUNDARY--

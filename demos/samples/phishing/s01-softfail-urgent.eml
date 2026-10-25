@@ -1,0 +1,16 @@
+Return-Path: <payroll@hr-synth.example>
+Authentication-Results: mx.corp.example; spf=softfail dkim=none dmarc=none
+From: Payroll Team <payroll@hr-synth.example>
+To: synth-user-01@corp.example
+Subject: ACTION REQUIRED: confirm direct deposit
+Date: Sun, 25 Oct 2026 09:00:00 +0000
+Message-ID: <s01-softfail-urgent@synth.example>
+MIME-Version: 1.0
+X-Synthetic: capability-gate demo S10; not a real message
+Content-Type: multipart/mixed; boundary="SYNTHBOUNDARY"
+
+--SYNTHBOUNDARY
+Content-Type: text/html; charset=utf-8
+
+<html><body><a href="https://hr-synth.example/deposit">Confirm direct deposit</a></body></html>
+--SYNTHBOUNDARY--

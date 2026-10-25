@@ -1,0 +1,22 @@
+Return-Path: <ap@vendor-synth.example>
+Authentication-Results: mx.corp.example; spf=pass dkim=pass dmarc=pass
+From: Accounts <ap@vendor-synth.example>
+To: synth-user-01@corp.example
+Subject: Invoice 4471 overdue
+Date: Sun, 25 Oct 2026 09:00:00 +0000
+Message-ID: <p05-html-attachment-linkswap@synth.example>
+MIME-Version: 1.0
+X-Synthetic: capability-gate demo S10; not a real message
+Content-Type: multipart/mixed; boundary="SYNTHBOUNDARY"
+
+--SYNTHBOUNDARY
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Open the invoice or use <a href="https://files.drop-synth.example/i4471">https://portal.vendor-synth.example/invoices</a></p></body></html>
+--SYNTHBOUNDARY
+Content-Type: text/html; name="invoice-4471.html"
+Content-Disposition: attachment; filename="invoice-4471.html"
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGZvcm0gYWN0aW9uPSdodHRwczovL2ZpbGVzLmRyb3Atc3ludGguZXhhbXBsZS9jJz5zeW50aGV0aWM8L2Zvcm0+PC9odG1sPg==
+--SYNTHBOUNDARY--

@@ -1,0 +1,16 @@
+Return-Path: <calendar@corp.example>
+Authentication-Results: mx.corp.example; spf=pass dkim=pass dmarc=pass
+From: Calendar <calendar@corp.example>
+To: synth-user-01@corp.example
+Subject: Reminder: team sync 10:00
+Date: Sun, 25 Oct 2026 09:00:00 +0000
+Message-ID: <b03-calendar-notice@synth.example>
+MIME-Version: 1.0
+X-Synthetic: capability-gate demo S10; not a real message
+Content-Type: multipart/mixed; boundary="SYNTHBOUNDARY"
+
+--SYNTHBOUNDARY
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Team sync starts at 10:00 in room 3.</p></body></html>
+--SYNTHBOUNDARY--

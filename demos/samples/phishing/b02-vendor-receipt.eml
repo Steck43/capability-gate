@@ -1,0 +1,22 @@
+Return-Path: <receipts@vendor-synth.example>
+Authentication-Results: mx.corp.example; spf=pass dkim=pass dmarc=pass
+From: Receipts <receipts@vendor-synth.example>
+To: synth-user-01@corp.example
+Subject: Receipt for order 1182
+Date: Sun, 25 Oct 2026 09:00:00 +0000
+Message-ID: <b02-vendor-receipt@synth.example>
+MIME-Version: 1.0
+X-Synthetic: capability-gate demo S10; not a real message
+Content-Type: multipart/mixed; boundary="SYNTHBOUNDARY"
+
+--SYNTHBOUNDARY
+Content-Type: text/html; charset=utf-8
+
+<html><body><a href="https://portal.vendor-synth.example/r/1182">View receipt</a></body></html>
+--SYNTHBOUNDARY
+Content-Type: application/pdf; name="receipt-1182.pdf"
+Content-Disposition: attachment; filename="receipt-1182.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQgc3ludGhldGljIHJlY2VpcHQ=
+--SYNTHBOUNDARY--

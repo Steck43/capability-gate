@@ -1,0 +1,17 @@
+Return-Path: <ceo@corp.example>
+Authentication-Results: mx.corp.example; spf=pass dkim=pass dmarc=pass
+From: Synth CEO <ceo@corp.example>
+To: synth-user-01@corp.example
+Reply-To: ceo.private@corp-exec-mail.example
+Subject: Quick favor, wire today
+Date: Sun, 25 Oct 2026 09:00:00 +0000
+Message-ID: <p03-replyto-ceo-fraud@synth.example>
+MIME-Version: 1.0
+X-Synthetic: capability-gate demo S10; not a real message
+Content-Type: multipart/mixed; boundary="SYNTHBOUNDARY"
+
+--SYNTHBOUNDARY
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Are you at your desk? I need a wire sent before noon. Reply to this email only.</p></body></html>
+--SYNTHBOUNDARY--
