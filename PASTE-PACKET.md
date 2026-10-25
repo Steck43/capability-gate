@@ -8,7 +8,7 @@ checkout. Do not push to main.
 | Field | Value |
 | --- | --- |
 | Branch | `steck43/control-check-cli-nits-clean` |
-| Head SHA | `1c305654ce4115aa51e59a8539e8cd90f32bbb86` (refresh after this file if the tip moved) |
+| Head SHA | `87a2c351f93b8807225c48ea157c351d8732da1c` (refresh after this file if the tip moved) |
 | Code SHA | `c3308c35e7504a443ec126bf300cbb5ceac045f7` (behavior change) |
 | Base SHA | `13ada55fded50f2244ddabb52b4a2e2259e87a2a` (`main` at branch point; merge of #130) |
 | Draft PR | https://github.com/Steck43/capability-gate/pull/134 (draft; do not merge from this agent) |
