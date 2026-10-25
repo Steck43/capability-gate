@@ -101,6 +101,9 @@ seed; rerun `make demo-all` to get the same numbers. REAL means the row drives
 the real gate (S09 drives the real Claude Code hook as a subprocess). S14 is
 STUBBED: it drives the real gate and plugin hook, and the box door is the
 isolation-layer stub (`sandbox-demo route`, `real: false`), not a microVM.
+S11 is REAL: 500 synthetic SIEM alerts, local dedup and rank, recorded
+reasons, no model call. The path is this repo's `demos/`; there is no
+sibling defensive-workflows tree.
 
 <!-- proof:start -->
 | scenario | seed | result | REAL/STUBBED |
@@ -111,6 +114,7 @@ isolation-layer stub (`sandbox-demo route`, `real: false`), not a microVM.
 | S04-kill-switch-mid-run | 1304 | PASS | REAL |
 | S08-receipt-chain-tamper | 1308 | PASS | REAL |
 | S09-gate-outage | 1309 | PASS | REAL |
+| S11-alert-triage-burst | 1311 | PASS | REAL |
 | S12-shadow-vs-enforce | 1312 | PASS | REAL |
 | S14-isolate-route | 1414 | PASS | STUBBED |
 
@@ -122,6 +126,7 @@ Counts from the same run (`actual` in out/summary.json):
 - S04-kill-switch-mid-run, seed 1304: events=300, allowed_before_kill=137, calls_after_kill=163, calls_before_kill=137, chain_ok=1, denied_after_kill=163, executed_after_kill=0, halt_marker_present=1, kill_receipts=1
 - S08-receipt-chain-tamper, seed 1308: events=20, log_unchanged_after_refusal=3, next_append_refused=3, records_written=20, tamper_cases=3, tamper_detected=3
 - S09-gate-outage, seed 1309: events=60, allowed_outside_outage=38, blocked_during_outage=22, calls=60, calls_during_outage=22, decided_after_recovery=15, executed_during_outage=0
+- S11-alert-triage-burst, seed 1311: events=500, alerts=500, auto_closed=0, close_recommended=0, duplicates_grouped=280, human_review_queue=220, replay=1, true_positive_in_top_3=1, unique_groups=220
 - S12-shadow-vs-enforce, seed 1312: events=110, enforce_blocked=10, enforce_risky_executed=0, flagged_sets_identical=1, same_events_both_runs=1, shadow_executed=110, shadow_would_block=10
 - S14-isolate-route, seed 1414: events=59, advanced=6, benign_allowed=40, chain_ok=1, door_chain_rows=51, door_down_blocked=1, door_receipts_real=0, dropped=4, held=2, host_executed_isolate=0, isolate=19, kill_discarded=1, replay_refused=1, reuse_refused=1, routed=18, vestibule_rejected=4
 <!-- proof:end -->
@@ -136,10 +141,9 @@ here:
   it does not redact prompts or count redactions.
 - S06 PII in the audit log: there is no PII redaction on the log write path.
   Content is left out of the log, not redacted.
-- S10 phishing investigation and S11 alert triage: those workflows do not
-  exist yet.
-- S13 token usage: depends on S10 and S11 replay records, which do not exist
-  yet.
+- S10 phishing investigation: that workflow does not exist yet.
+- S13 token usage: depends on S10 replay records, which do not exist yet.
+  S11 writes usage on its receipt; S13 is not built.
 - A real microVM boot: the sandbox side lives in
   [isolation-layer](https://github.com/Steck43/isolation-layer), and its demo
   rows run on a stub VM host today.
