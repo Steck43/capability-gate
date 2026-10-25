@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -224,6 +225,105 @@ def test_s09_expected_outage_count_follows_the_windows():
     assert (
         res["actual"]["blocked_during_outage"] == res["expected"]["calls_during_outage"]
     )
+
+
+# --- S11: alert triage replay -------------------------------------------------
+# Dedup, rank and never-auto-close are local rules. A live model is not in
+# this path; reasons come from the recorded fixture.
+
+
+S11 = "S11-alert-triage-burst"
+
+
+def _s11_res(runner_override=None, **kwargs):
+    return st.run_scenario(_scn(S11), runner_override=runner_override, **kwargs)
+
+
+def test_s11_expected_group_count_follows_the_burst():
+    scn = _scn(S11)
+    base = st.run_scenario(scn)
+    assert "error" not in base["detail"]
+    moved = dict(scn)
+    moved["fault"] = {**scn["fault"], "duplicate_families": 10, "copies_per_family": 10}
+    # 500 - 1 TP - 10*10 copies = 399 unique noise; groups = 1+10+399 = 410
+    res = st.run_scenario(moved)
+    assert "error" not in res["detail"]
+    assert res["status"] == "PASS", _failed(res)
+    assert res["expected"]["duplicates_grouped"] == 90
+    assert res["actual"]["duplicates_grouped"] == 90
+    assert res["actual"]["unique_groups"] == 410
+    assert base["actual"]["unique_groups"] == 220
+
+
+def test_s11_replay_receipt_has_no_cost_figures():
+    res = _s11_res()
+    assert "error" not in res["detail"]
+    assert res["actual"]["replay"] == 1
+    usage = res["detail"]["token_usage"]
+    assert usage == {"cached": 0, "input": 0, "output": 0} or usage == {
+        "input": 0,
+        "output": 0,
+        "cached": 0,
+    }
+    blob = json.dumps(res["detail"]).lower()
+    assert "cost" not in blob
+    assert "$" not in blob
+
+
+def test_mutation_s11_no_dedup_goes_red(monkeypatch):
+    monkeypatch.setattr(st, "group_alerts", lambda alerts: [[a] for a in alerts])
+    res = _s11_res()
+    assert "error" not in res["detail"]
+    assert res["status"] == "FAIL"
+    assert res["actual"]["unique_groups"] == res["actual"]["alerts"]
+    assert res["actual"]["duplicates_grouped"] == 0
+
+
+def test_mutation_s11_ranking_flattened_goes_red(monkeypatch):
+    monkeypatch.setattr(st, "severity_score", lambda group: 0)
+    res = _s11_res()
+    assert "error" not in res["detail"]
+    assert res["status"] == "FAIL"
+    assert res["actual"]["true_positive_in_top_3"] == 0
+
+
+def test_mutation_s11_auto_closes_noise_goes_red(monkeypatch):
+    monkeypatch.setattr(
+        st, "recommend_close", lambda group: group.get("class") == "noise"
+    )
+    res = _s11_res()
+    assert "error" not in res["detail"]
+    assert res["status"] == "FAIL"
+    assert res["actual"]["auto_closed"] > 0
+    assert res["actual"]["close_recommended"] > 0
+
+
+def test_s11_live_mode_is_exit_2(tmp_path, capsys):
+    p = tmp_path / "S11-live.yaml"
+    text = (HERE / "scenarios" / f"{S11}.yaml").read_text(encoding="utf-8")
+    p.write_text(text.replace("mode: replay\n", "mode: live\n", 1), encoding="utf-8")
+    assert st.main(["run", str(p), "--out", str(tmp_path / "out")]) == 2
+    err = capsys.readouterr().err.lower()
+    assert "traceback" not in err
+    assert "replay" in err
+
+
+def test_s11_inconsistent_burst_is_exit_2(tmp_path, capsys):
+    p = tmp_path / "S11-bad.yaml"
+    text = (HERE / "scenarios" / f"{S11}.yaml").read_text(encoding="utf-8")
+    p.write_text(text.replace("alerts: 500\n", "alerts: 10\n", 1), encoding="utf-8")
+    assert st.main(["run", str(p), "--out", str(tmp_path / "out")]) == 2
+    err = capsys.readouterr().err.lower()
+    assert "traceback" not in err
+    assert "alerts" in err
+
+
+def test_s11_malformed_yaml_is_exit_2(tmp_path, capsys):
+    p = tmp_path / "S11-broken.yaml"
+    p.write_text("name: [\n", encoding="utf-8")
+    assert st.main(["run", str(p), "--out", str(tmp_path / "out")]) == 2
+    err = capsys.readouterr().err.lower()
+    assert "traceback" not in err
 
 
 # --- README Proof check ------------------------------------------------------
