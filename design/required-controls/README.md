@@ -38,18 +38,19 @@ a different question: did this edit drop a control the deployment depends on?
 ## Verdicts
 
 Per control: `KEPT` (met in new), `DROPPED` (met in old, not in new),
-`UNMET` (met in neither). An unmet mandatory control is DENY and an unmet
-adopted control is ASK. With `--old-profile`, a required control removed from
-the profile, lowered from mandatory to adopted, or kept with fewer
-obligations or tools than before is DENY. The overall verdict is the
-strictest.
+`UNMET` (met in neither, including a mixed row that carries `no_new_grants`
+plus another obligation that fails on both sides). An unmet mandatory control
+is DENY and an unmet adopted control is ASK. With `--old-profile`, a required
+control removed from the profile, lowered from mandatory to adopted, or kept
+with fewer obligations or tools than before is DENY. The overall verdict is
+the strictest.
 
 CLI exit codes: 0 ALLOW, 1 ASK, 3 DENY, and 2 for any error while loading or
 checking (malformed YAML, duplicate keys, unknown control, empty profile,
-unknown obligation, bad catalog row, missing file, or any other exception),
-which also prints DENY. Exit 1 means ASK: a person decides. A CI job should
-fail on any exit code other than 0, so a crash outside the check can never
-pass as ASK.
+an empty or whitespace `--old-profile`, unknown obligation, bad catalog row,
+missing file, or any other exception), which also prints DENY. Exit 1 means
+ASK: a person decides. A CI job should fail on any exit code other than 0,
+so a crash outside the check can never pass as ASK.
 
 The report also carries `warnings`: an `approval_for` tool that neither
 policy grants. Such an obligation is met by default, so a typo in a tool name
@@ -72,7 +73,7 @@ decision latency and the decision path are unchanged.
 ## Tests (`tests/test_control_check.py`)
 
 1. `test_unchanged_policy_allows`
-2. `test_granted_tool_dropped_from_approval_denies` (review finding F2)
+2. `test_granted_tool_dropped_from_approval_denies`
 3. `test_same_drop_under_an_adopted_control_asks`
 4. `test_approval_dropped_for_a_tool_no_skill_grants_allows`
 5. `test_new_tool_grant_is_widening`
@@ -105,16 +106,27 @@ decision latency and the decision path are unchanged.
 32. `test_tool_put_into_isolate_allows`
 33. `test_bad_catalog_top_level_is_a_policy_error` (3 shapes)
 34. `test_cli_any_load_error_exits_2_not_ask` (3 shapes)
+35. `test_cli_old_profile_weakened_denies`
+36. `test_cli_empty_old_profile_exits_2` (empty, spaces, tab)
+37. `test_mixed_no_new_grants_unmet_in_both_is_unmet_not_dropped`
+38. `test_empty_catalog_list_is_a_policy_error`
+39. `test_catalog_row_must_be_a_mapping`
+40. `test_catalog_root_must_be_a_mapping`
+41. `test_ungranted_tool_leaving_isolate_is_not_widening`
+42. `test_profile_with_stronger_obligations_allows`
 
-Each check has a mutant (the clause removed or inverted) that turns at least
-one of these red. `python design/required-controls/mutants.py` runs all 32
-and prints which were killed.
+Each mutant in `mutants.py` (a clause removed or inverted) turns at least
+one of these red. Near-equivalent catalog checks that a later fail-closed
+path would still catch are not claimed here. `python
+design/required-controls/mutants.py` runs the set and prints which were
+killed.
 
 ## Not done yet
 
 - CI wiring: run `control_check.py` on a pull request with the base branch's
-  allowlist as the old policy and the head's as the new one, and fail on any
-  exit code other than 0. That is a separate CI change.
+  allowlist as the old policy and the head's as the new one, the base
+  profile as `--old-profile`, and fail on any exit code other than 0. That
+  is a separate CI change.
 - The profile is an example. Which controls a deployment requires, and at
   what level, is an owner decision.
 - Obligations cover tool grants, approvals, isolation and path globs.
