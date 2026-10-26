@@ -11,6 +11,7 @@ Synthetic allowlists only; no network.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sys
@@ -163,6 +164,44 @@ def test_unwritable_log_folder_never_allows(box: Box, mode: str) -> None:
         assert d.enforced is (mode == ENFORCE)
     finally:
         box.logs.chmod(0o700)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_enospc_denies(box: Box, mode: str, monkeypatch) -> None:
+    """Class: a full disk on the decision log write still lets a call through."""
+    c = box.client(mode)
+    assert box.allow(c).verdict is Verdict.ALLOW
+    log = str(box.log())
+    before = box.log().read_bytes()
+    head = c.verify_log()
+
+    real_open, real_write = os.open, os.write
+    log_fds: set[int] = set()
+    hits: list[int] = []
+
+    def tracking_open(path, flags, *a, **k):
+        fd = real_open(path, flags, *a, **k)
+        if os.path.abspath(os.fspath(path)) == log and flags & os.O_APPEND:
+            log_fds.add(fd)
+        return fd
+
+    def full_disk_write(fd, data):
+        if fd in log_fds:
+            hits.append(fd)
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), log)
+        return real_write(fd, data)
+
+    monkeypatch.setattr(os, "open", tracking_open)
+    monkeypatch.setattr(os, "write", full_disk_write)
+    d = box.allow(c)
+    monkeypatch.undo()
+
+    assert hits, "ENOSPC was never raised on the decision log write"
+    assert d.verdict is Verdict.DENY
+    assert d.enforced is (mode == ENFORCE)
+    assert sdk.may_run(d) is (mode == OBSERVE)
+    assert box.log().read_bytes() == before
+    assert c.verify_log() == head
 
 
 # --- 1. check always asks the gate -------------------------------------------
