@@ -1,0 +1,163 @@
+# Claims the hire demo says out loud. ClaimGate (claimgate/claimgate.py)
+# lints this file in the tests job; a row whose status is above what its
+# enforcement, evidence and pins support fails CI. ClaimGate is CI on claims;
+# it is not Gate.evaluate.
+claims:
+  - claim_id: CG-DENY-UNGRANTED-TOOL
+    text: In enforce mode a tool not granted to the skill is denied and the demo host does not run it.
+    status: REAL
+    enforcement_path: capability_gate.py::_decide
+    evidence:
+      - tests/test_hire_demo.py::test_demo_deny_tool_not_granted
+    pins: [M-DENY-TOOL]
+  - claim_id: CG-DENY-OUTSIDE-PATH
+    text: A granted tool on a path outside the skill's globs is denied.
+    status: REAL
+    enforcement_path: capability_gate.py::_decide
+    evidence:
+      - tests/test_hire_demo.py::test_demo_deny_path_outside
+    pins: [M-DENY-PATH]
+  - claim_id: CG-DENY-CANARY
+    text: The canary secret file is denied even inside a grant.
+    status: REAL
+    enforcement_path: capability_gate.py::_canary_secret
+    evidence:
+      - tests/test_hire_demo.py::test_demo_deny_canary
+    pins: [M-DENY-CANARY]
+  - claim_id: CG-DENY-PROTECTED-ENV
+    text: A .env or .aegis path is denied even inside a grant.
+    status: REAL
+    enforcement_path: capability_gate.py::_protected_path
+    evidence:
+      - tests/test_hire_demo.py::test_demo_deny_protected_env
+    pins: [M-DENY-PROTECTED]
+  - claim_id: CG-KILL-DENIES-ALL
+    text: After the kill switch is thrown every tool call to that gate is denied with no restart, and executed_after_kill is 0 in enforce mode.
+    status: REAL
+    enforcement_path: capability_gate.py::Gate._kill_switch
+    evidence:
+      - tests/test_hire_demo.py::test_demo_kill_every_tool_denied
+      - tests/test_hire_kill_proof.py::test_after_throw_every_tool_denied_logged_and_chain_verifies
+      - tests/test_hire_kill_proof.py::test_throw_from_another_process_stops_running_gate
+    pins: [M-KILL-CHECK, M-KILL-MARKER-READ, M-DEMO-HOST]
+  - claim_id: CG-KILL-LOGGED-CHAIN-VERIFIES
+    text: The throw and every denied call after it are rows on the hash chain, and the chain still verifies, including against an anchor kept outside the log folder.
+    status: REAL
+    enforcement_path: capability_gate.py::Gate.throw
+    evidence:
+      - tests/test_hire_demo.py::test_demo_kill_rows_logged_and_thrown_row
+      - tests/test_hire_kill_proof.py::test_throw_row_keeps_operator_anchor_in_step
+      - tests/test_hire_kill_proof.py::test_every_post_throw_call_has_its_own_row
+    pins: [M-KILL-THROWN-ROW, M-KILL-ANCHOR-STEP, M-DENY-LOGGED]
+  - claim_id: CG-FAILCLOSED-GATE-ERROR
+    text: An error inside evaluate is a logged DENY, not an allow.
+    status: REAL
+    enforcement_path: capability_gate.py::Gate.evaluate
+    evidence:
+      - tests/test_hire_demo.py::test_demo_fail_closed_gate_error
+    pins: [M-FAILCLOSED-ERROR]
+  - claim_id: CG-FAILCLOSED-POLICY
+    text: A malformed allowlist is refused at load instead of loading as a wider grant.
+    status: REAL
+    enforcement_path: capability_gate.py::load_policy
+    evidence:
+      - tests/test_hire_demo.py::test_demo_fail_closed_policy
+    pins: [M-FAILCLOSED-POLICY]
+  - claim_id: CG-FAILCLOSED-LOG-FOLDER
+    text: If the decision log folder is removed, a granted call is denied and the folder is not silently re-created.
+    status: REAL
+    enforcement_path: capability_gate.py::Gate._halt_state
+    evidence:
+      - tests/test_hire_demo.py::test_demo_fail_closed_log_folder
+    pins: [M-FAILCLOSED-FOLDER]
+  - claim_id: CG-FORGE-REJECTED
+    text: Rewriting, deleting, inserting or truncating a decision log row fails verification and the gate refuses to append onto it.
+    status: REAL
+    enforcement_path: capability_gate.py::_verify_log
+    evidence:
+      - tests/test_hire_forge.py::test_forge_attack_rejected
+      - tests/test_hire_forge.py::test_forge_attack_matrix_on_log_sizes
+    pins: [M-CHAIN-PARENT, M-CHAIN-WITNESS, M-CHAIN-ANCHOR]
+  - claim_id: CG-FORGE-NAMES-ROW
+    text: The forge audit names the first row whose parent link breaks.
+    status: REAL
+    enforcement_path: demos/hire/forge_audit.py::first_bad_row
+    evidence:
+      - tests/test_hire_forge.py::test_forge_every_single_row_rewrite_rejected_at_its_row
+    pins: [M-FORGE-BADROW]
+  - claim_id: CG-FORGE-FULL-FOLDER-LIMIT
+    text: An attacker who rewrites the log, witness and anchor in one folder passes verification; keep the anchor outside the agent's reach or use the signed checkpoint.
+    status: PARTIAL
+    enforcement_path: demos/hire/forge_audit.py::run
+    evidence:
+      - tests/test_hire_forge.py::test_forge_honest_limit_is_reported
+      - tests/test_hire_forge.py::test_forge_external_anchor_rejects_full_rewrite
+  - claim_id: CG-OBSERVE-LOGS-ONLY
+    text: Observe mode logs the true verdict with enforced false and blocks nothing.
+    status: REAL
+    enforcement_path: capability_gate.py::Gate.evaluate
+    evidence:
+      - tests/test_hire_demo.py::test_demo_observe_is_honest
+    pins: [M-OBSERVE-ENFORCED]
+  - claim_id: CG-DECISION-RECORD-BOUND
+    text: A CISO decision record is accepted only when its receipt matches a row of a decision log that still verifies; a missing receipt, a forged field, a rehashed forgery, an expired record or a rewritten log is rejected.
+    status: REAL
+    enforcement_path: demos/hire/decision_record.py::validate
+    evidence:
+      - tests/test_hire_decision_record.py::test_real_record_accepts
+      - tests/test_hire_decision_record.py::test_forged_receipt_field_rejects_rehashed
+      - tests/test_hire_decision_record.py::test_rewriting_an_unbound_row_still_rejects
+      - tests/test_hire_decision_record.py::test_demo_passes_every_case
+    pins: [M-RECORD-ROWHASH, M-RECORD-FIELDS, M-RECORD-CHAIN, M-RECORD-ACTION-HASH, M-RECORD-EXPIRY]
+  - claim_id: CG-DECISION-RECORD-AFTER-THE-FACT
+    text: The decision record is checked after the fact; the runtime gate does not read it, so approve-then-run on the live path is not built.
+    status: PARTIAL
+    enforcement_path: demos/hire/decision_record.py::validate
+    evidence:
+      - tests/test_hire_decision_record.py::test_record_is_not_read_by_gate_evaluate
+  - claim_id: CG-SHADOW-ENFORCE-SCHEMA
+    text: The shadow to enforce metric template is a closed JSON Schema that refuses a missing, mistyped, negative or unknown field; no command emits it yet.
+    status: REAL
+    enforcement_path: tests/test_hire_shadow_enforce_schema.py::errors
+    evidence:
+      - tests/test_hire_shadow_enforce_schema.py::test_contract_field_is_required
+      - tests/test_hire_shadow_enforce_schema.py::test_contract_object_is_closed
+      - tests/test_hire_shadow_enforce_schema.py::test_document_filled_from_s12_validates
+    pins: [M-SCHEMA-REQUIRED, M-SCHEMA-CLOSED, M-SCHEMA-MINIMUM]
+  - claim_id: CG-LIVE-HOOK-COVERAGE
+    text: A live harness hook calls this gate on each tool call in a real session.
+    status: PLANNED
+    enforcement_path: ""
+    evidence: []
+  - claim_id: CLAIMGATE-OVERREACH-FAILS
+    text: ClaimGate fails CI when a claim's status is above what its enforcement path, evidence tests and pins support.
+    status: REAL
+    enforcement_path: claimgate/claimgate.py::check_row
+    evidence:
+      - tests/test_claimgate.py::test_red_fixture_is_red_with_overreach
+      - tests/test_claimgate.py::test_overreach_real_without_pins
+    pins: [M-CG-OVERREACH, M-CG-PINS-REQUIRED]
+  - claim_id: CLAIMGATE-DANGLING-REFS-FAIL
+    text: ClaimGate fails a claim whose evidence test, enforcement symbol or pin does not exist.
+    status: REAL
+    enforcement_path: claimgate/claimgate.py::Resolver
+    evidence:
+      - tests/test_claimgate.py::test_evidence_missing_test_flagged
+      - tests/test_claimgate.py::test_enforcement_missing_symbol_flagged
+      - tests/test_claimgate.py::test_pin_wrong_claim_flagged
+    pins: [M-CG-EVIDENCE, M-CG-ENFORCEMENT, M-CG-PIN-REF]
+  - claim_id: CLAIMGATE-NAME-FENCE
+    text: ClaimGate refuses claim text that merges its own name with the runtime gate decision call.
+    status: REAL
+    enforcement_path: claimgate/claimgate.py::check_row
+    evidence:
+      - tests/test_claimgate.py::test_name_fence
+    pins: [M-CG-NAME-FENCE]
+  - claim_id: CLAIMGATE-THEATER-WORDS
+    text: ClaimGate refuses theater wording and needs REAL status for absolute wording.
+    status: REAL
+    enforcement_path: claimgate/claimgate.py::check_row
+    evidence:
+      - tests/test_claimgate.py::test_theater_words
+      - tests/test_claimgate.py::test_absolute_needs_real
+    pins: [M-CG-THEATER, M-CG-ABSOLUTE]

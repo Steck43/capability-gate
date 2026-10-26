@@ -1,0 +1,245 @@
+# Fail-when-removed pins. Each mutant deletes or flips one control the hire
+# demo asserts. demos/hire/pins.py applies it to a scratch copy of the tree,
+# runs the listed tests, and the pin holds only when those tests go red
+# (pytest exit 1) while the same tests pass on the unmutated copy.
+# ClaimGate reads this file: a REAL claim must list at least one pin here.
+mutants:
+  - id: M-DENY-TOOL
+    claim_id: CG-DENY-UNGRANTED-TOOL
+    file: capability_gate.py
+    find: "    if tool not in rule.tools:\n"
+    replace: "    if False:\n"
+    tests:
+      - tests/test_hire_demo.py::test_demo_deny_tool_not_granted
+  - id: M-DENY-PATH
+    claim_id: CG-DENY-OUTSIDE-PATH
+    file: capability_gate.py
+    find: "        if not _path_allowed(p, rule.path_globs):\n"
+    replace: "        if False:\n"
+    tests:
+      - tests/test_hire_demo.py::test_demo_deny_path_outside
+  - id: M-DENY-CANARY
+    claim_id: CG-DENY-CANARY
+    file: capability_gate.py
+    find: "        if _canary_secret(p):\n"
+    replace: "        if False:\n"
+    tests:
+      - tests/test_hire_demo.py::test_demo_deny_canary
+  - id: M-DENY-PROTECTED
+    claim_id: CG-DENY-PROTECTED-ENV
+    file: capability_gate.py
+    find: "        if _protected_path(p):\n"
+    replace: "        if False:\n"
+    tests:
+      - tests/test_hire_demo.py::test_demo_deny_protected_env
+  - id: M-KILL-CHECK
+    claim_id: CG-KILL-DENIES-ALL
+    file: capability_gate.py
+    find: "            halted = self._kill_switch(str(skill), str(tool), path_list, base_dir)\n"
+    replace: "            halted = None\n"
+    tests:
+      - tests/test_hire_demo.py::test_demo_kill_every_tool_denied
+      - tests/test_hire_kill_proof.py::test_every_post_throw_call_has_its_own_row
+  - id: M-KILL-MARKER-READ
+    claim_id: CG-KILL-DENIES-ALL
+    file: capability_gate.py
+    find: "            return f\"kill switch thrown: {path} exists; a human removes it\"\n"
+    replace: "            continue\n"
+    tests:
+      - tests/test_hire_kill_proof.py::test_throw_from_another_process_stops_running_gate
+  - id: M-KILL-THROWN-ROW
+    claim_id: CG-KILL-LOGGED-CHAIN-VERIFIES
+    file: capability_gate.py
+    find: "        self._log(decision)\n        return True\n"
+    replace: "        return True\n"
+    tests:
+      - tests/test_hire_demo.py::test_demo_kill_rows_logged_and_thrown_row
+  - id: M-KILL-ANCHOR-STEP
+    claim_id: CG-KILL-LOGGED-CHAIN-VERIFIES
+    file: capability_gate.py
+    find: "        self._log(decision)\n        return True\n"
+    replace: "        record_decision(self._log_path, self._mode, decision)\n        return True\n"
+    tests:
+      - tests/test_hire_kill_proof.py::test_throw_row_keeps_operator_anchor_in_step
+  - id: M-DENY-LOGGED
+    claim_id: CG-KILL-LOGGED-CHAIN-VERIFIES
+    file: capability_gate.py
+    find: "            if not self._log_folder_lost:\n                self._log(decision, trace=norm_trace, arg_summary=arg_summary)\n"
+    replace: "            if False:\n                pass\n"
+    tests:
+      - tests/test_hire_kill_proof.py::test_every_post_throw_call_has_its_own_row
+  - id: M-FAILCLOSED-ERROR
+    claim_id: CG-FAILCLOSED-GATE-ERROR
+    file: capability_gate.py
+    find: "                Verdict.DENY,\n                f\"gate error, failing closed: {exc!r}\",\n"
+    replace: "                Verdict.ALLOW,\n                f\"gate error, failing closed: {exc!r}\",\n"
+    tests:
+      - tests/test_hire_demo.py::test_demo_fail_closed_gate_error
+  - id: M-FAILCLOSED-POLICY
+    claim_id: CG-FAILCLOSED-POLICY
+    file: capability_gate.py
+    find: "            raise PolicyError(f\"skill '{name}': 'tools' must be a list\")\n"
+    replace: "            tools = list(tools)\n"
+    tests:
+      - tests/test_hire_demo.py::test_demo_fail_closed_policy
+  - id: M-FAILCLOSED-FOLDER
+    claim_id: CG-FAILCLOSED-LOG-FOLDER
+    file: capability_gate.py
+    find: "        if self._log_dir_token is None or _folder_token(log_dir) != self._log_dir_token:\n"
+    replace: "        if False:\n"
+    tests:
+      - tests/test_hire_demo.py::test_demo_fail_closed_log_folder
+  - id: M-CHAIN-PARENT
+    claim_id: CG-FORGE-REJECTED
+    file: capability_gate.py
+    find: "            if rec.get(\"parent\") != prev:\n"
+    replace: "            if False:\n"
+    tests:
+      - tests/test_hire_forge.py::test_forge_rewrite_mid_names_row
+  - id: M-CHAIN-WITNESS
+    claim_id: CG-FORGE-REJECTED
+    file: capability_gate.py
+    find: "    if witness is not None and (witness[\"count\"] != count or witness[\"head\"] != prev):\n"
+    replace: "    if False:\n"
+    tests:
+      - tests/test_hire_forge.py::test_forge_rewrite_last_caught_by_witness
+  - id: M-CHAIN-ANCHOR
+    claim_id: CG-FORGE-REJECTED
+    file: capability_gate.py
+    find: "    if anchor is not None and (anchor[\"count\"] != count or anchor[\"head\"] != prev):\n        raise ValueError(\n            \"audit log does not match its anchor"
+    replace: "    if False:\n        raise ValueError(\n            \"audit log does not match its anchor"
+    tests:
+      - tests/test_hire_forge.py::test_forge_rechain_witness_caught_by_anchor
+  - id: M-FORGE-BADROW
+    claim_id: CG-FORGE-NAMES-ROW
+    file: demos/hire/forge_audit.py
+    find: "        if rec.get(\"parent\") != prev:\n"
+    replace: "        if False:\n"
+    tests:
+      - tests/test_hire_forge.py::test_forge_every_single_row_rewrite_rejected_at_its_row
+  - id: M-OBSERVE-ENFORCED
+    claim_id: CG-OBSERVE-LOGS-ONLY
+    file: capability_gate.py
+    find: "            decision = replace(decision, enforced=(self._mode == ENFORCE))\n            if decision.verdict is Verdict.ISOLATE"
+    replace: "            decision = replace(decision, enforced=True)\n            if decision.verdict is Verdict.ISOLATE"
+    tests:
+      - tests/test_hire_demo.py::test_demo_observe_is_honest
+  - id: M-DEMO-HOST
+    claim_id: CG-KILL-DENIES-ALL
+    file: demos/hire/hire_demo.py
+    find: "    return decision.verdict is cg.Verdict.ALLOW\n"
+    replace: "    return True\n"
+    tests:
+      - tests/test_hire_demo.py::test_demo_kill_every_tool_denied
+  - id: M-CG-OVERREACH
+    claim_id: CLAIMGATE-OVERREACH-FAILS
+    file: claimgate/claimgate.py
+    find: "    if STATUS_RANK[status] > STATUS_RANK[can]:\n"
+    replace: "    if False:\n"
+    tests:
+      - tests/test_claimgate.py::test_red_fixture_is_red_with_overreach
+  - id: M-CG-PINS-REQUIRED
+    claim_id: CLAIMGATE-OVERREACH-FAILS
+    file: claimgate/claimgate.py
+    find: "    pins_ok = bool(pins) and all("
+    replace: "    pins_ok = True or all("
+    tests:
+      - tests/test_claimgate.py::test_overreach_real_without_pins
+  - id: M-CG-EVIDENCE
+    claim_id: CLAIMGATE-DANGLING-REFS-FAIL
+    file: claimgate/claimgate.py
+    find: "        why = res.evidence(e)\n"
+    replace: "        why = None\n"
+    tests:
+      - tests/test_claimgate.py::test_evidence_missing_test_flagged
+  - id: M-CG-ENFORCEMENT
+    claim_id: CLAIMGATE-DANGLING-REFS-FAIL
+    file: claimgate/claimgate.py
+    find: "        why = res.enforcement(enf)\n"
+    replace: "        why = None\n"
+    tests:
+      - tests/test_claimgate.py::test_enforcement_missing_symbol_flagged
+  - id: M-CG-PIN-REF
+    claim_id: CLAIMGATE-DANGLING-REFS-FAIL
+    file: claimgate/claimgate.py
+    find: "        why = res.pin(p, cid)\n"
+    replace: "        why = None\n"
+    tests:
+      - tests/test_claimgate.py::test_pin_wrong_claim_flagged
+  - id: M-CG-NAME-FENCE
+    claim_id: CLAIMGATE-NAME-FENCE
+    file: claimgate/claimgate.py
+    find: "    if NAME_FENCE.search(text) or NAME_FENCE.search(enf):\n"
+    replace: "    if False:\n"
+    tests:
+      - tests/test_claimgate.py::test_name_fence
+  - id: M-CG-THEATER
+    claim_id: CLAIMGATE-THEATER-WORDS
+    file: claimgate/claimgate.py
+    find: "        if word in low:\n"
+    replace: "        if False:\n"
+    tests:
+      - tests/test_claimgate.py::test_theater_words
+  - id: M-CG-ABSOLUTE
+    claim_id: CLAIMGATE-THEATER-WORDS
+    file: claimgate/claimgate.py
+    find: "    if ABSOLUTE.search(text) and status != \"REAL\" and status != \"RETIRED\":\n"
+    replace: "    if False:\n"
+    tests:
+      - tests/test_claimgate.py::test_absolute_needs_real
+  - id: M-RECORD-ROWHASH
+    claim_id: CG-DECISION-RECORD-BOUND
+    file: demos/hire/decision_record.py
+    find: "    if cg._hash_log_line(line) != rc[\"row_sha256\"]:\n"
+    replace: "    if False:\n"
+    tests:
+      - tests/test_hire_decision_record.py::test_forged_receipt_field_rejects_rehashed
+  - id: M-RECORD-FIELDS
+    claim_id: CG-DECISION-RECORD-BOUND
+    file: demos/hire/decision_record.py
+    find: "        if row.get(k) != rc[k]:\n"
+    replace: "        if False:\n"
+    tests:
+      - tests/test_hire_decision_record.py::test_forged_receipt_field_rejects_rehashed
+  - id: M-RECORD-CHAIN
+    claim_id: CG-DECISION-RECORD-BOUND
+    file: demos/hire/decision_record.py
+    find: "        cg.verify_hash_chain(str(log_path))\n    except Exception as exc:\n"
+    replace: "        pass\n    except Exception as exc:\n"
+    tests:
+      - tests/test_hire_decision_record.py::test_rewriting_an_unbound_row_still_rejects
+  - id: M-RECORD-ACTION-HASH
+    claim_id: CG-DECISION-RECORD-BOUND
+    file: demos/hire/decision_record.py
+    find: "    if record[\"action_hash\"] != action_hash(record[\"decision\"], rc):\n"
+    replace: "    if False:\n"
+    tests:
+      - tests/test_hire_decision_record.py::test_changed_decision_text_rejects
+  - id: M-RECORD-EXPIRY
+    claim_id: CG-DECISION-RECORD-BOUND
+    file: demos/hire/decision_record.py
+    find: "    elif na <= now:\n"
+    replace: "    elif False:\n"
+    tests:
+      - tests/test_hire_decision_record.py::test_bad_or_past_not_after_rejects
+  - id: M-SCHEMA-REQUIRED
+    claim_id: CG-SHADOW-ENFORCE-SCHEMA
+    file: demos/hire/shadow_enforce_metrics.schema.json
+    find: "\"required\": [\"calls\", \"blocked\", \"risky_executed\"],"
+    replace: "\"required\": [\"calls\", \"blocked\"],"
+    tests:
+      - tests/test_hire_shadow_enforce_schema.py::test_contract_field_is_required
+  - id: M-SCHEMA-CLOSED
+    claim_id: CG-SHADOW-ENFORCE-SCHEMA
+    file: demos/hire/shadow_enforce_metrics.schema.json
+    find: "  \"additionalProperties\": false,\n  \"required\": [\"schema_version\""
+    replace: "  \"additionalProperties\": true,\n  \"required\": [\"schema_version\""
+    tests:
+      - tests/test_hire_shadow_enforce_schema.py::test_contract_object_is_closed
+  - id: M-SCHEMA-MINIMUM
+    claim_id: CG-SHADOW-ENFORCE-SCHEMA
+    file: demos/hire/shadow_enforce_metrics.schema.json
+    find: "\"risky_executed\": {\"type\": \"integer\", \"minimum\": 0}"
+    replace: "\"risky_executed\": {\"type\": \"integer\"}"
+    tests:
+      - tests/test_hire_shadow_enforce_schema.py::test_contract_count_is_non_negative

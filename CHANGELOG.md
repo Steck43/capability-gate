@@ -13,7 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Trusted kit-local-manifest re-pin: `merge_gate.py` at `97fc05767615` (default_branch + Windows gh router) synced under both hook paths.
 
+### Fixed
+
+- `Gate.throw` wrote its THROWN row without the gate's anchor path or checkpoint, so a gate with an operator anchor outside the log folder failed its own chain check after a throw and every later call raised instead of returning a logged DENY. The row now goes through the same path as every other decision (`tests/test_hire_kill_proof.py`).
+
 ### Added
+- Hire demo (`demos/hire/`): `hire_demo.py` runs allow, deny, kill switch, fail closed and chain verify on the real gate in one command; `forge_audit.py` rewrites, deletes, inserts and truncates decision log rows and checks each is rejected, the append refused and the first broken row named, and prints the one-folder full-rewrite limit beside the outside-anchor case that rejects it. ClaimGate (`claimgate/claimgate.py`, CI lint on claims, not `Gate.evaluate`): `claimgate/claims.yaml` rows `{claim_id, text, status, enforcement_path, evidence, pins}`, OVERREACH when status is above what resolves, and an intentional red fixture. `demos/hire/mutants.yaml` and `pins.py`: 26 fail-when-removed mutants, each must turn its tests red. Tests: `tests/test_hire_demo.py`, `test_hire_forge.py`, `test_hire_kill_proof.py`, `test_claimgate.py`, `test_hire_pins.py`. `make hire-all`.
+- CISO decision record (`demos/hire/decision_record.py`, `make hire-record`): a record bound to one decision log row by `{log_head, row_count, row_index, row_sha256, verdict, tool, skill}` plus `action_hash`, approver, `not_after` and nonce. It is accepted only when the log still verifies and the row matches; a missing receipt, a forged field (also rehashed), an expired record or a rewritten log is rejected. The runtime gate does not read it. Shadow to enforce metric template (`demos/hire/shadow_enforce_metrics.schema.json` and `.example.json`): JSON Schema and validation tests only, filled once from a real S12 run. Eight more mutants in `mutants.yaml`. Tests: `tests/test_hire_decision_record.py`, `test_hire_shadow_enforce_schema.py`.
+
 - S11 alert-triage replay in `demos/`. Seeded burst of 500 synthetic SIEM
   alerts with duplicate families and one true positive. Local dedup and rank,
   recorded reasons, no model call and no network. Expect: unique groups match
