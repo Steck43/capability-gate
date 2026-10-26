@@ -109,6 +109,7 @@ Managed settings change some of this. With the hook in managed settings and `all
 | Refusing an absolute or `..` `Glob` pattern | `test_unexpanded_or_escaping_paths_denied` |
 | Refusing obfuscated Glob climbs (incl. residuals) | `test_glob_obfuscated_climb_denied`, `test_glob_climb_residuals_denied` |
 | Refusing `$` and leading `~` | `test_unexpanded_or_escaping_paths_denied` |
+| The closed path schema, narrowed: a shell tool (`Bash`, `PowerShell`) or an `mcp__` tool added to `_PATH_ARG` | `test_granted_shell_and_mcp_write_denied_by_closed_schema`, `test_no_shell_or_mcp_tool_has_a_path_schema` |
 
 `test_never_emits_updated_input` guards the rule that the hook prints nothing on `PreToolUse`. It goes red if any branch starts printing.
 
