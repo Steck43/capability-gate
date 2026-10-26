@@ -156,7 +156,7 @@
   "~/.claude/kit/src/global/hooks/guard_read.py": "253681b0b7136152bd3d7421ccaa527fdef0579f62bd3aad8827f4e1039592ea",
   "~/.claude/kit/src/global/hooks/guard_text.py": "bbaaed658ec5c54202d47687c0c6a1f8cf2036fd359ca1b04a5b8cc64abb451c",
   "~/.claude/kit/src/global/hooks/hard_rules.md": "d884a89330f14295b3884cf602f1fe750854fad6664a4cc286c1ac0f59f926c2",
-  "~/.claude/kit/src/global/hooks/merge_gate.py": "97fc05767615988ff1c0d97605bedc18a60012def2d5c48e87f576f2b1d39b8c",
+  "~/.claude/kit/src/global/hooks/merge_gate.py": "96c1216474e464d378fc0b84abed0519949215df3b3cc1ab0b3ff36856cf6cbd",
   "~/.claude/kit/src/global/hooks/merge_gate.py.bak-default-branch-20261025": "d4014800a7699693af20807dc37adca155b3e1ec71b89658b748c9620e40cf03",
   "~/.claude/kit/src/global/hooks/notify_filter.py": "c77fa68a0b1b6ea68c8a69a16b17acec1730b5ce62c09a9a0f346b4698d1b56c",
   "~/.claude/kit/src/global/hooks/publish_rules.py": "0c0f92e59d5b43417953d4bc39b5ca707a1beffab332c3402a398b2185a682d8",
