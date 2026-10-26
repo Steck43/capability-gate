@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Trusted kit-local-manifest re-pin to kit global hooks path (`merge_gate.py` at `97fc05767615`).
+
 - Trusted kit-local-manifest re-pin: `merge_gate.py` at `97fc05767615` (default_branch + Windows gh router) synced under both hook paths.
 
 ### Added
