@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Trusted kit-local-manifest re-pin: `merge_gate.py` at `97fc05767615` (default_branch + Windows gh router) synced under `~/.claude/hooks` and kit global hooks.
+
 ### Added
 - S11 alert-triage replay in `demos/`. Seeded burst of 500 synthetic SIEM
   alerts with duplicate families and one true positive. Local dedup and rank,
