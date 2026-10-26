@@ -1,0 +1,13 @@
+{
+  "schema_version": "cg.shadow-enforce-metrics/v1",
+  "window": {"start": "2026-10-19T00:00:00Z", "end": "2026-10-26T00:00:00Z"},
+  "scope": {
+    "skill": "synth-agent",
+    "policy_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "log_head": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "shadow": {"calls": 0, "would_block": 0, "executed": 0},
+  "enforce": {"calls": 0, "blocked": 0, "risky_executed": 0},
+  "agreement": {"flagged_sets_identical": true, "false_positives_reviewed": 0, "false_positives_confirmed": 0},
+  "promotion": {"decision": "stay_shadow", "approver": "security-lead@example.invalid", "decided_at": "2026-10-26T00:00:00Z"}
+}

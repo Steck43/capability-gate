@@ -1389,7 +1389,9 @@ class Gate:
             (path,),
             enforced=True,
         )
-        record_decision(self._log_path, self._mode, decision)
+        # Through _log, so the THROWN row moves the operator's anchor (and the
+        # signed checkpoint check) in step with the log, like every other row.
+        self._log(decision)
         return True
 
     def _halt_state(self) -> str | None:

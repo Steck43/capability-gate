@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:capability-gate:shadow-enforce-metrics:v1",
+  "title": "Shadow to enforce promotion metrics",
+  "description": "One review window for one skill: what observe mode would have blocked, what enforce blocked on the same traffic, and the human decision to stay in shadow, promote or roll back. Template only; no command at this commit emits it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "window", "scope", "shadow", "enforce", "agreement", "promotion"],
+  "properties": {
+    "schema_version": {"const": "cg.shadow-enforce-metrics/v1"},
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"},
+        "end": {"type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"}
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skill", "policy_sha256", "log_head"],
+      "properties": {
+        "skill": {"type": "string", "minLength": 1, "maxLength": 128},
+        "policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "log_head": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "shadow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calls", "would_block", "executed"],
+      "properties": {
+        "calls": {"type": "integer", "minimum": 0},
+        "would_block": {"type": "integer", "minimum": 0},
+        "executed": {"type": "integer", "minimum": 0}
+      }
+    },
+    "enforce": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calls", "blocked", "risky_executed"],
+      "properties": {
+        "calls": {"type": "integer", "minimum": 0},
+        "blocked": {"type": "integer", "minimum": 0},
+        "risky_executed": {"type": "integer", "minimum": 0}
+      }
+    },
+    "agreement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["flagged_sets_identical", "false_positives_reviewed", "false_positives_confirmed"],
+      "properties": {
+        "flagged_sets_identical": {"type": "boolean"},
+        "false_positives_reviewed": {"type": "integer", "minimum": 0},
+        "false_positives_confirmed": {"type": "integer", "minimum": 0}
+      }
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "approver", "decided_at"],
+      "properties": {
+        "decision": {"enum": ["stay_shadow", "promote_enforce", "rollback_to_shadow"]},
+        "approver": {"type": "string", "minLength": 1, "maxLength": 256},
+        "decided_at": {"type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"},
+        "decision_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

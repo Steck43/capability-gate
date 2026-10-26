@@ -1,0 +1,9 @@
+# Intentional red fixture. ClaimGate must fail this file; the test
+# test_red_fixture_is_red_with_overreach pins that. Do not "fix" it.
+claims:
+  - claim_id: RED-KILL-OVERREACH
+    text: The kill switch stops every harness on the fleet.
+    status: REAL
+    enforcement_path: capability_gate.py::Gate.throw
+    evidence:
+      - tests/test_hire_demo.py::test_demo_kill_every_tool_denied
