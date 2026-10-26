@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Trusted kit-local-manifest re-pin: `merge_gate.py` at `97fc05767615` (default_branch + Windows gh router) synced under both hook paths.
 
+- The aegis-atoms sibling pin moves to `ff47a672`, the atoms master merge of #89, and the isolation-layer pin moves to `1fa4283`, the isolation-layer main merge of #62, in `floor.yml`, `scripts/run_full_suite.py`, and `tests/test_gate_boundary.py`. The floor pins are regenerated for the workflow change.
+
 ### Added
 - S11 alert-triage replay in `demos/`. Seeded burst of 500 synthetic SIEM
   alerts with duplicate families and one true positive. Local dedup and rank,
