@@ -248,6 +248,61 @@ def test_tool_without_path_schema_denied_even_when_granted(tmp_path, project):
         assert _denied(r), tool
 
 
+_SHELL_TOOLS = ("Bash", "PowerShell", "BashOutput", "KillShell", "KillBash")
+
+
+def _grant_shell_and_mcp(project: Path) -> str:
+    root = str(project).replace("\\", "/")
+    return (
+        "require_approval: []\n"
+        "skills:\n"
+        "  UNLABELED:\n"
+        "    tools: [Read, Bash, PowerShell, mcp__srv__write]\n"
+        f"    paths: ['{root}/**']\n"
+    )
+
+
+def test_granted_shell_and_mcp_write_denied_by_closed_schema(tmp_path, project):
+    """B1 H8-PIN: a shell or mcp__ tool granted with no approval step is still denied.
+
+    The policy grants Bash, PowerShell and an mcp__ write tool on the project
+    root and asks for no approval, so the only thing left to deny them is the
+    adapter's closed path schema. Giving any of them a path argument (for
+    example "Bash": "command") would let `ls` resolve to <cwd>/ls inside the
+    grant and run as an allow.
+    """
+    env = _env(tmp_path, _policy(tmp_path, _grant_shell_and_mcp(project)))
+    # Control: the same policy does allow a granted Read inside the root, so the
+    # denies below are not a broken policy.
+    ok = _run(
+        _call("Read", {"file_path": str(project / "notes" / "a.txt")}, project), env
+    )
+    assert ok.returncode == 0, ok.stderr
+    target = str(project / "notes" / "a.txt")
+    for tool, ti in (
+        ("Bash", {"command": "ls"}),
+        ("Bash", {"command": target}),
+        ("PowerShell", {"command": "ls"}),
+        ("PowerShell", {"command": target}),
+        ("mcp__srv__write", {"path": target, "file_path": target, "content": "x"}),
+    ):
+        r = _run(_call(tool, ti, project), env)
+        assert _denied(r), (tool, ti, r.returncode, r.stderr)
+        assert f"{tool} has no path schema" in r.stderr, (tool, r.stderr)
+
+
+def test_no_shell_or_mcp_tool_has_a_path_schema():
+    """B1 H8-PIN: the adapter's path schema never names a shell or mcp__ tool."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_cc_hook_schema_pin", HOOK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    keys = set(mod._PATH_ARG)
+    assert not keys & set(_SHELL_TOOLS), sorted(keys & set(_SHELL_TOOLS))
+    assert not [k for k in keys if k.startswith("mcp__")], sorted(keys)
+
+
 def test_deadline_inf_and_over_cap_clamped(tmp_path, project):
     """B-P2-R3-1: inf / huge deadlines must not disable the watchdog or exceed the host cap."""
     env = _env(
