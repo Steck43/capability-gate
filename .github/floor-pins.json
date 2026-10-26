@@ -26,7 +26,7 @@
     },
     {
       "path": ".github/workflows/floor.yml",
-      "sha256": "324f1509de1c4b258672735af837d0207c2759adf7a6a2280099e1531c060db1"
+      "sha256": "1638016e0ffa1f1af0750e28e65e262454274bcf2e2c867bad708a32f1f605e1"
     },
     {
       "path": ".github/workflows/plugin-bundle.yml",
@@ -128,7 +128,7 @@
     },
     {
       "job": "demo",
-      "sha256": "b2127118c1c401a9256d33a32bee437055f11351d5133656b90962e30d4c1a7d"
+      "sha256": "caac35517cafc49183cf8ab5de2e513f15e8d380d9b485a14314f173efc80c3a"
     },
     {
       "job": "floor-guard",
@@ -156,7 +156,7 @@
     },
     {
       "job": "tests",
-      "sha256": "0d2d17390a578364b7ce4c0067cb5e6270adad75f9fd6bda5a47d6efc3bb1656"
+      "sha256": "b59f9cf03a016b33b26267d87ff56462ba6f4e363371183d861661ca5d0c54a3"
     },
     {
       "job": "workflow-lint",
