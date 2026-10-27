@@ -482,4 +482,3 @@ def test_gf_l1_cc_session_env_missing_file_denies(tmp_path):
     out = (r.stdout + r.stderr).lower()
     assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
     assert "missing session file" in out, (r.returncode, r.stdout, r.stderr)
-
