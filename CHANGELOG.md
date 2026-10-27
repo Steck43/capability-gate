@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `requirements-dev.txt` now lists `bashlex` and `jsonschema`. A fresh venv built from it alone failed the floor guard tests (`bashlex` missing) and skipped the shadow to enforce schema checks (`jsonschema` missing); CI stays green because `requirements-ci.lock` pins `bashlex`; it has no `jsonschema`, so the schema cross-check skips in CI as well.
+
 - `Gate.throw` wrote its THROWN row without the gate's anchor path or checkpoint, so a gate with an operator anchor outside the log folder failed its own chain check after a throw and every later call raised instead of returning a logged DENY. The row now goes through the same path as every other decision (`tests/test_hire_kill_proof.py`).
 
 ### Added
