@@ -1,5 +1,4 @@
-"""B9 grants wired into Gate.evaluate: wiring-spec pins W1 to W14 plus the
-D1, D4, D5 and D7 acceptance rows (M1-A*, M4-A*, M5-A*, M7-A*).
+"""Grant enforcement wired into gate evaluation and tool admission.
 
 Every test uses temp folders and harmless marker files. No network.
 """
@@ -19,10 +18,10 @@ from capability_gate_sdk import Client, may_run
 
 KEY = b"k" * 32
 OTHER_KEY = b"o" * 32
-APPROVAL_KEY = b"h" * 32  # H2: approvals have their own key
+APPROVAL_KEY = b"h" * 32  # Approvals have their own key.
 SESSION = "session-key-agent-one-0001"
 SESSION2 = "session-key-agent-two-0002"
-HUMAN = "human:landen"
+APPROVER = "human:approver"
 
 
 class Clock:
@@ -52,7 +51,7 @@ def env(tmp_path):
         store_path=str(state / "grants.json"),
         ledger_path=str(state / "ledger.json"),
         approval_nonce_path=str(state / "approvals.json"),
-        approvers=frozenset({HUMAN}),
+        approvers=frozenset({APPROVER}),
         key_paths=(str(key_file),),
         clock=clock,
         approval_key=APPROVAL_KEY,
@@ -266,7 +265,7 @@ def test_w10_log_never_holds_ticket_nonce_session_or_receipt(env):
         APPROVAL_KEY,
         manifest=d.manifest_hash,
         principal_id="agent:one",
-        approver=HUMAN,
+        approver=APPROVER,
         tool="delete_file",
         pol_hash=gr.policy_hash(env.policy),
         not_after=int(env.clock.t) + 60,
@@ -462,7 +461,7 @@ def test_m1_a4_manifest_binds_args(env):
         APPROVAL_KEY,
         manifest=d1.manifest_hash,
         principal_id="agent:one",
-        approver=HUMAN,
+        approver=APPROVER,
         tool="delete_file",
         pol_hash=gr.policy_hash(env.policy),
         not_after=int(env.clock.t) + 60,
@@ -511,7 +510,7 @@ def _mint(env, d, **over):
     kw = {
         "manifest": d.manifest_hash,
         "principal_id": "agent:one",
-        "approver": HUMAN,
+        "approver": APPROVER,
         "tool": "delete_file",
         "pol_hash": gr.policy_hash(env.policy),
         "not_after": int(env.clock.t) + 60,
@@ -555,7 +554,7 @@ def test_m4_a2_approver_must_be_a_named_human_not_an_agent(env):
         "requesting principal",
     )
     cfg2 = gr.GrantConfig(
-        **{**env.cfg.__dict__, "approvers": frozenset({HUMAN, "agent:child"})}
+        **{**env.cfg.__dict__, "approvers": frozenset({APPROVER, "agent:child"})}
     )
     gate2 = Gate(env.policy, str(env.log), cg.ENFORCE, grants=cfg2)
     assert is_deny(
@@ -573,7 +572,7 @@ def test_m4_a2_approver_must_be_a_named_human_not_an_agent(env):
             tool="delete_file",
             grant=t,
             args={"path": "a/x.txt"},
-            approval=_mint(env, d, approver="human:stranger"),
+            approval=_mint(env, d, approver="human:unlisted-approver"),
         ),
         "named human",
     )
@@ -640,7 +639,7 @@ def test_m4_a6_receipt_mutants_red(env, mutant):
             OTHER_KEY,
             manifest=d.manifest_hash,
             principal_id="agent:one",
-            approver=HUMAN,
+            approver=APPROVER,
             tool="delete_file",
             pol_hash=gr.policy_hash(env.policy),
             not_after=int(env.clock.t) + 60,

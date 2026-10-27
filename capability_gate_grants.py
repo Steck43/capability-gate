@@ -1,8 +1,7 @@
-"""Per-call grants for capability-gate (B9 wiring, scratch build).
+"""Per-call grant issuance, verification, accounting, and revocation.
 
-Ported from the B9 seed (``aegis_b9/credential.py`` and ``receipts.py``) and
-wired into ``Gate.evaluate`` as step 3b of the wiring spec. Standard library
-only, like the decider.
+This module is wired into ``Gate.evaluate`` and uses only the standard
+library, like the decider.
 
 What this module holds:
 
@@ -496,7 +495,7 @@ def issue(
     budget: Mapping[str, int] | None = None,
     grant_id: str | None = None,
 ) -> str:
-    """Bootstrap issuer (issuer of record is still a Landen pick)."""
+    """Mint a root grant after validating its requested lifetime and risk."""
     _ttl_ok(ttl, risk)
     now = _issue_now(cfg)
     g = Grant(
@@ -575,7 +574,7 @@ def verify(cfg: GrantConfig, ticket, session_key) -> Grant:
 
 def refused_ids(cfg: GrantConfig, ticket) -> tuple[str | None, str | None]:
     """grant_id and parent_grant_id of a refused ticket, only when its MAC is
-    good (RTA-3). A forged ticket names nothing on the row."""
+    good. A forged ticket names nothing on the row."""
     try:
         g = decode_verified(ticket, cfg.key)
     except Exception:

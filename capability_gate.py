@@ -1465,17 +1465,17 @@ class Gate:
         return None
 
     def _rearm_revoke(self) -> None:
-        """RTA-2: throw() on a switch that is already down still writes the
-        revoke, so a retry after a failed revoke is not a silent no-op."""
+        """A retry on an already-thrown switch still writes the revoke."""
         err = self._revoke_grants_on_throw()
         if err is not None:
             raise err
 
     def _revoke_on_marker(self) -> None:
-        """RTA-1: the revoke follows the switch state, not the throw() call. A
-        marker put down any other way is seen here on the next grants call and
-        revokes every grant registered so far. A failed write leaves the call
-        denied by the switch; the next halted call tries again."""
+        """Make revocation follow switch state rather than one API call.
+
+        A marker created through another path is observed on the next grant
+        call. A failed write leaves the call denied and is retried later.
+        """
         if self._grants is None:
             return
         if not any(os.path.lexists(p) for p in self._halt_paths):
@@ -1719,7 +1719,7 @@ class Gate:
         try:
             g = verify(cfg, grant, session_key)
         except CredentialRefused as exc:
-            # RTA-3: a refused ticket with a good MAC still names its grant.
+            # A refused ticket with a valid MAC still identifies its grant.
             return deny(str(exc), "admission", ids=refused_ids(cfg, grant))
         if pid != g.principal_id:
             return deny("principal does not match grant", "admission", g)

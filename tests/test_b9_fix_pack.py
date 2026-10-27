@@ -1,6 +1,4 @@
-"""B9 fix pack: strict regression tests for the holes Bug_Hunter confirmed on
-scratch 999cef7 (H2, H3, H3b, H4, H5, H5b, H7, RTA-1, RTA-2, RTA-3) plus the
-H1 repr guard. Each test fails on 999cef7 and passes with the pack.
+"""Strict regressions for persisted grant state and atomic admission.
 
 Temp folders and harmless marker files only. No network.
 """
@@ -14,7 +12,7 @@ from pathlib import Path
 
 import pytest
 import test_b9_grant_wiring as wiring
-from test_b9_grant_wiring import APPROVAL_KEY, HUMAN, KEY, is_deny, rows
+from test_b9_grant_wiring import APPROVAL_KEY, APPROVER, KEY, is_deny, rows
 
 import capability_gate as cg
 import capability_gate_grants as gr
@@ -32,7 +30,7 @@ def mint(env, d, **over):
     kw = {
         "manifest": d.manifest_hash,
         "principal_id": "agent:one",
-        "approver": HUMAN,
+        "approver": APPROVER,
         "tool": "delete_file",
         "pol_hash": gr.policy_hash(env.policy),
         "not_after": int(env.clock.t) + 60,
@@ -219,7 +217,7 @@ def test_h2_grant_key_cannot_mint_an_approval(env):
         KEY,
         manifest=d.manifest_hash,
         principal_id="agent:one",
-        approver=HUMAN,
+        approver=APPROVER,
         tool="delete_file",
         pol_hash=gr.policy_hash(env.policy),
         not_after=int(env.clock.t) + 60,
@@ -291,10 +289,10 @@ def test_h7_rows_outside_the_window_are_pruned(env):
     assert len(hist) == 1 and hist[0]["ts"] == env.clock.t
 
 
-# ------------------------------------------------------------ RT-A decide path
+# ------------------------------------------------------------ marker and refusal paths
 
 
-def test_rta1_marker_down_without_throw_still_revokes(env):
+def test_marker_down_without_throw_still_revokes(env):
     t = env.issue()
     assert env.call(grant=t).verdict is Verdict.ALLOW
     Path(env.gate.halt_path).write_text("marker\n")  # not via Gate.throw
@@ -304,7 +302,7 @@ def test_rta1_marker_down_without_throw_still_revokes(env):
     assert is_deny(env.call(grant=t), "revoked by kill switch")
 
 
-def test_rta2_retry_throw_after_failed_revoke_rearms_it(env, monkeypatch):
+def test_retry_throw_after_failed_revoke_rearms_it(env, monkeypatch):
     t = env.issue()
     real = gr.GrantStore.revoke_all_registered
 
@@ -321,7 +319,7 @@ def test_rta2_retry_throw_after_failed_revoke_rearms_it(env, monkeypatch):
     assert is_deny(env.call(grant=t), "revoked by kill switch")
 
 
-def test_rta3_refused_ticket_row_names_its_grant(env):
+def test_refused_ticket_row_names_its_grant(env):
     t = env.issue()
     g = gr.decode_verified(t, KEY)
     gr.end(env.cfg, g.grant_id)
