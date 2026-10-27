@@ -19,6 +19,7 @@ from capability_gate_sdk import Client, may_run
 
 KEY = b"k" * 32
 OTHER_KEY = b"o" * 32
+APPROVAL_KEY = b"h" * 32  # H2: approvals have their own key
 SESSION = "session-key-agent-one-0001"
 SESSION2 = "session-key-agent-two-0002"
 HUMAN = "human:landen"
@@ -54,6 +55,7 @@ def env(tmp_path):
         approvers=frozenset({HUMAN}),
         key_paths=(str(key_file),),
         clock=clock,
+        approval_key=APPROVAL_KEY,
     )
     policy_map = {
         "skills": {
@@ -261,7 +263,7 @@ def test_w10_log_never_holds_ticket_nonce_session_or_receipt(env):
     env.call(grant=t)
     d = env.call(tool="delete_file", grant=t)
     r = gr.mint_approval(
-        KEY,
+        APPROVAL_KEY,
         manifest=d.manifest_hash,
         principal_id="agent:one",
         approver=HUMAN,
@@ -457,7 +459,7 @@ def test_m1_a4_manifest_binds_args(env):
     assert d1.manifest_hash and d1.manifest_hash != d2.manifest_hash
     assert rows(env)[-1]["manifest_hash"] == d2.manifest_hash
     r = gr.mint_approval(
-        KEY,
+        APPROVAL_KEY,
         manifest=d1.manifest_hash,
         principal_id="agent:one",
         approver=HUMAN,
@@ -515,7 +517,7 @@ def _mint(env, d, **over):
         "not_after": int(env.clock.t) + 60,
     }
     kw.update(over)
-    return gr.mint_approval(KEY, **kw)
+    return gr.mint_approval(APPROVAL_KEY, **kw)
 
 
 def test_m4_a1_receipt_lifts_ask_once(env):

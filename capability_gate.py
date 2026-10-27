@@ -1364,7 +1364,7 @@ class Gate:
             from capability_gate_grants import GrantStore, Ledger, policy_hash
 
             GrantStore(grants.store_path).ensure()
-            self._ledger = Ledger(grants.ledger_path)
+            self._ledger = Ledger(grants.ledger_path, grants.store_path)
             self._ledger.ensure()
             self._policy_hash = policy_hash(policy)
 
@@ -1397,6 +1397,7 @@ class Gate:
         and the error is raised.
         """
         if any(os.path.lexists(p) for p in self._halt_paths):
+            self._rearm_revoke()
             return False
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         failures = []
@@ -1409,6 +1410,7 @@ class Gate:
             try:
                 fd = os.open(path, flags, 0o600)
             except FileExistsError:
+                self._rearm_revoke()
                 return False
             except OSError as exc:
                 failures.append(f"{path}: {exc!r}")
@@ -1455,10 +1457,30 @@ class Gate:
         try:
             from capability_gate_grants import GrantStore
 
-            GrantStore(self._grants.store_path).revoke_before(self._grants.clock())
+            GrantStore(self._grants.store_path).revoke_all_registered(
+                self._grants.clock()
+            )
         except Exception as exc:
             return exc
         return None
+
+    def _rearm_revoke(self) -> None:
+        """RTA-2: throw() on a switch that is already down still writes the
+        revoke, so a retry after a failed revoke is not a silent no-op."""
+        err = self._revoke_grants_on_throw()
+        if err is not None:
+            raise err
+
+    def _revoke_on_marker(self) -> None:
+        """RTA-1: the revoke follows the switch state, not the throw() call. A
+        marker put down any other way is seen here on the next grants call and
+        revokes every grant registered so far. A failed write leaves the call
+        denied by the switch; the next halted call tries again."""
+        if self._grants is None:
+            return
+        if not any(os.path.lexists(p) for p in self._halt_paths):
+            return
+        self._revoke_grants_on_throw()
 
     def _halt_state(self) -> str | None:
         """Deny reason from the switch, or None when calls may proceed.
@@ -1578,6 +1600,7 @@ class Gate:
             arg_summary = summarize_args(args)
             halted = self._kill_switch(str(skill), str(tool), path_list, base_dir)
             if halted is not None:
+                self._revoke_on_marker()
                 decision = halted
             elif refuse is not None:
                 decision = Decision(
@@ -1665,11 +1688,10 @@ class Gate:
         """
         from capability_gate_grants import (
             CredentialRefused,
-            GrantStore,
-            StoreError,
             approval_id,
-            check_approval,
+            approval_reason,
             manifest_hash,
+            refused_ids,
             verify,
         )
 
@@ -1677,7 +1699,7 @@ class Gate:
         pid = principal_id if isinstance(principal_id, str) and principal_id else None
         ptuple = tuple(path_list)
 
-        def deny(reason: str, gate: str, g=None) -> Decision:
+        def deny(reason: str, gate: str, g=None, ids=(None, None)) -> Decision:
             return Decision(
                 Verdict.DENY,
                 f"grant: {reason}",
@@ -1685,8 +1707,8 @@ class Gate:
                 tool,
                 ptuple,
                 principal_id=pid,
-                grant_id=g.grant_id if g is not None else None,
-                parent_grant_id=g.parent_grant_id if g is not None else None,
+                grant_id=g.grant_id if g is not None else ids[0],
+                parent_grant_id=g.parent_grant_id if g is not None else ids[1],
                 gate=gate,
             )
 
@@ -1697,7 +1719,8 @@ class Gate:
         try:
             g = verify(cfg, grant, session_key)
         except CredentialRefused as exc:
-            return deny(str(exc), "admission")
+            # RTA-3: a refused ticket with a good MAC still names its grant.
+            return deny(str(exc), "admission", ids=refused_ids(cfg, grant))
         if pid != g.principal_id:
             return deny("principal does not match grant", "admission", g)
         if skill != g.skill:
@@ -1727,8 +1750,9 @@ class Gate:
             gate="execution",
             manifest_hash=manifest,
         )
+        nonce = None
         if decision.verdict is Verdict.ASK and approval is not None:
-            why = check_approval(
+            why, nonce = approval_reason(
                 cfg,
                 approval,
                 manifest=manifest,
@@ -1745,23 +1769,21 @@ class Gate:
                 approval_id=approval_id(approval),
             )
         if decision.verdict is Verdict.ALLOW:
+            # H5: the ticket is re-verified inside the same critical section
+            # that charges, so a revoke after Gate 1 wins. H5b: the receipt
+            # nonce is spent only if the call is charged.
             try:
-                store = GrantStore(cfg.store_path)
-                lineage = store.load()["lineage"]
-                chain = [
-                    (lineage[gid]["principal_id"], gid, lineage[gid]["budget"])
-                    for gid in store.lineage_chain(g.grant_id)
-                ]
-                why = self._ledger.check_and_charge(
-                    chain=chain,
+                why = self._ledger.admit_and_charge(
+                    cfg=cfg,
+                    ticket=grant,
+                    session_key=session_key,
                     tool=tool,
                     manifest=manifest,
-                    cfg=cfg,
-                    now=cfg.clock(),
                     charge={"calls": 1},
+                    approval_nonce=nonce,
                 )
-            except StoreError as exc:
-                why = f"ledger unreadable, failing closed: {exc}"
+            except Exception as exc:  # fail closed
+                why = f"ledger unreadable, failing closed: {exc!r}"
             if why is not None:
                 return replace(decision, verdict=Verdict.DENY, reason=f"grant: {why}")
         return decision

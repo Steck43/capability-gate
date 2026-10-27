@@ -22,7 +22,12 @@ What this module holds:
   DENY.
 * Approval receipts for ASK: bound to the action manifest hash (tool, skill,
   resolved paths, full args hash, principal, policy hash), a named approver who
-  is not an agent principal, a not_after, and a nonce consumed once.
+  is not an agent principal, a not_after, and a nonce consumed once. Receipts
+  use their own approval key, never the grant key.
+* Seals and clock: the store records the highest seq of the ledger and of the
+  approval nonce file and the highest gate clock seen. A state file that is
+  missing after first use or below its seal is a DENY in every process, and
+  time never runs backward for tickets and receipts.
 
 Limits, stated plainly: tickets and receipts are local HMAC tokens with file
 stores. They are not an identity provider and a stranger cannot verify them.
@@ -82,8 +87,13 @@ _STORE_KEYS = frozenset(
         "revoked_before",
         "lineage",
         "sessions",
+        "seals",
+        "clock_high",
     }
 )
+# Grant not-before slack in seconds. A ticket whose issued_at is ahead of the
+# gate clock by more than this is refused (H4: no nbf).
+NBF_SKEW_SECONDS = 0.0
 
 
 class CredentialRefused(Exception):
@@ -96,7 +106,7 @@ class StoreError(Exception):
 
 @dataclass(frozen=True)
 class GrantConfig:
-    key: bytes
+    key: bytes = field(repr=False)
     audience: str
     store_path: str
     ledger_path: str
@@ -108,6 +118,15 @@ class GrantConfig:
     )
     loop_limit: int | None = None  # max identical manifests inside the rate window
     clock: Callable[[], float] = time.time
+    # H2: approval receipts use their own key, never the grant key, so a
+    # holder of the grant issuer key cannot mint a human approval with it.
+    approval_key: bytes | None = field(default=None, repr=False)
+
+    def __post_init__(self):
+        if self.approval_key is not None and hmac.compare_digest(
+            self.approval_key, self.key
+        ):
+            raise ValueError("approval_key must differ from the grant key")
 
     def protected_files(self) -> tuple[str, ...]:
         out = [
@@ -339,6 +358,12 @@ class GrantStore:
                         "revoked_before": None,
                         "lineage": {},
                         "sessions": {},
+                        # High-water seq of the ledger and approval nonce
+                        # file (H3, H3b). None means that file was never made.
+                        "seals": {"ledger": None, "approvals": None},
+                        # Highest gate clock seen; time never runs backward
+                        # for grants and receipts (H4).
+                        "clock_high": None,
                     },
                 )
 
@@ -346,7 +371,24 @@ class GrantStore:
         st = _read_state(self.path, "grant store")
         if set(st) != _STORE_KEYS or st.get("initialized") is not True:
             raise StoreError("grant store malformed")
+        if not isinstance(st["seals"], dict) or set(st["seals"]) != {
+            "ledger",
+            "approvals",
+        }:
+            raise StoreError("grant store malformed")
         return st
+
+    def advance_clock(self, raw: float) -> tuple[dict, float]:
+        """Load the store and move its clock high-water to ``raw`` if ahead.
+        Returns (state, effective now). A clock rolled back cannot revive an
+        expired ticket or receipt (H4)."""
+        with _locked(self.path):
+            st = self.load()
+            now = effective_now(raw, st)
+            if st["clock_high"] is None or raw > st["clock_high"]:
+                st["clock_high"] = raw
+                _write_state(self.path, st)
+            return st, now
 
     def _update(self, fn) -> None:
         with _locked(self.path):
@@ -366,6 +408,7 @@ class GrantStore:
                 "principal_id": g.principal_id,
                 "parent_grant_id": g.parent_grant_id,
                 "not_after": g.not_after,
+                "issued_at": g.issued_at,
                 "budget": dict(g.budget),
             }
 
@@ -380,6 +423,21 @@ class GrantStore:
 
     def revoke_before(self, ts: float) -> None:
         def go(st):
+            cur = st["revoked_before"]
+            st["revoked_before"] = ts if cur is None else max(cur, ts)
+
+        self._update(go)
+
+    def revoke_all_registered(self, raw_now: float) -> None:
+        """Kill-switch revoke: every grant registered so far is dead, even one
+        whose issued_at is ahead of the clock (H4 family on the throw path)."""
+
+        def go(st):
+            ts = effective_now(raw_now, st)
+            for rec in st["lineage"].values():
+                ia = rec.get("issued_at")
+                if isinstance(ia, (int, float)) and not isinstance(ia, bool):
+                    ts = max(ts, ia)
             cur = st["revoked_before"]
             st["revoked_before"] = ts if cur is None else max(cur, ts)
 
@@ -401,6 +459,19 @@ class GrantStore:
     def agent_principals(self) -> frozenset[str]:
         st = self.load()
         return frozenset(rec["principal_id"] for rec in st["lineage"].values())
+
+
+def effective_now(raw: float, st: Mapping) -> float:
+    high = st.get("clock_high")
+    return raw if high is None else max(raw, high)
+
+
+def _issue_now(cfg: GrantConfig) -> float:
+    """Clock for a new grant: never behind the store's high-water."""
+    try:
+        return effective_now(cfg.clock(), GrantStore(cfg.store_path).load())
+    except StoreError:
+        return cfg.clock()
 
 
 def _ttl_ok(ttl, risk) -> None:
@@ -427,7 +498,7 @@ def issue(
 ) -> str:
     """Bootstrap issuer (issuer of record is still a Landen pick)."""
     _ttl_ok(ttl, risk)
-    now = cfg.clock()
+    now = _issue_now(cfg)
     g = Grant(
         grant_id=grant_id or "g-" + secrets.token_hex(8),
         principal_id=principal_id,
@@ -447,21 +518,25 @@ def issue(
     return ticket
 
 
-def verify(cfg: GrantConfig, ticket, session_key) -> Grant:
-    now = cfg.clock()
+def _verify_ticket(cfg: GrantConfig, ticket, session_key) -> Grant:
+    """MAC, audience, and session binding. No state is read."""
     g = decode_verified(ticket, cfg.key)
     if g.audience != cfg.audience:
         raise CredentialRefused("wrong audience")
-    if now >= g.not_after:
-        raise CredentialRefused("expired")
     if session_key is None:
         raise CredentialRefused("no session key; grants are not bearer tokens")
     if not hmac.compare_digest(session_hash(session_key), g.session):
         raise CredentialRefused("session does not match grant")
-    try:
-        st = GrantStore(cfg.store_path).load()
-    except StoreError as exc:
-        raise CredentialRefused(str(exc)) from exc
+    return g
+
+
+def _verify_state(g: Grant, st: Mapping, now: float) -> None:
+    """Time, nonce, kill switch, and lineage against one loaded store state."""
+    if now >= g.not_after:
+        raise CredentialRefused("expired")
+    if g.issued_at > now + NBF_SKEW_SECONDS:
+        # H4: not-before. A ticket from a clock set ahead is refused.
+        raise CredentialRefused("not yet valid (issued after the gate clock)")
     if st["nonces"].get(g.grant_id) != g.nonce:
         raise CredentialRefused("nonce not current (refreshed or unknown grant)")
     rb = st["revoked_before"]
@@ -485,14 +560,34 @@ def verify(cfg: GrantConfig, ticket, session_key) -> Grant:
         if hops > MAX_LINEAGE:
             raise CredentialRefused("lineage too deep")
         cur = rec["parent_grant_id"]
+
+
+def verify(cfg: GrantConfig, ticket, session_key) -> Grant:
+    raw = cfg.clock()
+    g = _verify_ticket(cfg, ticket, session_key)
+    try:
+        st, now = GrantStore(cfg.store_path).advance_clock(raw)
+    except StoreError as exc:
+        raise CredentialRefused(str(exc)) from exc
+    _verify_state(g, st, now)
     return g
+
+
+def refused_ids(cfg: GrantConfig, ticket) -> tuple[str | None, str | None]:
+    """grant_id and parent_grant_id of a refused ticket, only when its MAC is
+    good (RTA-3). A forged ticket names nothing on the row."""
+    try:
+        g = decode_verified(ticket, cfg.key)
+    except Exception:
+        return None, None
+    return g.grant_id, g.parent_grant_id
 
 
 def refresh(cfg: GrantConfig, ticket: str, session_key: str, ttl: int) -> str:
     """New nonce and life. Never past the parent's not_after; never wider."""
     old = verify(cfg, ticket, session_key)
     _ttl_ok(ttl, old.risk)
-    now = cfg.clock()
+    now = _issue_now(cfg)
     new_after = int(now) + ttl
     if old.parent_grant_id is not None:
         parent_after = GrantStore(cfg.store_path).load()["lineage"][
@@ -536,7 +631,7 @@ def attenuate(
         if unit not in child_budget or child_budget[unit] > cap:
             raise CredentialRefused("attenuate: budget not within parent")
     _ttl_ok(ttl, parent.risk)
-    now = cfg.clock()
+    now = _issue_now(cfg)
     g = Grant(
         grant_id=grant_id or "g-" + secrets.token_hex(8),
         principal_id=principal_id,
@@ -603,24 +698,52 @@ def manifest_hash(*, principal_id, skill, tool, paths, args, pol_hash) -> str:
 
 class Ledger:
     """Counters keyed by principal|grant|tool|unit plus a call history for rate
-    and loop checks. ``seq`` only grows; a file whose seq is below the last one
-    this process saw was rolled back or replaced, and that is a DENY."""
+    and loop checks. ``seq`` only grows. The grant store keeps a seal: the
+    highest ledger seq ever written. A ledger whose seq is below the seal, or
+    one that is missing after the seal was set, is a DENY in every process,
+    so delete or rollback then restart does not reset budgets (H3).
 
-    def __init__(self, path: str):
+    Lock order everywhere: ledger, then grant store, then approval nonce file.
+    """
+
+    def __init__(self, path: str, store_path: str | None = None):
         self.path = os.path.abspath(str(path))
+        self.store_path = os.path.abspath(str(store_path)) if store_path else None
         self._seen_seq = -1
 
-    def ensure(self) -> None:
-        with _locked(self.path):
-            if not os.path.lexists(self.path):
-                _write_state(self.path, {"seq": 0, "used": {}, "history": []})
-            self._seen_seq = max(self._seen_seq, self._load()["seq"])
+    def _store(self) -> GrantStore:
+        if self.store_path is None:
+            raise StoreError("ledger has no grant store seal")
+        return GrantStore(self.store_path)
 
-    def _load(self) -> dict:
+    def ensure(self) -> None:
+        """Create the ledger once, the first time the store has no seal for it.
+        After that a missing ledger is tamper and is never re-created."""
+        store = self._store()
+        with _locked(self.path), _locked(store.path):
+            st = store.load()
+            seal = st["seals"]["ledger"]
+            if not os.path.lexists(self.path):
+                if seal is not None:
+                    return  # evaluate denies: "ledger missing after first use"
+                _write_state(self.path, {"seq": 0, "used": {}, "history": []})
+                st["seals"]["ledger"] = 0
+                _write_state(store.path, st)
+                seal = 0
+            try:
+                led = self._load(seal or 0)
+            except StoreError:
+                return  # evaluate denies with the reason
+            if seal is None:
+                st["seals"]["ledger"] = led["seq"]
+                _write_state(store.path, st)
+            self._seen_seq = max(self._seen_seq, led["seq"])
+
+    def _load(self, floor: int = -1) -> dict:
         st = _read_state(self.path, "ledger")
         if set(st) != {"seq", "used", "history"} or not isinstance(st["seq"], int):
             raise StoreError("ledger malformed")
-        if st["seq"] < self._seen_seq:
+        if st["seq"] < max(self._seen_seq, floor):
             raise StoreError("ledger stale (rolled back or replaced)")
         return st
 
@@ -628,60 +751,124 @@ class Ledger:
     def key(principal_id, grant_id, tool, unit) -> str:
         return f"{principal_id}|{grant_id}|{tool}|{unit}"
 
-    def check_and_charge(
+    def admit_and_charge(
         self,
         *,
-        chain: Sequence[tuple[str, str, Mapping[str, int]]],
+        cfg: GrantConfig,
+        ticket,
+        session_key,
         tool: str,
         manifest: str,
-        cfg: GrantConfig,
-        now: float,
         charge: Mapping[str, int],
+        approval_nonce: str | None = None,
     ) -> str | None:
-        """chain: (principal_id, grant_id, budget) for the grant and each ancestor.
-        Returns a deny reason, or None after charging every level."""
-        with _locked(self.path):
-            st = self._load()
-            principal = chain[0][0]
-            if cfg.rate_limit is not None:
-                max_calls, window = cfg.rate_limit
-                recent = [h for h in st["history"] if now - h["ts"] < window]
-                same_tool = [
-                    h for h in recent if h["p"] == principal and h["tool"] == tool
-                ]
-                if len(same_tool) >= max_calls:
-                    return f"rate limit: {max_calls} calls of '{tool}' per {window}s for this principal"
-                if cfg.loop_limit is not None:
-                    loops = [
-                        h for h in recent if h["p"] == principal and h["m"] == manifest
-                    ]
-                    if len(loops) >= cfg.loop_limit:
-                        return "loop guard: identical action repeated"
-            for p, gid, budget in chain:
-                for unit, cap in budget.items():
-                    have = sum(
-                        v
-                        for k, v in st["used"].items()
-                        if k.split("|")[1] == gid and k.split("|")[3] == unit
-                    )
-                    # Children charge their ancestors, so each level's keys hold
-                    # its own spend plus every descendant's. A unit this call
-                    # does not charge is denied once it is already spent.
-                    want = charge.get(unit, 0)
-                    if (want and have + want > cap) or (not want and have >= cap):
-                        return f"budget: {unit} cap {cap} reached for grant {gid}"
-            for p, gid, _budget in chain:
-                for unit, amount in charge.items():
-                    k = self.key(p, gid, tool, unit)
-                    st["used"][k] = st["used"].get(k, 0) + amount
-            st["history"].append(
-                {"ts": now, "p": principal, "tool": tool, "m": manifest}
-            )
-            st["history"] = st["history"][-1000:]
-            st["seq"] += 1
-            _write_state(self.path, st)
-            self._seen_seq = st["seq"]
+        """One critical section for the last admission check and the charge (H5).
+
+        Under the ledger, store, and (if a receipt is used) approval locks: the
+        ticket is re-verified against the store as it is now, so a revoke that
+        lands after Gate 1 wins; then rate, loop and budget; then the receipt
+        nonce is spent only if the call will be charged (H5b); then every file
+        and its seal are written. Returns a deny reason, or None after charging.
+        """
+        store = self._store()
+        nonce_path = cfg.approval_nonce_path if approval_nonce is not None else None
+        if approval_nonce is not None and nonce_path is None:
+            return "approval receipts not configured"
+        with _locked(self.path), _locked(store.path):
+            try:
+                sst = store.load()
+            except StoreError as exc:
+                return f"ledger unreadable, failing closed: {exc}"
+            raw = cfg.clock()
+            now = effective_now(raw, sst)
+            try:
+                g = _verify_ticket(cfg, ticket, session_key)
+                _verify_state(g, sst, now)
+            except CredentialRefused as exc:
+                return str(exc)
+            chain = []
+            cur = g.grant_id
+            while cur is not None:
+                rec = sst["lineage"][cur]
+                chain.append((rec["principal_id"], cur, rec["budget"]))
+                cur = rec["parent_grant_id"]
+            try:
+                st = self._load(sst["seals"]["ledger"] or 0)
+            except StoreError as exc:
+                return f"ledger unreadable, failing closed: {exc}"
+            why = self._limits(st, chain, tool, manifest, cfg, now, charge)
+            if why is not None:
+                return why
+            if nonce_path is not None:
+                with _locked(nonce_path):
+                    try:
+                        ast_ = _load_approvals(nonce_path, sst["seals"]["approvals"])
+                    except StoreError as exc:
+                        return f"approval check failed: {exc}"
+                    if approval_nonce in ast_["spent"]:
+                        return "approval receipt replay"
+                    ast_["spent"].append(approval_nonce)
+                    ast_["seq"] += 1
+                    self._commit(st, chain, tool, manifest, now, charge, cfg)
+                    _write_state(nonce_path, ast_)
+                    sst["seals"]["approvals"] = ast_["seq"]
+            else:
+                self._commit(st, chain, tool, manifest, now, charge, cfg)
+            sst["seals"]["ledger"] = st["seq"]
+            if sst["clock_high"] is None or raw > sst["clock_high"]:
+                sst["clock_high"] = raw
+            _write_state(store.path, sst)
             return None
+
+    @staticmethod
+    def _limits(st, chain, tool, manifest, cfg, now, charge) -> str | None:
+        principal = chain[0][0]
+        if cfg.rate_limit is not None:
+            max_calls, window = cfg.rate_limit
+            recent = [h for h in st["history"] if now - h["ts"] < window]
+            same_tool = [h for h in recent if h["p"] == principal and h["tool"] == tool]
+            if len(same_tool) >= max_calls:
+                return f"rate limit: {max_calls} calls of '{tool}' per {window}s for this principal"
+            if cfg.loop_limit is not None:
+                loops = [
+                    h for h in recent if h["p"] == principal and h["m"] == manifest
+                ]
+                if len(loops) >= cfg.loop_limit:
+                    return "loop guard: identical action repeated"
+        for _p, gid, budget in chain:
+            for unit, cap in budget.items():
+                have = sum(
+                    v
+                    for k, v in st["used"].items()
+                    if k.split("|")[1] == gid and k.split("|")[3] == unit
+                )
+                # Children charge their ancestors, so each level's keys hold
+                # its own spend plus every descendant's. A unit this call
+                # does not charge is denied once it is already spent.
+                want = charge.get(unit, 0)
+                if (want and have + want > cap) or (not want and have >= cap):
+                    return f"budget: {unit} cap {cap} reached for grant {gid}"
+        return None
+
+    def _commit(self, st, chain, tool, manifest, now, charge, cfg) -> None:
+        principal = chain[0][0]
+        for p, gid, _budget in chain:
+            for unit, amount in charge.items():
+                k = self.key(p, gid, tool, unit)
+                st["used"][k] = st["used"].get(k, 0) + amount
+        st["history"].append({"ts": now, "p": principal, "tool": tool, "m": manifest})
+        # H7: prune by time, never by count. Every row inside the rate window
+        # is kept, so other principals' traffic cannot push this principal's
+        # rows out. Rows are only added on a charged call, so the window holds
+        # at most max_calls rows per principal and tool.
+        if cfg.rate_limit is not None:
+            window = cfg.rate_limit[1]
+            st["history"] = [h for h in st["history"] if now - h["ts"] < window]
+        else:
+            st["history"] = []
+        st["seq"] += 1
+        _write_state(self.path, st)
+        self._seen_seq = st["seq"]
 
     def charge_usage(self, chain, tool: str, usage: Mapping[str, int]) -> None:
         """Post-call usage (tokens, wall seconds, egress bytes) reported by the host.
@@ -689,8 +876,10 @@ class Ledger:
         for unit in usage:
             if unit not in UNITS:
                 raise StoreError(f"unknown unit {unit}")
-        with _locked(self.path):
-            st = self._load()
+        store = self._store()
+        with _locked(self.path), _locked(store.path):
+            sst = store.load()
+            st = self._load(sst["seals"]["ledger"] or 0)
             for p, gid, _b in chain:
                 for unit, amount in usage.items():
                     k = self.key(p, gid, tool, unit)
@@ -698,9 +887,30 @@ class Ledger:
             st["seq"] += 1
             _write_state(self.path, st)
             self._seen_seq = st["seq"]
+            sst["seals"]["ledger"] = st["seq"]
+            _write_state(store.path, sst)
 
 
 # --- approval receipts (D4) -----------------------------------------------------
+
+
+def _load_approvals(path: str, seal: int | None) -> dict:
+    """Approval nonce file. Made the first time (no seal yet); after that a
+    missing file, or one whose seq is below the store seal, is a DENY (H3b)."""
+    if not os.path.lexists(path):
+        if seal is not None:
+            raise StoreError("approval nonce file missing after first use")
+        return {"seq": 0, "spent": []}
+    st = _read_state(path, "approval nonce file")
+    if (
+        set(st) != {"seq", "spent"}
+        or not isinstance(st["seq"], int)
+        or not isinstance(st["spent"], list)
+    ):
+        raise StoreError("approval nonce file malformed")
+    if seal is not None and st["seq"] < seal:
+        raise StoreError("approval nonce file stale (rolled back or replaced)")
+    return st
 
 
 def mint_approval(
@@ -714,7 +924,8 @@ def mint_approval(
     not_after: int,
     nonce: str | None = None,
 ) -> str:
-    """Made by the out-of-band approval path, never by the agent."""
+    """Made by the out-of-band approval path, never by the agent. ``key`` is the
+    approval key (``GrantConfig.approval_key``), not the grant key."""
     _check_key(key)
     body = {
         "manifest": manifest,
@@ -733,7 +944,7 @@ def approval_id(receipt: str) -> str:
     return hashlib.sha256(receipt.encode()).hexdigest()[:16]
 
 
-def check_approval(
+def approval_reason(
     cfg: GrantConfig,
     receipt,
     *,
@@ -741,22 +952,28 @@ def check_approval(
     principal_id: str,
     pol_hash: str,
     now: float,
-) -> str | None:
-    """None when the receipt is good and its nonce is now spent; else the reason."""
+) -> tuple[str | None, str | None]:
+    """(None, nonce) when the receipt is good; (reason, None) otherwise.
+    Spends nothing: the nonce is spent in ``Ledger.admit_and_charge`` only when
+    the call is charged (H5b)."""
     try:
-        _check_key(cfg.key)
         if cfg.approval_nonce_path is None:
-            return "approval receipts not configured"
+            return "approval receipts not configured", None
+        if cfg.approval_key is None:
+            return "approval key not configured", None
+        _check_key(cfg.approval_key)
         if (
             not isinstance(receipt, str)
             or receipt.count(".") != 1
             or len(receipt) > 8192
         ):
-            return "no bound approval receipt"
+            return "no bound approval receipt", None
         p64, m64 = receipt.split(".")
         payload, mac = _b64d(p64), _b64d(m64)
-        if not hmac.compare_digest(mac, _mac(cfg.key, payload, _RECEIPT_DOMAIN)):
-            return "approval receipt bad mac"
+        if not hmac.compare_digest(
+            mac, _mac(cfg.approval_key, payload, _RECEIPT_DOMAIN)
+        ):
+            return "approval receipt bad mac", None
         body = json.loads(payload)
         want = {
             "manifest",
@@ -768,33 +985,28 @@ def check_approval(
             "nonce",
         }
         if not isinstance(body, dict) or set(body) != want:
-            return "approval receipt malformed"
+            return "approval receipt malformed", None
         if body["policy_hash"] != pol_hash:
-            return "approval receipt minted under another policy"
+            return "approval receipt minted under another policy", None
         if body["manifest"] != manifest:
-            return "approval receipt bound to another action"
+            return "approval receipt bound to another action", None
         if body["principal_id"] != principal_id:
-            return "approval receipt for another principal"
-        if now >= body["not_after"]:
-            return "approval receipt expired"
+            return "approval receipt for another principal", None
+        st = GrantStore(cfg.store_path).load()
+        if effective_now(now, st) >= body["not_after"]:
+            return "approval receipt expired", None
         approver = body["approver"]
         if approver == principal_id:
-            return "approver is the requesting principal"
+            return "approver is the requesting principal", None
         if approver not in cfg.approvers:
-            return "approver not a named human approver"
-        if approver in GrantStore(cfg.store_path).agent_principals():
-            return "approver is an agent principal"
-        path = cfg.approval_nonce_path
-        with _locked(path):
-            seen: list[str] = []
-            if os.path.lexists(path):
-                seen = _read_state(path, "approval nonce file").get("spent", [])
-            if body["nonce"] in seen:
-                return "approval receipt replay"
-            seen.append(body["nonce"])
-            _write_state(path, {"spent": seen})
-        return None
+            return "approver not a named human approver", None
+        if approver in {rec["principal_id"] for rec in st["lineage"].values()}:
+            return "approver is an agent principal", None
+        nonce = body["nonce"]
+        if not isinstance(nonce, str) or not nonce:
+            return "approval receipt malformed", None
+        return None, nonce
     except CredentialRefused as exc:
-        return f"approval receipt refused: {exc}"
+        return f"approval receipt refused: {exc}", None
     except Exception as exc:  # fail closed
-        return f"approval check failed: {type(exc).__name__}"
+        return f"approval check failed: {type(exc).__name__}", None
