@@ -325,8 +325,11 @@ def _pre(event: dict) -> None:
             load_grant_config,
         )
 
-        grants = load_grant_config(_cc_grant_config_path())
-        grant_kwargs = load_call_kwargs(_cc_grant_session_path())
+        cfg_path = _cc_grant_config_path()
+        sess_path = _cc_grant_session_path()
+        # GF-L1: env set means the host opted into grants; missing file denies.
+        grants = load_grant_config(cfg_path, required=bool(cfg_path))
+        grant_kwargs = load_call_kwargs(sess_path, required=bool(sess_path))
     except GrantForwardError as exc:
         raise ValueError(f"grant forward refused: {exc}") from exc
     gate = Gate(policy, log_path=_log_path(), mode="enforce", grants=grants)

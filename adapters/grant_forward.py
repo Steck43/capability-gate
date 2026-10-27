@@ -47,12 +47,23 @@ def _read_key_file(path: str) -> bytes:
     return key
 
 
-def load_grant_config(path: str | None) -> gr.GrantConfig | None:
-    """Load GrantConfig from a host JSON file, or None when path is unset/empty."""
+def load_grant_config(
+    path: str | None, *, required: bool = False
+) -> gr.GrantConfig | None:
+    """Load GrantConfig from a host JSON file, or None when path is unset/empty.
+
+    When required=True (caller opted in via env), a missing path or file is
+    refuse (GF-L1). When required=False, missing stays legacy None (Hermes
+    fixed-path shape).
+    """
     if not path:
+        if required:
+            raise GrantForwardError("grant config path required but unset")
         return None
     path = os.path.abspath(path)
     if not os.path.lexists(path):
+        if required:
+            raise GrantForwardError(f"missing grant file: {path}")
         return None
     data = _read_json_object(path)
     key_file = data.get("key_file")
@@ -94,16 +105,21 @@ def load_grant_config(path: str | None) -> gr.GrantConfig | None:
     )
 
 
-def load_call_kwargs(path: str | None) -> dict[str, Any]:
+def load_call_kwargs(path: str | None, *, required: bool = False) -> dict[str, Any]:
     """Return evaluate kwargs from a host session file.
 
     Empty dict when path unset or file missing (legacy call shape).
-    Raises GrantForwardError when the file exists but is invalid.
+    When required=True (caller opted in via env), missing path/file refuses
+    (GF-L1). Raises GrantForwardError when the file exists but is invalid.
     """
     if not path:
+        if required:
+            raise GrantForwardError("grant session path required but unset")
         return {}
     path = os.path.abspath(path)
     if not os.path.lexists(path):
+        if required:
+            raise GrantForwardError(f"missing session file: {path}")
         return {}
     data = _read_json_object(path)
     out: dict[str, Any] = {}

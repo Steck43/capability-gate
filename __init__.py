@@ -552,8 +552,12 @@ def _build_gate(mode: str) -> Gate:
     os.environ.setdefault("HERMES_HOME", _hermes_home())
     policy = _load_allowlist(os.path.join(_HERE, "allowlist.yaml"))
     home = _hermes_home()
-    cfg_path = os.path.join(home, "capability-gate", "grants.json")
+    gate_dir = os.path.join(home, "capability-gate")
+    cfg_path = os.path.join(gate_dir, "grants.json")
     present = os.path.lexists(cfg_path)
+    # GF-L1: capability-gate/ present means the host opted in; missing grants.json
+    # must refuse. Never-configured (no gate dir) may stay legacy.
+    opted_in = os.path.lexists(gate_dir)
     grants = None
     try:
         from adapters.grant_forward import (
@@ -564,14 +568,14 @@ def _build_gate(mode: str) -> Gate:
 
         cfg_path, _sess_path = hermes_paths(home)
         present = os.path.lexists(cfg_path)
-        grants = load_grant_config(cfg_path)
+        grants = load_grant_config(cfg_path, required=opted_in)
     except GrantForwardError as exc:
         # Present-but-bad config must not fall open to a legacy Gate.
         raise RuntimeError(f"grant config refused: {exc}") from exc
     except Exception as exc:
-        # Present file: any load/import error fails closed. Missing file may
-        # stay legacy (grants=None), including optional-adapter ImportError.
-        if present:
+        # Present file or opted-in dir: any load/import error fails closed.
+        # Never-configured (no gate dir) may stay legacy (grants=None).
+        if present or opted_in:
             raise RuntimeError(f"grant config refused: {exc}") from exc
         grants = None
     return Gate(policy, log_path=_log_path(), mode=mode, grants=grants)
