@@ -188,6 +188,13 @@ _LOG_ALLOWED = frozenset(
         "score",
         "run_id",
         "route_ticket",
+        # B9 grant wiring: present only on rows from a gate built with grants.
+        "principal_id",
+        "grant_id",
+        "parent_grant_id",
+        "gate",
+        "manifest_hash",
+        "approval_id",
     }
 )
 
@@ -900,6 +907,15 @@ class Decision:
     # Set on an enforced ISOLATE verdict: the single-use ticket the route to
     # the box must answer, and on the denial row that records the outcome.
     route_ticket: str | None = None
+    # B9 grant wiring. Unset on every legacy row, so legacy rows are unchanged.
+    # gate is "admission" (is this tool available to this principal at all)
+    # or "execution" (this action, these paths, this policy, now).
+    principal_id: str | None = None
+    grant_id: str | None = None
+    parent_grant_id: str | None = None
+    gate: str | None = None
+    manifest_hash: str | None = None
+    approval_id: str | None = None
 
     def as_dict(self) -> dict:
         out = {
@@ -912,7 +928,21 @@ class Decision:
         }
         if self.route_ticket is not None:
             out["route_ticket"] = self.route_ticket
+        for key in _GRANT_ROW_KEYS:
+            value = getattr(self, key)
+            if value is not None:
+                out[key] = value
         return out
+
+
+_GRANT_ROW_KEYS = (
+    "principal_id",
+    "grant_id",
+    "parent_grant_id",
+    "gate",
+    "manifest_hash",
+    "approval_id",
+)
 
 
 @dataclass(frozen=True)
@@ -1295,6 +1325,7 @@ class Gate:
         fallback_halt_path: str | None = None,
         anchor_path: str | None = None,
         checkpoint: CheckpointConfig | None = None,
+        grants=None,
     ):
         if mode not in (ENFORCE, OBSERVE):
             raise ValueError(f"mode must be '{ENFORCE}' or '{OBSERVE}', got {mode!r}")
@@ -1324,6 +1355,18 @@ class Gate:
         # folder; the default beside the log survives deletion of the log.
         self._anchor_path = os.path.abspath(anchor_path or _anchor_path(self._log_path))
         self._mode = mode
+        # B9: with a GrantConfig every call must carry a principal and a live
+        # grant, re-verified on every call. None keeps the legacy path.
+        self._grants = grants
+        self._ledger = None
+        self._policy_hash = None
+        if grants is not None:
+            from capability_gate_grants import GrantStore, Ledger, policy_hash
+
+            GrantStore(grants.store_path).ensure()
+            self._ledger = Ledger(grants.ledger_path, grants.store_path)
+            self._ledger.ensure()
+            self._policy_hash = policy_hash(policy)
 
     @property
     def mode(self) -> str:
@@ -1354,6 +1397,7 @@ class Gate:
         and the error is raised.
         """
         if any(os.path.lexists(p) for p in self._halt_paths):
+            self._rearm_revoke()
             return False
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         failures = []
@@ -1366,6 +1410,7 @@ class Gate:
             try:
                 fd = os.open(path, flags, 0o600)
             except FileExistsError:
+                self._rearm_revoke()
                 return False
             except OSError as exc:
                 failures.append(f"{path}: {exc!r}")
@@ -1391,8 +1436,51 @@ class Gate:
         )
         # Through _log, so the THROWN row moves the operator's anchor (and the
         # signed checkpoint check) in step with the log, like every other row.
+        revoke_error = self._revoke_grants_on_throw()
+        if revoke_error is not None:
+            # The switch is thrown and the row says the revoke failed; then raise.
+            self._log(
+                replace(
+                    decision,
+                    reason=f"{decision.reason}; grant revoke FAILED: {revoke_error!r}",
+                )
+            )
+            raise revoke_error
         self._log(decision)
         return True
+
+    def _revoke_grants_on_throw(self) -> Exception | None:
+        """Revoke-on-throw (W5): every grant issued up to now stays dead after a
+        person clears the marker. Runs after the marker is down."""
+        if self._grants is None:
+            return None
+        try:
+            from capability_gate_grants import GrantStore
+
+            GrantStore(self._grants.store_path).revoke_all_registered(
+                self._grants.clock()
+            )
+        except Exception as exc:
+            return exc
+        return None
+
+    def _rearm_revoke(self) -> None:
+        """A retry on an already-thrown switch still writes the revoke."""
+        err = self._revoke_grants_on_throw()
+        if err is not None:
+            raise err
+
+    def _revoke_on_marker(self) -> None:
+        """Make revocation follow switch state rather than one API call.
+
+        A marker created through another path is observed on the next grant
+        call. A failed write leaves the call denied and is retried later.
+        """
+        if self._grants is None:
+            return
+        if not any(os.path.lexists(p) for p in self._halt_paths):
+            return
+        self._revoke_grants_on_throw()
 
     def _halt_state(self) -> str | None:
         """Deny reason from the switch, or None when calls may proceed.
@@ -1445,6 +1533,12 @@ class Gate:
         )
         if any(_same_file_name(a, f) for f in own):
             return f"path '{p}' is the gate's own decision log file"
+        if self._grants is not None:
+            # M1-A5: the agent principal cannot reach the grant store, the
+            # ledger, the approval nonce file, or the key file through a tool.
+            for f in self._grants.protected_files():
+                if _same_file_name(a, f) or _is_same_or_ancestor(a, f):
+                    return f"path '{p}' is a grant state or key file"
         folders = {os.path.dirname(h) for h in self._halt_paths}
         folders.add(os.path.dirname(log))
         for folder in folders:
@@ -1484,6 +1578,10 @@ class Gate:
         args: Mapping | None = None,
         refuse: str | None = None,
         base_dir: str | None = None,
+        principal_id: str | None = None,
+        grant: str | None = None,
+        session_key: str | None = None,
+        approval: str | None = None,
     ) -> Decision:
         """Decide one call. ``refuse`` is set by an adapter that could not read
         the call's files from its arguments; the call is then denied and logged
@@ -1502,6 +1600,7 @@ class Gate:
             arg_summary = summarize_args(args)
             halted = self._kill_switch(str(skill), str(tool), path_list, base_dir)
             if halted is not None:
+                self._revoke_on_marker()
                 decision = halted
             elif refuse is not None:
                 decision = Decision(
@@ -1511,6 +1610,18 @@ class Gate:
                     str(tool),
                     tuple(path_list),
                 )
+            elif self._grants is not None:
+                decision = self._evaluate_granted(
+                    str(skill),
+                    str(tool),
+                    path_list,
+                    base_dir,
+                    principal_id,
+                    grant,
+                    session_key,
+                    approval,
+                    args,
+                )
             else:
                 decision = _decide(
                     self._policy,
@@ -1518,6 +1629,15 @@ class Gate:
                     str(tool),
                     path_list,
                     base_dir,
+                )
+            if self._grants is not None and decision.gate is None:
+                # Kill switch and refuse rows: nothing is admitted.
+                decision = replace(
+                    decision,
+                    gate="admission",
+                    principal_id=principal_id
+                    if isinstance(principal_id, str)
+                    else None,
                 )
             # observe mode records the true verdict but does not act on it
             decision = replace(decision, enforced=(self._mode == ENFORCE))
@@ -1544,6 +1664,151 @@ class Gate:
                 if self._mode == ENFORCE:
                     raise
             return decision
+
+    def _evaluate_granted(
+        self,
+        skill: str,
+        tool: str,
+        path_list: list[str],
+        base_dir: str | None,
+        principal_id,
+        grant,
+        session_key,
+        approval,
+        args,
+    ) -> Decision:
+        """Step 3b of the wiring spec plus the execution gate.
+
+        Gate 1 (admission): principal present, grant verified this call, the
+        grant names this principal, label and tool. Gate 2 (execution): every
+        path inside the grant, then policy decides exactly as without grants,
+        then an ASK may be lifted by a bound approval receipt, then the ledger
+        cap check. The grant only narrows; it never turns a policy DENY, ASK,
+        or ISOLATE into ALLOW.
+        """
+        from capability_gate_grants import (
+            CredentialRefused,
+            approval_id,
+            approval_reason,
+            manifest_hash,
+            refused_ids,
+            verify,
+        )
+
+        cfg = self._grants
+        pid = principal_id if isinstance(principal_id, str) and principal_id else None
+        ptuple = tuple(path_list)
+
+        def deny(reason: str, gate: str, g=None, ids=(None, None)) -> Decision:
+            return Decision(
+                Verdict.DENY,
+                f"grant: {reason}",
+                skill,
+                tool,
+                ptuple,
+                principal_id=pid,
+                grant_id=g.grant_id if g is not None else ids[0],
+                parent_grant_id=g.parent_grant_id if g is not None else ids[1],
+                gate=gate,
+            )
+
+        if pid is None:
+            return deny("missing principal_id", "admission")
+        if grant is None:
+            return deny("no grant", "admission")
+        try:
+            g = verify(cfg, grant, session_key)
+        except CredentialRefused as exc:
+            # A refused ticket with a valid MAC still identifies its grant.
+            return deny(str(exc), "admission", ids=refused_ids(cfg, grant))
+        if pid != g.principal_id:
+            return deny("principal does not match grant", "admission", g)
+        if skill != g.skill:
+            return deny("label does not match grant", "admission", g)
+        if tool not in g.tools:
+            return deny("tool outside grant", "admission", g)
+        for p in path_list:
+            a = _absolute(p, base_dir)
+            if a is None:
+                return deny(f"relative path '{p}' has no base folder", "execution", g)
+            if not _path_allowed(a, g.paths):
+                return deny(f"path '{p}' outside grant", "execution", g)
+        decision = _decide(self._policy, skill, tool, path_list, base_dir)
+        manifest = manifest_hash(
+            principal_id=pid,
+            skill=skill,
+            tool=tool,
+            paths=decision.paths,
+            args=args,
+            pol_hash=self._policy_hash,
+        )
+        decision = replace(
+            decision,
+            principal_id=pid,
+            grant_id=g.grant_id,
+            parent_grant_id=g.parent_grant_id,
+            gate="execution",
+            manifest_hash=manifest,
+        )
+        nonce = None
+        if decision.verdict is Verdict.ASK and approval is not None:
+            why, nonce = approval_reason(
+                cfg,
+                approval,
+                manifest=manifest,
+                principal_id=pid,
+                pol_hash=self._policy_hash,
+                now=cfg.clock(),
+            )
+            if why is not None:
+                return replace(decision, verdict=Verdict.DENY, reason=f"grant: {why}")
+            decision = replace(
+                decision,
+                verdict=Verdict.ALLOW,
+                reason="approved by bound receipt",
+                approval_id=approval_id(approval),
+            )
+        if decision.verdict is Verdict.ALLOW:
+            # H5: the ticket is re-verified inside the same critical section
+            # that charges, so a revoke after Gate 1 wins. H5b: the receipt
+            # nonce is spent only if the call is charged.
+            try:
+                why = self._ledger.admit_and_charge(
+                    cfg=cfg,
+                    ticket=grant,
+                    session_key=session_key,
+                    tool=tool,
+                    manifest=manifest,
+                    charge={"calls": 1},
+                    approval_nonce=nonce,
+                )
+            except Exception as exc:  # fail closed
+                why = f"ledger unreadable, failing closed: {exc!r}"
+            if why is not None:
+                return replace(decision, verdict=Verdict.DENY, reason=f"grant: {why}")
+        return decision
+
+    def admitted_tools(
+        self, skill, tools, *, principal_id=None, grant=None, session_key=None
+    ):
+        """M1-A2: the tool list a harness may show this principal. A tool the
+        grant or policy does not admit is absent. Hiding is not the control:
+        a forced call is still denied by evaluate."""
+        rule = self._policy.skills.get(skill)
+        if rule is None:
+            return []
+        allowed = [t for t in tools if t in rule.tools]
+        if self._grants is None:
+            return allowed
+        from capability_gate_grants import CredentialRefused, verify
+
+        try:
+            g = verify(self._grants, grant, session_key)
+        except CredentialRefused:
+            return []
+        if g.principal_id != principal_id or g.skill != skill:
+            return []
+        return [t for t in allowed if t in g.tools]
 
     def _log(
         self,
