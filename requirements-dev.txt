@@ -6,3 +6,7 @@ cryptography>=50.0
 hypothesis>=6.168
 pytest>=8.0
 pytest-xdist>=3.8
+# Parsed by scripts/floor_guard.py and tests/test_floor_config.py (shell command split).
+bashlex>=0.18
+# Validates the shadow to enforce metric schema (tests/test_hire_shadow_enforce_schema.py, demos/hire/gap); the tests fail without it.
+jsonschema>=4.0
