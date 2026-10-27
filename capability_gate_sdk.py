@@ -94,6 +94,7 @@ class Client:
         *,
         anchor_path: str | os.PathLike | None = None,
         checkpoint: CheckpointConfig | None = None,
+        grants=None,
     ) -> Client:
         try:
             # type() rather than isinstance: a str subclass could compare equal
@@ -107,7 +108,9 @@ class Client:
             policy = load_policy(load_yaml_mapping(text))
             log = os.path.abspath(os.fspath(log_path))
             anchor = os.path.abspath(os.fspath(anchor_path)) if anchor_path else None
-            gate = Gate(policy, log, mode, anchor_path=anchor, checkpoint=checkpoint)
+            gate = Gate(
+                policy, log, mode, anchor_path=anchor, checkpoint=checkpoint, grants=grants
+            )
         except Exception as exc:
             raise ClientRefused(f"capability-gate client refused: {exc!r}") from exc
         return cls(_BUILD_TOKEN, gate, mode, log, anchor, checkpoint)
@@ -136,6 +139,10 @@ class Client:
         trace: Mapping[str, str] | None = None,
         base_dir: str | None = None,
         refuse: str | None = None,
+        principal_id: str | None = None,
+        grant: str | None = None,
+        session_key: str | None = None,
+        approval: str | None = None,
     ) -> Decision:
         # The gate object is reachable as a private attribute. If anything
         # moved its mode away from the one this client was built with, the
@@ -164,6 +171,10 @@ class Client:
                 args=args,
                 refuse=refuse,
                 base_dir=base_dir,
+                principal_id=principal_id,
+                grant=grant,
+                session_key=session_key,
+                approval=approval,
             )
         except Exception as exc:
             # Enforce-mode log failure lands here: the gate re-raises because
