@@ -551,7 +551,53 @@ def _build_gate(mode: str) -> Gate:
     # nothing and the gate denies silently.
     os.environ.setdefault("HERMES_HOME", _hermes_home())
     policy = _load_allowlist(os.path.join(_HERE, "allowlist.yaml"))
-    return Gate(policy, log_path=_log_path(), mode=mode)
+    home = _hermes_home()
+    cfg_path = os.path.join(home, "capability-gate", "grants.json")
+    present = os.path.lexists(cfg_path)
+    grants = None
+    try:
+        from adapters.grant_forward import (
+            GrantForwardError,
+            hermes_paths,
+            load_grant_config,
+        )
+
+        cfg_path, _sess_path = hermes_paths(home)
+        present = os.path.lexists(cfg_path)
+        grants = load_grant_config(cfg_path)
+    except GrantForwardError as exc:
+        # Present-but-bad config must not fall open to a legacy Gate.
+        raise RuntimeError(f"grant config refused: {exc}") from exc
+    except Exception as exc:
+        # Present file: any load/import error fails closed. Missing file may
+        # stay legacy (grants=None), including optional-adapter ImportError.
+        if present:
+            raise RuntimeError(f"grant config refused: {exc}") from exc
+        grants = None
+    return Gate(policy, log_path=_log_path(), mode=mode, grants=grants)
+
+
+def _grant_evaluate_kwargs() -> dict:
+    """Host session fields for Gate.evaluate; never from model/tool kwargs."""
+    home = _hermes_home()
+    sess_path = os.path.join(home, "capability-gate", "session.json")
+    present = os.path.lexists(sess_path)
+    try:
+        from adapters.grant_forward import (
+            GrantForwardError,
+            hermes_paths,
+            load_call_kwargs,
+        )
+
+        _cfg_path, sess_path = hermes_paths(home)
+        present = os.path.lexists(sess_path)
+        return load_call_kwargs(sess_path)
+    except GrantForwardError as exc:
+        raise RuntimeError(f"grant session refused: {exc}") from exc
+    except Exception as exc:
+        if present:
+            raise RuntimeError(f"grant session refused: {exc}") from exc
+        return {}
 
 
 # Tools that write the files they name. A write aimed at the gate's own files
@@ -720,6 +766,7 @@ def register(ctx) -> None:
                 args=args if isinstance(args, dict) else None,
                 refuse=refused,
                 base_dir=base_dir,
+                **_grant_evaluate_kwargs(),
             )
             if decision.verdict is Verdict.ISOLATE:
                 # Loaded in both modes, so a broken route module blocks even
@@ -775,6 +822,7 @@ def register(ctx) -> None:
                             args=args if isinstance(args, dict) else None,
                             refuse=refused,
                             base_dir=base_dir,
+                            **_grant_evaluate_kwargs(),
                         )
                         if decision2.verdict.value != "allow":
                             return _BLOCK(decision2.reason)

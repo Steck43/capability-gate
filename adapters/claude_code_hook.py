@@ -297,6 +297,14 @@ def _isolate_route():
     return module
 
 
+def _cc_grant_config_path() -> str | None:
+    return os.environ.get("CG_CC_GRANT_CONFIG") or None
+
+
+def _cc_grant_session_path() -> str | None:
+    return os.environ.get("CG_CC_GRANT_SESSION") or None
+
+
 def _pre(event: dict) -> None:
     from capability_gate import Decision, Gate, Verdict, record_decision
 
@@ -308,14 +316,30 @@ def _pre(event: dict) -> None:
     policy = _load_policy()
     paths = _paths(tool, ti, cwd)
     os.makedirs(os.path.dirname(_log_path()) or ".", exist_ok=True)
-    gate = Gate(policy, log_path=_log_path(), mode="enforce")
+    grants = None
+    grant_kwargs = {}
+    try:
+        from adapters.grant_forward import (
+            GrantForwardError,
+            load_call_kwargs,
+            load_grant_config,
+        )
+
+        grants = load_grant_config(_cc_grant_config_path())
+        grant_kwargs = load_call_kwargs(_cc_grant_session_path())
+    except GrantForwardError as exc:
+        raise ValueError(f"grant forward refused: {exc}") from exc
+    gate = Gate(policy, log_path=_log_path(), mode="enforce", grants=grants)
     trace = {k: str(event[k]) for k in ("session_id",) if event.get(k)}
     if event.get("tool_use_id"):
         trace["tool_call_id"] = str(event["tool_use_id"])
     refused = _grant_reaches_own_files(policy)
     if refused is None and tool in _WRITE_TOOLS:
         refused = _own_file_hit(paths)
-    decision = gate.evaluate(SKILL, tool, paths, trace=trace, args=ti, refuse=refused)
+    # Host session only; ignore any grant fields on the event (model-controlled).
+    decision = gate.evaluate(
+        SKILL, tool, paths, trace=trace, args=ti, refuse=refused, **grant_kwargs
+    )
     if decision.verdict is Verdict.ISOLATE:
         # D8: a VM boot does not fit inside the hook deadline, so the task is
         # queued for the box and this call is denied on the host.
