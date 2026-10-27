@@ -425,4 +425,61 @@ def test_gf_l1_cc_env_set_missing_file_denies(tmp_path, monkeypatch):
         check=False,
     )
     out = (r.stdout + r.stderr).lower()
-    assert r.returncode == 2 or "deny" in out, (r.returncode, r.stdout, r.stderr)
+    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+    assert "missing grant file" in out, (r.returncode, r.stdout, r.stderr)
+
+
+def test_gf_l1_cc_session_env_missing_file_denies(tmp_path):
+    """CG_CC_GRANT_SESSION set, CONFIG unset, session file gone -> exit 2 (FF-1)."""
+    import json
+    import subprocess
+    import sys
+
+    import yaml
+
+    work = tmp_path / "work"
+    work.mkdir()
+    tgt = work / "x.txt"
+    tgt.write_text("marker\n", encoding="utf-8")
+    allow = tmp_path / "allow.yaml"
+    allow.write_text(
+        yaml.safe_dump(
+            {
+                "skills": {
+                    "UNLABELED": {
+                        "tools": ["Read"],
+                        "paths": [str(work) + "/**"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    missing = tmp_path / "no-such-session.json"
+    event = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Read",
+        "cwd": str(work),
+        "tool_input": {"file_path": str(tgt)},
+    }
+    env = dict(
+        os.environ,
+        CG_CC_GRANT_SESSION=str(missing),
+        CG_CC_ALLOWLIST=str(allow),
+        CG_CC_LOG=str(tmp_path / "cc.jsonl"),
+    )
+    env.pop("CG_CC_GRANT_CONFIG", None)
+    r = subprocess.run(
+        [sys.executable, str(Path("adapters/claude_code_hook.py").resolve())],
+        input=json.dumps(event),
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        cwd=str(Path.cwd()),
+        check=False,
+    )
+    out = (r.stdout + r.stderr).lower()
+    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+    assert "missing session file" in out, (r.returncode, r.stdout, r.stderr)
+
