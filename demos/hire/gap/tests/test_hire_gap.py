@@ -75,9 +75,6 @@ def test_ledger_bad_amounts(tmp_path, amt):
 
 
 def test_meter_pass_and_schema_valid():
-    pytest.importorskip(
-        "jsonschema"
-    )  # repo pattern: CI lock has no jsonschema; RUN-ALL requires it
     assert sem.main([]) == 0
 
 
@@ -88,7 +85,7 @@ def test_meter_never_self_promotes():
 
 
 def test_meter_schema_rejects_extra_field():
-    jsonschema = pytest.importorskip("jsonschema")
+    jsonschema = importlib.import_module("jsonschema")
     doc = sem.run_window()
     doc["shadow"]["sneaky"] = 1
     with pytest.raises(jsonschema.ValidationError):

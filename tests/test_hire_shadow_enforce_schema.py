@@ -4,7 +4,8 @@ No command at this commit emits these metrics. The tests check the schema
 accepts the shipped template and a document filled from a real S12 run, and
 refuses each missing, mistyped, out-of-range or unknown field. The validator
 below covers the keyword subset the schema uses; a test pins that subset, and
-the jsonschema package cross-checks it when installed.
+the jsonschema package cross-checks it (pinned in requirements-ci.lock, so the
+cross-check runs in CI and fails rather than skips when jsonschema is missing).
 """
 
 from __future__ import annotations
@@ -251,7 +252,7 @@ def test_document_filled_from_s12_validates():
 
 
 def test_jsonschema_cross_check():
-    jsonschema = pytest.importorskip("jsonschema")
+    jsonschema = importlib.import_module("jsonschema")
     jsonschema.Draft202012Validator.check_schema(SCHEMA)
     v = jsonschema.Draft202012Validator(SCHEMA)
     assert list(v.iter_errors(EXAMPLE)) == []
