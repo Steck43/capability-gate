@@ -315,7 +315,8 @@ def test_hermes_pre_tool_call_malformed_grants_blocks(tmp_path, monkeypatch):
     assert isinstance(out, dict) and out.get("action") == "block", out
 
 
-def test_missing_grants_file_stays_legacy(tmp_path, monkeypatch):
+def test_gf_l1_hermes_gate_dir_missing_grants_fail_closed(tmp_path, monkeypatch):
+    """capability-gate/ present without grants.json must refuse (GF-L1)."""
     from grind01_util import load_adapter
 
     home = tmp_path / "hermes"
@@ -323,6 +324,28 @@ def test_missing_grants_file_stays_legacy(tmp_path, monkeypatch):
     (home / "capability-gate").mkdir()
     monkeypatch.setenv("HERMES_HOME", str(home))
     mod = load_adapter("rtb_w1_legacy")
+    work = tmp_path / "work"
+    work.mkdir()
+    policy = load_policy(
+        {
+            "skills": {
+                "UNLABELED": {"tools": ["read_file"], "paths": [str(work) + "/**"]}
+            }
+        }
+    )
+    monkeypatch.setattr(mod, "_load_allowlist", lambda _p: policy)
+    with pytest.raises(RuntimeError, match="grant config refused"):
+        mod._build_gate("enforce")
+
+
+def test_hermes_never_configured_stays_legacy(tmp_path, monkeypatch):
+    """No capability-gate/ dir → legacy grants=None (never opted in)."""
+    from grind01_util import load_adapter
+
+    home = tmp_path / "hermes"
+    (home / "logs").mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    mod = load_adapter("rtb_w1_never")
     work = tmp_path / "work"
     work.mkdir()
     policy = load_policy(
