@@ -109,7 +109,12 @@ class Client:
             log = os.path.abspath(os.fspath(log_path))
             anchor = os.path.abspath(os.fspath(anchor_path)) if anchor_path else None
             gate = Gate(
-                policy, log, mode, anchor_path=anchor, checkpoint=checkpoint, grants=grants
+                policy,
+                log,
+                mode,
+                anchor_path=anchor,
+                checkpoint=checkpoint,
+                grants=grants,
             )
         except Exception as exc:
             raise ClientRefused(f"capability-gate client refused: {exc!r}") from exc

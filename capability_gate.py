@@ -1434,17 +1434,31 @@ class Gate:
         )
         # Through _log, so the THROWN row moves the operator's anchor (and the
         # signed checkpoint check) in step with the log, like every other row.
-        try:
-            self._log(decision)
-        finally:
-            if self._grants is not None:
-                # Revoke-on-throw (W5): every grant issued up to now stays dead
-                # after a person clears the marker. The marker is already down,
-                # so a failure here raises with the switch still thrown.
-                from capability_gate_grants import GrantStore
-
-                GrantStore(self._grants.store_path).revoke_before(self._grants.clock())
+        revoke_error = self._revoke_grants_on_throw()
+        if revoke_error is not None:
+            # The switch is thrown and the row says the revoke failed; then raise.
+            self._log(
+                replace(
+                    decision,
+                    reason=f"{decision.reason}; grant revoke FAILED: {revoke_error!r}",
+                )
+            )
+            raise revoke_error
+        self._log(decision)
         return True
+
+    def _revoke_grants_on_throw(self) -> Exception | None:
+        """Revoke-on-throw (W5): every grant issued up to now stays dead after a
+        person clears the marker. Runs after the marker is down."""
+        if self._grants is None:
+            return None
+        try:
+            from capability_gate_grants import GrantStore
+
+            GrantStore(self._grants.store_path).revoke_before(self._grants.clock())
+        except Exception as exc:
+            return exc
+        return None
 
     def _halt_state(self) -> str | None:
         """Deny reason from the switch, or None when calls may proceed.
@@ -1598,7 +1612,9 @@ class Gate:
                 decision = replace(
                     decision,
                     gate="admission",
-                    principal_id=principal_id if isinstance(principal_id, str) else None,
+                    principal_id=principal_id
+                    if isinstance(principal_id, str)
+                    else None,
                 )
             # observe mode records the true verdict but does not act on it
             decision = replace(decision, enforced=(self._mode == ENFORCE))
@@ -1750,7 +1766,9 @@ class Gate:
                 return replace(decision, verdict=Verdict.DENY, reason=f"grant: {why}")
         return decision
 
-    def admitted_tools(self, skill, tools, *, principal_id=None, grant=None, session_key=None):
+    def admitted_tools(
+        self, skill, tools, *, principal_id=None, grant=None, session_key=None
+    ):
         """M1-A2: the tool list a harness may show this principal. A tool the
         grant or policy does not admit is absent. Hiding is not the control:
         a forced call is still denied by evaluate."""

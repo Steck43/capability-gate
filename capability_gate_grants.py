@@ -103,12 +103,19 @@ class GrantConfig:
     approval_nonce_path: str | None = None
     approvers: frozenset[str] = frozenset()
     key_paths: tuple[str, ...] = ()
-    rate_limit: tuple[int, float] | None = None  # (max calls, window seconds) per principal and tool
+    rate_limit: tuple[int, float] | None = (
+        None  # (max calls, window seconds) per principal and tool
+    )
     loop_limit: int | None = None  # max identical manifests inside the rate window
     clock: Callable[[], float] = time.time
 
     def protected_files(self) -> tuple[str, ...]:
-        out = [self.store_path, self.store_path + ".lock", self.ledger_path, self.ledger_path + ".lock"]
+        out = [
+            self.store_path,
+            self.store_path + ".lock",
+            self.ledger_path,
+            self.ledger_path + ".lock",
+        ]
         if self.approval_nonce_path:
             out += [self.approval_nonce_path, self.approval_nonce_path + ".lock"]
         out += list(self.key_paths)
@@ -137,7 +144,9 @@ class Grant:
 
 
 def _canon(obj) -> bytes:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    return json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode()
 
 
 def _b64e(b: bytes) -> str:
@@ -165,7 +174,9 @@ def _mac(key: bytes, payload: bytes, domain: bytes = _DOMAIN) -> bytes:
 def session_hash(session_key: str) -> str:
     if not isinstance(session_key, str) or len(session_key) < 16:
         raise CredentialRefused("session key missing or too short")
-    return hashlib.sha256(b"capability-gate-session\x00" + session_key.encode()).hexdigest()
+    return hashlib.sha256(
+        b"capability-gate-session\x00" + session_key.encode()
+    ).hexdigest()
 
 
 def valid_pattern(pat) -> bool:
@@ -178,7 +189,7 @@ def valid_pattern(pat) -> bool:
         return False
     if "$" in pat or "~" in pat:
         return False
-    base = pat[:-3] if pat.endswith("/**") else pat
+    base = pat.removesuffix("/**")
     if pat == "/**":
         return True
     if any(c in base for c in "*?["):
@@ -193,7 +204,7 @@ def pattern_within(child: str, parent: str) -> bool:
         return True
     if parent.endswith("/**"):
         pbase = parent[:-3]
-        cbase = child[:-3] if child.endswith("/**") else child
+        cbase = child.removesuffix("/**")
         return cbase == pbase and child.endswith("/**") or cbase.startswith(pbase + "/")
     return child == parent
 
@@ -213,11 +224,17 @@ def validate(g: Grant) -> None:
     ident(g.parent_grant_id, "parent_grant_id", optional=True)
     if (g.parent_principal_id is None) != (g.parent_grant_id is None):
         raise CredentialRefused("parent fields must be set together")
-    if not isinstance(g.tools, tuple) or not g.tools or not all(
-        isinstance(t, str) and _ID.match(t) for t in g.tools
+    if (
+        not isinstance(g.tools, tuple)
+        or not g.tools
+        or not all(isinstance(t, str) and _ID.match(t) for t in g.tools)
     ):
         raise CredentialRefused("bad tools")
-    if not isinstance(g.paths, tuple) or not g.paths or not all(valid_pattern(p) for p in g.paths):
+    if (
+        not isinstance(g.paths, tuple)
+        or not g.paths
+        or not all(valid_pattern(p) for p in g.paths)
+    ):
         raise CredentialRefused("bad paths")
     if not isinstance(g.not_after, int) or isinstance(g.not_after, bool):
         raise CredentialRefused("bad not_after")
@@ -455,8 +472,13 @@ def verify(cfg: GrantConfig, ticket, session_key) -> Grant:
         rec = st["lineage"].get(cur)
         if rec is None:
             raise CredentialRefused("grant not in lineage")
-        if cur in st["revoked_grants"] or rec["principal_id"] in st["revoked_principals"]:
-            raise CredentialRefused("revoked" if cur == g.grant_id else "ancestor revoked")
+        if (
+            cur in st["revoked_grants"]
+            or rec["principal_id"] in st["revoked_principals"]
+        ):
+            raise CredentialRefused(
+                "revoked" if cur == g.grant_id else "ancestor revoked"
+            )
         if now >= rec["not_after"]:
             raise CredentialRefused("ancestor expired")
         hops += 1
@@ -473,7 +495,9 @@ def refresh(cfg: GrantConfig, ticket: str, session_key: str, ttl: int) -> str:
     now = cfg.clock()
     new_after = int(now) + ttl
     if old.parent_grant_id is not None:
-        parent_after = GrantStore(cfg.store_path).load()["lineage"][old.parent_grant_id]["not_after"]
+        parent_after = GrantStore(cfg.store_path).load()["lineage"][
+            old.parent_grant_id
+        ]["not_after"]
         new_after = min(new_after, parent_after)
     d = asdict(old)
     d.update(not_after=new_after, nonce=secrets.token_hex(16), issued_at=now)
@@ -622,17 +646,22 @@ class Ledger:
             if cfg.rate_limit is not None:
                 max_calls, window = cfg.rate_limit
                 recent = [h for h in st["history"] if now - h["ts"] < window]
-                same_tool = [h for h in recent if h["p"] == principal and h["tool"] == tool]
+                same_tool = [
+                    h for h in recent if h["p"] == principal and h["tool"] == tool
+                ]
                 if len(same_tool) >= max_calls:
                     return f"rate limit: {max_calls} calls of '{tool}' per {window}s for this principal"
                 if cfg.loop_limit is not None:
-                    loops = [h for h in recent if h["p"] == principal and h["m"] == manifest]
+                    loops = [
+                        h for h in recent if h["p"] == principal and h["m"] == manifest
+                    ]
                     if len(loops) >= cfg.loop_limit:
                         return "loop guard: identical action repeated"
             for p, gid, budget in chain:
                 for unit, cap in budget.items():
                     have = sum(
-                        v for k, v in st["used"].items()
+                        v
+                        for k, v in st["used"].items()
                         if k.split("|")[1] == gid and k.split("|")[3] == unit
                     )
                     # Children charge their ancestors, so each level's keys hold
@@ -645,7 +674,9 @@ class Ledger:
                 for unit, amount in charge.items():
                     k = self.key(p, gid, tool, unit)
                     st["used"][k] = st["used"].get(k, 0) + amount
-            st["history"].append({"ts": now, "p": principal, "tool": tool, "m": manifest})
+            st["history"].append(
+                {"ts": now, "p": principal, "tool": tool, "m": manifest}
+            )
             st["history"] = st["history"][-1000:]
             st["seq"] += 1
             _write_state(self.path, st)
@@ -703,21 +734,39 @@ def approval_id(receipt: str) -> str:
 
 
 def check_approval(
-    cfg: GrantConfig, receipt, *, manifest: str, principal_id: str, pol_hash: str, now: float
+    cfg: GrantConfig,
+    receipt,
+    *,
+    manifest: str,
+    principal_id: str,
+    pol_hash: str,
+    now: float,
 ) -> str | None:
     """None when the receipt is good and its nonce is now spent; else the reason."""
     try:
         _check_key(cfg.key)
         if cfg.approval_nonce_path is None:
             return "approval receipts not configured"
-        if not isinstance(receipt, str) or receipt.count(".") != 1 or len(receipt) > 8192:
+        if (
+            not isinstance(receipt, str)
+            or receipt.count(".") != 1
+            or len(receipt) > 8192
+        ):
             return "no bound approval receipt"
         p64, m64 = receipt.split(".")
         payload, mac = _b64d(p64), _b64d(m64)
         if not hmac.compare_digest(mac, _mac(cfg.key, payload, _RECEIPT_DOMAIN)):
             return "approval receipt bad mac"
         body = json.loads(payload)
-        want = {"manifest", "principal_id", "approver", "tool", "policy_hash", "not_after", "nonce"}
+        want = {
+            "manifest",
+            "principal_id",
+            "approver",
+            "tool",
+            "policy_hash",
+            "not_after",
+            "nonce",
+        }
         if not isinstance(body, dict) or set(body) != want:
             return "approval receipt malformed"
         if body["policy_hash"] != pol_hash:
