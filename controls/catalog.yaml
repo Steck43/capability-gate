@@ -22,28 +22,28 @@ controls:
     source_url: https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md
   - key: atlas-aml-m0026
     framework: MITRE ATLAS
-    edition: "2026.09"
+    edition: "2026.10"
     control_id: AML.M0026
-    title: Privileged AI Agent Permissions Configuration
+    title: Manage AI Agent Service Access
     binding: advisory
     grade: A
-    source_url: https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/v6/ATLAS-2026.09.yaml
+    source_url: https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/v6/ATLAS-2026.10.yaml
   - key: atlas-aml-m0028
     framework: MITRE ATLAS
-    edition: "2026.09"
+    edition: "2026.10"
     control_id: AML.M0028
-    title: AI Agent Tools Permissions Configuration
+    title: Enforce Access Controls for AI Agent Tools
     binding: advisory
     grade: A
-    source_url: https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/v6/ATLAS-2026.09.yaml
+    source_url: https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/v6/ATLAS-2026.10.yaml
   - key: atlas-aml-m0029
     framework: MITRE ATLAS
-    edition: "2026.09"
+    edition: "2026.10"
     control_id: AML.M0029
     title: Human In-the-Loop for AI Agent Actions
     binding: advisory
     grade: A
-    source_url: https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/v6/ATLAS-2026.09.yaml
+    source_url: https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/v6/ATLAS-2026.10.yaml
   - key: nist-ai-rmf-map-3-5
     framework: NIST AI RMF
     edition: "1.0"
