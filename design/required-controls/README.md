@@ -11,7 +11,7 @@ a different question: did this edit drop a control the deployment depends on?
 ## Inputs
 
 - `controls/catalog.yaml`: seed rows from eight frameworks (OWASP LLM Top 10
-  2026, MITRE ATLAS 2026.09, NIST AI RMF 1.0, EU AI Act, ISO/IEC 42001:2023,
+  2026, MITRE ATLAS 2026.10, NIST AI RMF 1.0, EU AI Act, ISO/IEC 42001:2023,
   ISO/IEC 27001:2022, NIST CSF 2.0, EU Cyber Resilience Act). Each row holds
   key, framework, edition, control_id, the published title, binding
   (`mandatory`, `advisory`, `advisory_as_selected`), grade and an https

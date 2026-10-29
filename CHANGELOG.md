@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The required-controls catalog cites MITRE ATLAS v2026.10. `AML.M0026` is now titled Manage AI Agent Service Access and `AML.M0028` Enforce Access Controls for AI Agent Tools; `AML.M0029` is unchanged. Edition and `source_url` move for all three rows, and the row keys stay the same. `tests/test_control_check.py` pins one ATLAS edition across rows.
+
 - Trusted kit-local-manifest re-pin to kit global hooks path (`merge_gate.py` at `97fc05767615`).
 
 - Trusted kit-local-manifest re-pin: `merge_gate.py` at `97fc05767615` (default_branch + Windows gh router) synced under both hook paths.

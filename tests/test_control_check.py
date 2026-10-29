@@ -604,6 +604,20 @@ def test_catalog_covers_each_framework():
         assert fw in names, fw
 
 
+def test_atlas_rows_cite_one_release_by_its_own_file():
+    # A title is only as good as the release it was read from. Every ATLAS
+    # row names the same edition, and its source_url is that edition's file.
+    rows = [r for r in CATALOG.values() if r["framework"] == "MITRE ATLAS"]
+    assert rows
+    assert {r["edition"] for r in rows} == {"2026.10"}
+    for r in rows:
+        assert r["source_url"].endswith(f"/ATLAS-{r['edition']}.yaml"), r["key"]
+    titles = {r["control_id"]: r["title"] for r in rows}
+    assert titles["AML.M0026"] == "Manage AI Agent Service Access"
+    assert titles["AML.M0028"] == "Enforce Access Controls for AI Agent Tools"
+    assert titles["AML.M0029"] == "Human In-the-Loop for AI Agent Actions"
+
+
 def test_mandatory_rows_are_the_eu_laws():
     assert {
         r["framework"].split(" (")[0]
