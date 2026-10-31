@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- README shows the OpenSSF bestpractices.dev badge for project 16124, which reached the passing level on 2026-10-31.
+
 - Grant clock fails closed (I4, T-DEC-12). A gate clock that steps back below the grant store's high-water mark by more than `GrantConfig.clock_backward_slack` (placeholder 0, uncalibrated) refuses every grant with "clock moved backward; grants refused until reviewed", at admission and again under the ledger lock before the charge. The refusal is a logged DENY row. A clock reading or stored high-water mark that is not a finite number (NaN, inf, not a number) is refused the same way, and `GrantConfig` refuses a slack that is NaN, infinite or negative, since either would skip the step-back test. Before this, a rollback was clamped, so an expired grant stayed dead but a grant still live at the high-water mark kept working and nothing was logged. `tests/test_decay_slice1.py`.
 - Grant renewal needs a human (D3). `refresh()` now requires a renewal receipt from `mint_renewal`, signed with the approval key under its own domain, bound to the grant id, principal and new lifetime. The approver must be named in `approvers`, must not be the principal and must not be any agent principal in the lineage, and the receipt nonce is spent once. An approval receipt cannot renew. `tests/test_decay_slice1.py`.
 - README opens with a diagram, the one-command `make hire-demo` and its output, a plain table of what each step shows, and how this repo fits with aegis-atoms and isolation-layer. The sections below it are unchanged. A Zenodo DOI badge links the all-versions DOI.
