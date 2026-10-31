@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Grant renewal needs a human (D3). `refresh()` now requires a renewal receipt from `mint_renewal`, signed with the approval key under its own domain, bound to the grant id, principal and new lifetime. The approver must be named in `approvers`, must not be the principal and must not be any agent principal in the lineage, and the receipt nonce is spent once. An approval receipt cannot renew. `tests/test_decay_slice1.py`.
 - README opens with a diagram, the one-command `make hire-demo` and its output, a plain table of what each step shows, and how this repo fits with aegis-atoms and isolation-layer. The sections below it are unchanged. A Zenodo DOI badge links the all-versions DOI.
 - The CI workflow is named `CI` instead of `floor`, so its badge reads CI. The file stays `floor.yml` and every job and required check name is unchanged. The floor pins are regenerated, and the two floor config tests that edit the workflow's name line now target `name: CI`.
+- CONTRIBUTING.md: how to report a bug or send a change, the checks to run, and the test rule that every new control ships with a test that fails when the control is removed.
 
 - Trusted kit-local-manifest re-pin to kit global hooks path (`merge_gate.py` at `97fc05767615`).
 
