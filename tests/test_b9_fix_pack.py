@@ -130,8 +130,9 @@ def test_h4_clock_rollback_does_not_revive_expired_grant(env):
     env.clock.t += 61
     assert is_deny(env.call(grant=t), "expired")
     env.clock.t -= 61
-    assert is_deny(env.call(grant=t), "expired")
-    assert is_deny(env.call(grant=t, gate=new_gate(env)), "expired")
+    # I4: a rollback is now refused outright, before expiry is even checked.
+    assert is_deny(env.call(grant=t), gr.CLOCK_BACKWARD)
+    assert is_deny(env.call(grant=t, gate=new_gate(env)), gr.CLOCK_BACKWARD)
 
 
 def test_h4_grant_from_a_clock_set_ahead_is_not_yet_valid(env):
@@ -151,9 +152,10 @@ def test_h4_clock_rollback_does_not_revive_expired_receipt(env):
         "approval receipt expired",
     )
     env.clock.t -= 31
+    # I4: a rollback is now refused outright, before the receipt is checked.
     assert is_deny(
         env.call(tool="delete_file", grant=t, args=ARGS, approval=r),
-        "approval receipt expired",
+        gr.CLOCK_BACKWARD,
     )
 
 

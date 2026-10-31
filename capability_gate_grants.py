@@ -42,6 +42,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -59,6 +60,9 @@ UNITS = frozenset({"calls", "tokens", "wall_seconds", "egress_bytes"})
 
 _DOMAIN = b"capability-gate-grant-v1\x00"
 _RECEIPT_DOMAIN = b"capability-gate-approval-v1\x00"
+_RENEWAL_DOMAIN = b"capability-gate-renewal-v1\x00"
+CLOCK_BACKWARD = "clock moved backward; grants refused until reviewed"
+CLOCK_NOT_FINITE = "clock reading is not a finite number; grants refused"
 _B64 = re.compile(r"^[A-Za-z0-9_-]+$")
 _ID = re.compile(r"^[A-Za-z0-9._:/-]{1,128}$")
 FIELDS = (
@@ -117,6 +121,9 @@ class GrantConfig:
     )
     loop_limit: int | None = None  # max identical manifests inside the rate window
     clock: Callable[[], float] = time.time
+    # I4: how far the raw clock may fall below the store's high-water before
+    # every grant is refused. Placeholder, uncalibrated: 0 means any step back.
+    clock_backward_slack: float = 0.0
     # H2: approval receipts use their own key, never the grant key, so a
     # holder of the grant issuer key cannot mint a human approval with it.
     approval_key: bytes | None = field(default=None, repr=False)
@@ -126,6 +133,7 @@ class GrantConfig:
             self.approval_key, self.key
         ):
             raise ValueError("approval_key must differ from the grant key")
+        _slack_ok(self.clock_backward_slack)
 
     def protected_files(self) -> tuple[str, ...]:
         out = [
@@ -377,12 +385,14 @@ class GrantStore:
             raise StoreError("grant store malformed")
         return st
 
-    def advance_clock(self, raw: float) -> tuple[dict, float]:
+    def advance_clock(self, raw: float, slack: float = 0.0) -> tuple[dict, float]:
         """Load the store and move its clock high-water to ``raw`` if ahead.
         Returns (state, effective now). A clock rolled back cannot revive an
-        expired ticket or receipt (H4)."""
+        expired ticket or receipt (H4), and a step back past ``slack`` refuses
+        every grant (I4)."""
         with _locked(self.path):
             st = self.load()
+            _check_clock(raw, st, slack)
             now = effective_now(raw, st)
             if st["clock_high"] is None or raw > st["clock_high"]:
                 st["clock_high"] = raw
@@ -463,6 +473,41 @@ class GrantStore:
 def effective_now(raw: float, st: Mapping) -> float:
     high = st.get("clock_high")
     return raw if high is None else max(raw, high)
+
+
+def _check_clock(raw: float, st: Mapping, slack: float) -> None:
+    """I4: the gate clock never runs backward. A raw clock below the
+    high-water by more than ``slack`` is a refusal, not a clamp, so a grant
+    that is still live at the high-water stops working until the clock is
+    reviewed. The caller turns the refusal into a DENY row."""
+    high = st.get("clock_high")
+    _finite_clock(raw, high)
+    if high is not None and raw < high - slack:
+        raise CredentialRefused(CLOCK_BACKWARD)
+
+
+def _finite_clock(raw, high) -> None:
+    """A NaN compares false both ways, so it would pass the step-back test,
+    revive an expired ticket and, stored as the high-water, switch the test
+    off for good. Refuse a reading or a stored high-water that is not a
+    finite number."""
+    if not _finite_number(raw) or (high is not None and not _finite_number(high)):
+        raise CredentialRefused(CLOCK_NOT_FINITE)
+
+
+def _finite_number(value) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _slack_ok(slack) -> None:
+    """A NaN or infinite slack skips the step-back test without a sound, and
+    a negative one is meaningless. Refuse them at config time."""
+    if not _finite_number(slack) or slack < 0:
+        raise ValueError("clock_backward_slack must be a finite number >= 0")
 
 
 def _issue_now(cfg: GrantConfig) -> float:
@@ -565,7 +610,9 @@ def verify(cfg: GrantConfig, ticket, session_key) -> Grant:
     raw = cfg.clock()
     g = _verify_ticket(cfg, ticket, session_key)
     try:
-        st, now = GrantStore(cfg.store_path).advance_clock(raw)
+        st, now = GrantStore(cfg.store_path).advance_clock(
+            raw, cfg.clock_backward_slack
+        )
     except StoreError as exc:
         raise CredentialRefused(str(exc)) from exc
     _verify_state(g, st, now)
@@ -582,10 +629,25 @@ def refused_ids(cfg: GrantConfig, ticket) -> tuple[str | None, str | None]:
     return g.grant_id, g.parent_grant_id
 
 
-def refresh(cfg: GrantConfig, ticket: str, session_key: str, ttl: int) -> str:
-    """New nonce and life. Never past the parent's not_after; never wider."""
+def refresh(
+    cfg: GrantConfig,
+    ticket: str,
+    session_key: str,
+    ttl: int,
+    *,
+    renewal: str | None = None,
+) -> str:
+    """New nonce and life. Never past the parent's not_after; never wider.
+
+    D3: only a named human renews. ``renewal`` is a receipt from
+    ``mint_renewal`` for this grant and this ttl, signed with the approval
+    key by someone outside the grant's lineage. Its nonce is spent once."""
     old = verify(cfg, ticket, session_key)
     _ttl_ok(ttl, old.risk)
+    why, nonce = renewal_reason(cfg, renewal, grant=old, ttl=ttl, now=cfg.clock())
+    if why is not None:
+        raise CredentialRefused(why)
+    _spend_receipt_nonce(cfg, nonce)
     now = _issue_now(cfg)
     new_after = int(now) + ttl
     if old.parent_grant_id is not None:
@@ -781,6 +843,9 @@ class Ledger:
             raw = cfg.clock()
             now = effective_now(raw, sst)
             try:
+                # I4 again under the ledger lock: a step back between
+                # admission and charge is refused here too.
+                _check_clock(raw, sst, cfg.clock_backward_slack)
                 g = _verify_ticket(cfg, ticket, session_key)
                 _verify_state(g, sst, now)
             except CredentialRefused as exc:
@@ -1009,3 +1074,106 @@ def approval_reason(
         return f"approval receipt refused: {exc}", None
     except Exception as exc:  # fail closed
         return f"approval check failed: {type(exc).__name__}", None
+
+
+# --- renewal receipts (D3) ------------------------------------------------------
+
+
+def mint_renewal(
+    key: bytes,
+    *,
+    grant_id: str,
+    principal_id: str,
+    approver: str,
+    ttl: int,
+    not_after: int,
+    nonce: str | None = None,
+) -> str:
+    """Made by the out-of-band human path, never by the agent. ``key`` is the
+    approval key. Its own domain, so an approval receipt cannot renew."""
+    _check_key(key)
+    body = {
+        "grant_id": grant_id,
+        "principal_id": principal_id,
+        "approver": approver,
+        "ttl": int(ttl),
+        "not_after": int(not_after),
+        "nonce": nonce or secrets.token_hex(16),
+    }
+    payload = _canon(body)
+    return f"{_b64e(payload)}.{_b64e(_mac(key, payload, _RENEWAL_DOMAIN))}"
+
+
+def renewal_reason(
+    cfg: GrantConfig, receipt, *, grant: Grant, ttl: int, now: float
+) -> tuple[str | None, str | None]:
+    """(None, nonce) when the renewal receipt is good; (reason, None)
+    otherwise. Same approver checks as ``approval_reason``. Spends nothing."""
+    try:
+        if receipt is None:
+            return "renewal needs a human renewal receipt", None
+        if cfg.approval_nonce_path is None:
+            return "renewal receipts not configured", None
+        if cfg.approval_key is None:
+            return "approval key not configured", None
+        _check_key(cfg.approval_key)
+        if (
+            not isinstance(receipt, str)
+            or receipt.count(".") != 1
+            or len(receipt) > 8192
+        ):
+            return "renewal receipt malformed", None
+        p64, m64 = receipt.split(".")
+        payload, mac = _b64d(p64), _b64d(m64)
+        if not hmac.compare_digest(
+            mac, _mac(cfg.approval_key, payload, _RENEWAL_DOMAIN)
+        ):
+            return "renewal receipt bad mac", None
+        body = json.loads(payload)
+        want = {"grant_id", "principal_id", "approver", "ttl", "not_after", "nonce"}
+        if not isinstance(body, dict) or set(body) != want:
+            return "renewal receipt malformed", None
+        if body["grant_id"] != grant.grant_id:
+            return "renewal receipt for another grant", None
+        if body["principal_id"] != grant.principal_id:
+            return "renewal receipt for another principal", None
+        if body["ttl"] != ttl:
+            return "renewal receipt approved another lifetime", None
+        st = GrantStore(cfg.store_path).load()
+        if effective_now(now, st) >= body["not_after"]:
+            return "renewal receipt expired", None
+        approver = body["approver"]
+        if approver == grant.principal_id:
+            return "approver is the requesting principal", None
+        if approver not in cfg.approvers:
+            return "approver not a named human approver", None
+        if approver in {rec["principal_id"] for rec in st["lineage"].values()}:
+            return "approver is an agent principal", None
+        nonce = body["nonce"]
+        if not isinstance(nonce, str) or not nonce:
+            return "renewal receipt malformed", None
+        return None, nonce
+    except CredentialRefused as exc:
+        return f"renewal receipt refused: {exc}", None
+    except Exception as exc:  # fail closed
+        return f"renewal check failed: {type(exc).__name__}", None
+
+
+def _spend_receipt_nonce(cfg: GrantConfig, nonce: str) -> None:
+    """Spend a renewal nonce once, in the approval nonce file, and move the
+    store seal with it (H3b). Same lock order as ``Ledger.admit_and_charge``."""
+    store = GrantStore(cfg.store_path)
+    path = cfg.approval_nonce_path
+    with _locked(store.path), _locked(path):
+        try:
+            sst = store.load()
+            ast_ = _load_approvals(path, sst["seals"]["approvals"])
+        except StoreError as exc:
+            raise CredentialRefused(f"renewal check failed: {exc}") from exc
+        if nonce in ast_["spent"]:
+            raise CredentialRefused("renewal receipt replay")
+        ast_["spent"].append(nonce)
+        ast_["seq"] += 1
+        _write_state(path, ast_)
+        sst["seals"]["approvals"] = ast_["seq"]
+        _write_state(store.path, sst)

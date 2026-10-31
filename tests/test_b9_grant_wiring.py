@@ -137,6 +137,20 @@ def is_deny(d, fragment=""):
     return d.verdict is Verdict.DENY and fragment in d.reason
 
 
+def renew(e, ticket, ttl, approver=APPROVER, **over):
+    """A human renewal receipt for ``ticket`` (D3)."""
+    g = gr.decode_verified(ticket, KEY)
+    kw = {
+        "grant_id": g.grant_id,
+        "principal_id": g.principal_id,
+        "approver": approver,
+        "ttl": ttl,
+        "not_after": int(e.clock.t) + 60,
+    }
+    kw.update(over)
+    return gr.mint_renewal(APPROVAL_KEY, **kw)
+
+
 # ---------------------------------------------------------------- wiring spec W1..W14
 
 
@@ -171,7 +185,7 @@ def test_w2_expired_ticket_denied(env):
 
 def test_w3_refreshed_away_ticket_denied(env):
     old = env.issue()
-    new = gr.refresh(env.cfg, old, SESSION, 600)
+    new = gr.refresh(env.cfg, old, SESSION, 600, renewal=renew(env, old, 600))
     assert is_deny(env.call(grant=old), "nonce not current")
     assert env.call(grant=new).verdict is Verdict.ALLOW
 
@@ -372,7 +386,9 @@ def test_w14_refresh_and_attenuate_only_shrink(env):
         budget={"calls": 2},
     )
     env.clock.t += 200
-    refreshed = gr.refresh(env.cfg, child, SESSION2, 300)
+    refreshed = gr.refresh(
+        env.cfg, child, SESSION2, 300, renewal=renew(env, child, 300)
+    )
     assert gr.decode_verified(refreshed, KEY).not_after <= pa
     with pytest.raises(gr.CredentialRefused, match="tools"):
         gr.attenuate(
