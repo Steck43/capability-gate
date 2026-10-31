@@ -1956,7 +1956,7 @@ EXACT_TAMPERS = [
         id="concurrency-changed",
     ),
     pytest.param(
-        ("name: floor\n", "name: floor\nrun-name: zqxwvk\n"),
+        ("name: CI\n", "name: CI\nrun-name: zqxwvk\n"),
         "workflow: key run-name is not allowed",
         id="top-level-key-added",
     ),
@@ -2385,7 +2385,8 @@ def test_an_odd_yaml_tag_fails_closed_without_a_traceback(
     root = _copy_tree(tmp_path)
     wf = root / ".github" / "workflows" / "floor.yml"
     text = wf.read_text(encoding="utf-8")
-    wf.write_text(text.replace("name: floor\n", new, 1), encoding="utf-8")
+    assert "name: CI\n" in text
+    wf.write_text(text.replace("name: CI\n", new, 1), encoding="utf-8")
     guard_py = str(ROOT / "scripts" / "floor_guard.py")
     r = subprocess.run(
         [sys.executable, guard_py, "--root", str(root)],

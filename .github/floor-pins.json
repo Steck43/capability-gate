@@ -26,7 +26,7 @@
     },
     {
       "path": ".github/workflows/floor.yml",
-      "sha256": "1638016e0ffa1f1af0750e28e65e262454274bcf2e2c867bad708a32f1f605e1"
+      "sha256": "5ca0f12cb8b290b452a45e726c861a158535765fa6a81747ab0655e45bd24c0b"
     },
     {
       "path": ".github/workflows/plugin-bundle.yml",
@@ -94,7 +94,7 @@
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "9781a194a68692bcdd7de378f100ca81168e7c184ba103f01f6a016c9675aac7"
+      "sha256": "656adda27c76711d18e47f9d1ffd375e3c00e256038c16e46aa61d630d2f147c"
     },
     {
       "path": "tests/test_kat_lint.py",
@@ -164,6 +164,6 @@
     }
   ],
   "workflow": {
-    "sha256": "b399f8a1ac560da3b4d81bc971928862c87ea0e6cd6a55909d302475a67a876b"
+    "sha256": "e624248216f857b732366f74b0cfa2d404a77174ca0262ea0b243d0a30a57ae5"
   }
 }

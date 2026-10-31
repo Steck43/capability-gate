@@ -1,14 +1,126 @@
 # capability-gate
 
-[![floor](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml/badge.svg)](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml)
+[![CI][ci-badge]][ci]
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Steck43/capability-gate/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Steck43/capability-gate)
+[![DOI][doi-badge]][doi]
 [![License: MIT](https://img.shields.io/github/license/Steck43/capability-gate)](LICENSE)
+
+[ci-badge]: https://github.com/Steck43/capability-gate/actions/workflows/floor.yml/badge.svg
+[ci]: https://github.com/Steck43/capability-gate/actions/workflows/floor.yml
+[doi-badge]: https://zenodo.org/badge/DOI/10.5281/zenodo.22018052.svg
+[doi]: https://doi.org/10.5281/zenodo.22018052
 
 A deny-by-default gate for agent tool calls. Before a tool runs, the agent's
 runtime asks the gate, and the gate answers allow, deny, ask or isolate from a
 written allowlist of tools and paths per skill. The decision is plain Python
 you can read, not a model, and it is written to a hash-chained log before the
 answer goes back.
+
+```mermaid
+flowchart LR
+    subgraph AUTHORITY["Authority: set by people"]
+        direction TB
+        P["Written policy<br/>tools and paths each skill may use"]
+        K["Kill switch<br/>one throw halts the agent; a person clears it"]
+    end
+
+    A(["Agent proposes a tool call"]) --> G{"capability-gate<br/>decides before anything runs"}
+    P -->|"defines what is granted"| G
+    K -.->|"once thrown, every call is denied"| G
+
+    subgraph OUTCOME["Outcome, in enforce mode"]
+        direction TB
+        R["Allow<br/>the tool runs"]
+        H["Ask<br/>waits for a person's approval"]
+        I["Isolate<br/>routed to a sandbox, never the host"]
+        D["Deny<br/>blocked, with the rule that applied"]
+    end
+
+    G -->|"granted"| R
+    G -->|"granted, approval required"| H
+    G -->|"granted, isolation required"| I
+    G -->|"not granted, or any internal error"| D
+
+    subgraph EVIDENCE["Evidence"]
+        direction TB
+        L[("Hash-chained decision log")]
+        V["Verification<br/>an edited, deleted or truncated record is detected"]
+        L --> V
+    end
+
+    G ==>|"every decision, recorded before the agent hears it"| L
+```
+
+Read it left to right. People set the policy, the gate decides before any tool
+runs, the outcome is enforced, and every decision lands on a log an auditor can
+verify. In observe mode the gate makes and records the same decisions and blocks
+nothing, so a policy can be tuned on real traffic before it is enforced.
+
+## See it work
+
+One command on a fresh clone. No network, no secrets, under a second:
+
+    pip install -r requirements-dev.txt
+    make hire-demo
+
+It runs the real gate on a throwaway folder. Output from one run, with the
+reasons shortened to fit:
+
+```text
+[1 ALLOW     ] read_file work/notes.txt          ALLOW   enforce RAN     allowed by policy
+[2 DENY      ] shell (tool not granted)          DENY    enforce blocked tool 'shell' not granted
+[2 DENY      ] read_file /etc/passwd (outside)   DENY    enforce blocked path outside allowlist
+[2 DENY      ] read_file work/secret-canary.txt  DENY    enforce blocked canary secret in a grant
+[2 DENY      ] read_file work/.env (protected)   DENY    enforce blocked protected .env path
+[3 KILL      ] shell after throw                 DENY    enforce blocked kill switch thrown
+[3 KILL      ] tool_nobody_named after throw     DENY    enforce blocked kill switch thrown
+[4 FAILCLOSED] malformed policy (tools: str)     REFUSED enforce blocked PolicyError at load
+[4 FAILCLOSED] gate error inside evaluate        DENY    enforce blocked gate error, failing closed
+[4 FAILCLOSED] log folder removed, granted call  DENY    enforce blocked log folder removed
+[6 OBSERVE   ] shell in observe mode             DENY    observe RAN     tool 'shell' not granted
+
+executed_after_kill = 0
+...
+RESULT: PASS
+```
+
+The run checks 19 expected outcomes and exits non-zero if any one fails.
+What each step shows:
+
+| Step | What happens |
+|---|---|
+| Allow | A granted tool on a granted path runs. |
+| Deny | An ungranted tool, a path outside the grant, a canary file and a `.env` file are each blocked before the tool runs. |
+| Kill switch | After one `throw`, every tool is denied, including tools nobody named, with no restart. Nothing runs after the throw. |
+| Fail closed | A broken policy is refused at load. An error inside the gate is a deny. A missing log folder denies the call and is not quietly re-created. |
+| Verify | The hash chain still verifies after the kill. |
+| Observe | The same call in observe mode is logged as a deny and allowed to run, so a policy can be built from real traffic before it blocks anything. |
+
+More in one command each:
+
+- `make hire-forge`: rewrite, delete or re-chain a log row; verification
+  rejects each one and names the earliest broken row.
+- `make hire-pins`: remove each control in a scratch copy; its tests must go
+  red.
+- `make demo-all`: nine seeded scenarios on synthetic traffic, with the
+  counts in the [Proof](#proof) section below. S14 also needs cargo and an
+  isolation-layer checkout.
+
+See [demos/hire/DEMO.md](demos/hire/DEMO.md) for the limits of the demo.
+
+## How it fits with the other repos
+
+capability-gate is one of three public repos that work as one system:
+
+- **capability-gate** (this repo) decides each tool call and logs it.
+- **[aegis-atoms](https://github.com/Steck43/aegis-atoms)** holds policy
+  atoms, a deny-overrides rollup and a judge that may tighten a verdict and
+  may not loosen it.
+  It sits behind this gate, which holds the live allowlist.
+- **[isolation-layer](https://github.com/Steck43/isolation-layer)** is where
+  an `isolate` verdict goes: a Firecracker microVM per task under the jailer.
+  It is a research build, and the demo rows here run against its stub door,
+  not a microVM.
 
 ## What it is
 
