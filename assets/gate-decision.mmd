@@ -3,7 +3,7 @@ flowchart TB
     CALL(["Tool call from the agent runtime<br/>checked by Gate.evaluate before the tool runs"])
 
     Q1("1 · Kill switch thrown?")
-    Q2("2 · Every path readable from the arguments?")
+    Q2("2 · Every path readable and resolvable?")
     Q3("3 · Skill listed and tool granted to it?")
     Q4("4 · Every path inside the grant<br/>and not a protected file?")
     Q5("5 · Tool on the isolate list?")

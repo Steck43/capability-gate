@@ -19,16 +19,28 @@ written allowlist of tools and paths per skill. The decision is plain Python
 you can read, not a model, and it is written to a hash-chained log before the
 answer goes back.
 
+**Figure 1. How the gate decides one call.** Six checks in a fixed order, a
+deny at any failed check, and every verdict logged before the answer leaves.
+
 ![Gate decision path: six checks in order, each failure a DENY, every verdict logged][fig-decide]
 
-Read it top to bottom. The gate asks six questions in a fixed order and stops
-at the earliest answer that settles the call: a failed check is a deny, the
-isolate list gives isolate, and the approval list gives ask. A call that clears
-every check is allowed. Any error inside the gate is a deny. Every verdict is written to the
-hash-chained log before it goes back to the runtime. In enforce mode the
-runtime acts on the verdict. In observe mode the gate records the same verdict
-and blocks nothing, so a policy can be tuned on real traffic before it is
-enforced.
+Read it top to bottom. The gate stops at the earliest answer that settles the
+call: a failed check is a deny, the isolate list gives isolate, and the
+approval list gives ask. A call that clears every check is allowed. Any error
+inside the gate is a deny. In enforce mode the runtime acts on the verdict. In
+observe mode the gate records the same verdict and blocks nothing, so a policy
+can be tuned on real traffic before it is enforced.
+
+Key: blue is a check, orange is deny, green is allow, tan is ask or isolate.
+
+Three details the figure leaves out:
+
+- Step 1 also denies a call that aims at the kill switch marker or the log.
+- One deny carries no log row, on purpose: when the log folder itself is gone,
+  the gate denies rather than start a new chain quietly.
+- The figure shows the gate without the optional grant ledger. With it, a
+  ticket check runs before step 3, a bound approval receipt can turn an ask
+  into an allow, and a usage cap can turn an allow into a deny.
 
 [fig-decide]: assets/gate-decision.png
 
@@ -61,6 +73,13 @@ RESULT: PASS
 ```
 
 The run checks 19 expected outcomes and exits non-zero if any one fails.
+
+The tests test something. Each control the demo asserts has a mutant that
+removes it in a scratch copy and must turn its test red: `make hire-pins` runs
+all 34 in `demos/hire/mutants.yaml`. CI reruns the nine seeded scenarios on
+every push to main and every pull request, and fails if any count in the
+[Proof](#proof) section changes.
+
 What each step shows:
 
 | Step | What happens |
@@ -86,17 +105,23 @@ See [demos/hire/DEMO.md](demos/hire/DEMO.md) for the limits of the demo.
 
 ## How it fits with the other repos
 
-capability-gate is one of three public repos that work as one system:
+capability-gate is one of three public repos that work as one system.
+
+**Figure 2. Where the gate sits.** People set the policy, the gate decides
+before anything runs, and the decision log feeds the review that sets the next
+policy.
 
 ![Where capability-gate sits between the agent, aegis-atoms and isolation-layer][fig-system]
 
-Read it left to right. The gate is step 3: it decides before anything runs.
-aegis-atoms reads that decision and may make it stricter, never looser. An
-ALLOW runs on the host. An ISOLATE runs in an isolation-layer microVM, which
+Read it top to bottom. The gate is step 3. aegis-atoms reads that decision and
+may make it stricter, never looser. An allow runs on the host, an ask waits
+for a person, and a deny is blocked. An isolate goes to isolation-layer, which
 takes the task when it carries the gate's decision and the atoms ticket. The
-decision log feeds the audit and the grant-gap report, and people decide what
-to grant next. CI tests these handoffs against pinned copies of the three
-repos; it checks the receipts, not a microVM boot.
+decision log feeds the audit and the grant-gap report. People grant what was
+needed, keep the rest denied, and move from observe to enforce: scenario S12
+shows both modes flag the same 10 of 110 calls. CI tests these handoffs
+against pinned copies of the three repos; it checks the receipts, not a
+microVM boot, and isolation-layer is a research build.
 
 [fig-system]: assets/gate-in-system.png
 
@@ -140,6 +165,11 @@ runtimes and checks its output.
   `verify_hash_chain(log)` raises on an edit, a deleted row or a cut tail, and
   the gate refuses to append to a log that does not verify. A signed checkpoint
   over the log can be configured (`tests/test_c4_checkpoint.py`).
+- **Grants (optional).** `capability_gate_grants.py` adds per-call tickets
+  bound to one session, a ledger that caps calls up the lineage so a child
+  never spends more than its parent has left, and renewal that needs a receipt
+  from a named person who is not the agent. These are local HMAC tokens with
+  file stores, not an identity provider.
 - **Adapters.** `__init__.py` and `plugin.yaml` register the gate on the Hermes
   `pre_tool_call` hook. `adapters/claude_code_hook.py` runs the same decider as
   a Claude Code `PreToolUse` hook: it exits 2 to block, and every failure
