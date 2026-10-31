@@ -1,10 +1,12 @@
 # capability-gate
 
-[![floor](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml/badge.svg)](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml)
+[![CI][ci-badge]][ci]
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Steck43/capability-gate/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Steck43/capability-gate)
 [![DOI][doi-badge]][doi]
 [![License: MIT](https://img.shields.io/github/license/Steck43/capability-gate)](LICENSE)
 
+[ci-badge]: https://github.com/Steck43/capability-gate/actions/workflows/floor.yml/badge.svg
+[ci]: https://github.com/Steck43/capability-gate/actions/workflows/floor.yml
 [doi-badge]: https://zenodo.org/badge/DOI/10.5281/zenodo.22018052.svg
 [doi]: https://doi.org/10.5281/zenodo.22018052
 

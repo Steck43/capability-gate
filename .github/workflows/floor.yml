@@ -20,7 +20,7 @@
 # one exact shape per job, and python always runs with -I so no file in the
 # checkout is importable. scripts/floor_guard.py enforces all of this.
 
-name: floor
+name: CI
 
 on:
   push:
