@@ -19,45 +19,30 @@ written allowlist of tools and paths per skill. The decision is plain Python
 you can read, not a model, and it is written to a hash-chained log before the
 answer goes back.
 
-```mermaid
-flowchart LR
-    subgraph AUTHORITY["Authority: set by people"]
-        direction TB
-        P["Written policy<br/>tools and paths each skill may use"]
-        K["Kill switch<br/>one throw halts the agent; a person clears it"]
-    end
+**Figure 1. How the gate decides one call.** Six checks in a fixed order, a
+deny at any failed check, and every verdict logged before the answer leaves.
 
-    A(["Agent proposes a tool call"]) --> G{"capability-gate<br/>decides before anything runs"}
-    P -->|"defines what is granted"| G
-    K -.->|"once thrown, every call is denied"| G
+![Gate decision path: six checks in order, each failure a DENY, every verdict logged][fig-decide]
 
-    subgraph OUTCOME["Outcome, in enforce mode"]
-        direction TB
-        R["Allow<br/>the tool runs"]
-        H["Ask<br/>waits for a person's approval"]
-        I["Isolate<br/>routed to a sandbox, never the host"]
-        D["Deny<br/>blocked, with the rule that applied"]
-    end
+Read it top to bottom. The gate stops at the earliest answer that settles the
+call: a failed check is a deny, the isolate list gives isolate, and the
+approval list gives ask. A call that clears every check is allowed. Any error
+inside the gate is a deny. In enforce mode the runtime acts on the verdict. In
+observe mode the gate records the same verdict and blocks nothing, so a policy
+can be tuned on real traffic before it is enforced.
 
-    G -->|"granted"| R
-    G -->|"granted, approval required"| H
-    G -->|"granted, isolation required"| I
-    G -->|"not granted, or any internal error"| D
+Key: blue is a check, orange is deny, green is allow, tan is ask or isolate.
 
-    subgraph EVIDENCE["Evidence"]
-        direction TB
-        L[("Hash-chained decision log")]
-        V["Verification<br/>an edited, deleted or truncated record is detected"]
-        L --> V
-    end
+Three details the figure leaves out:
 
-    G ==>|"every decision, recorded before the agent hears it"| L
-```
+- Step 1 also denies a call that aims at the kill switch marker or the log.
+- One deny carries no log row, on purpose: when the log folder itself is gone,
+  the gate denies rather than start a new chain quietly.
+- The figure shows the gate without the optional grant ledger. With it, a
+  ticket check runs before step 3, a bound approval receipt can turn an ask
+  into an allow, and a usage cap can turn an allow into a deny.
 
-Read it left to right. People set the policy, the gate decides before any tool
-runs, the outcome is enforced, and every decision lands on a log an auditor can
-verify. In observe mode the gate makes and records the same decisions and blocks
-nothing, so a policy can be tuned on real traffic before it is enforced.
+[fig-decide]: assets/gate-decision.png
 
 ## See it work
 
@@ -88,6 +73,13 @@ RESULT: PASS
 ```
 
 The run checks 19 expected outcomes and exits non-zero if any one fails.
+
+The tests test something. Each control the demo asserts has a mutant that
+removes it in a scratch copy and must turn its test red: `make hire-pins` runs
+all 34 in `demos/hire/mutants.yaml`. CI reruns the nine seeded scenarios on
+every push to main and every pull request, and fails if any count in the
+[Proof](#proof) section changes.
+
 What each step shows:
 
 | Step | What happens |
@@ -113,7 +105,25 @@ See [demos/hire/DEMO.md](demos/hire/DEMO.md) for the limits of the demo.
 
 ## How it fits with the other repos
 
-capability-gate is one of three public repos that work as one system:
+capability-gate is one of three public repos that work as one system.
+
+**Figure 2. Where the gate sits.** People set the policy, the gate decides
+before anything runs, and the decision log feeds the review that sets the next
+policy.
+
+![Where capability-gate sits between the agent, aegis-atoms and isolation-layer][fig-system]
+
+Read it top to bottom. The gate is step 3. aegis-atoms reads that decision and
+may make it stricter, never looser. An allow runs on the host, an ask waits
+for a person, and a deny is blocked. An isolate goes to isolation-layer, which
+takes the task when it carries the gate's decision and the atoms ticket. The
+decision log feeds the audit and the grant-gap report. People grant what was
+needed, keep the rest denied, and move from observe to enforce: scenario S12
+shows both modes flag the same 10 of 110 calls. CI tests these handoffs
+against pinned copies of the three repos; it checks the receipts, not a
+microVM boot, and isolation-layer is a research build.
+
+[fig-system]: assets/gate-in-system.png
 
 - **capability-gate** (this repo) decides each tool call and logs it.
 - **[aegis-atoms](https://github.com/Steck43/aegis-atoms)** holds policy
@@ -124,6 +134,9 @@ capability-gate is one of three public repos that work as one system:
   an `isolate` verdict goes: a Firecracker microVM per task under the jailer.
   It is a research build, and the demo rows here run against its stub door,
   not a microVM.
+
+Diagram sources are `assets/gate-decision.mmd` and `assets/gate-in-system.mmd`
+(Mermaid), drawn to PNG so they show in every viewer, the GitHub app included.
 
 ## What it is
 
@@ -152,6 +165,11 @@ runtimes and checks its output.
   `verify_hash_chain(log)` raises on an edit, a deleted row or a cut tail, and
   the gate refuses to append to a log that does not verify. A signed checkpoint
   over the log can be configured (`tests/test_c4_checkpoint.py`).
+- **Grants (optional).** `capability_gate_grants.py` adds per-call tickets
+  bound to one session, a ledger that caps calls up the lineage so a child
+  never spends more than its parent has left, and renewal that needs a receipt
+  from a named person who is not the agent. These are local HMAC tokens with
+  file stores, not an identity provider.
 - **Adapters.** `__init__.py` and `plugin.yaml` register the gate on the Hermes
   `pre_tool_call` hook. `adapters/claude_code_hook.py` runs the same decider as
   a Claude Code `PreToolUse` hook: it exits 2 to block, and every failure

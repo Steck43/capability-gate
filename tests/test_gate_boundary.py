@@ -3,10 +3,11 @@
 # box-side nonce (A6).
 """One call, three bindings: atoms records the gate decision, the box echoes atoms' ticket.
 
-test_siblings_pinned owns every presence and load check. The boundary test stays
-red until the three named misses clear; fixture problems fail with "fixture:"
-text instead. Clearing the misses in CI is a receipt contract, not a jailer
-proof: Actions cannot boot the box, so the real run is attached from the test box.
+test_siblings_pinned owns every presence and load check. The three named misses
+cleared at Step 8, and the boundary test now fails on any miss; fixture problems
+fail with "fixture:" text instead. Passing in CI is a receipt contract, not a
+jailer proof: Actions cannot boot the box, so the real run is attached from the
+test box.
 The chain helper below stands in for the harness until the harness exists.
 """
 

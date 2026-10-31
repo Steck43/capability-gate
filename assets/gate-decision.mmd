@@ -1,0 +1,51 @@
+%%{init: {"theme": "base", "fontFamily": "Arial, Helvetica, sans-serif", "flowchart": {"nodeSpacing": 30, "rankSpacing": 30, "curve": "basis", "padding": 10, "wrappingWidth": 420}, "themeVariables": {"fontFamily": "Arial, Helvetica, sans-serif", "fontSize": "16px", "primaryColor": "#EEF2F8", "primaryBorderColor": "#2A62A8", "primaryTextColor": "#0F1B2D", "lineColor": "#4A5568", "edgeLabelBackground": "#FFFFFF"}}}%%
+flowchart TB
+    CALL(["Tool call from the agent runtime<br/>checked by Gate.evaluate before the tool runs"])
+
+    Q1("1 · Kill switch thrown?")
+    Q2("2 · Every path readable and resolvable?")
+    Q3("3 · Skill listed and tool granted to it?")
+    Q4("4 · Every path inside the grant<br/>and not a protected file?")
+    Q5("5 · Tool on the isolate list?")
+    Q6("6 · Tool on the approval list?")
+    ALLOW["ALLOW"]
+    ASK["ASK"]
+    ISO["ISOLATE"]
+    DENY["DENY<br/>the rule is in the reason"]
+    ERR["Any error at any step<br/>is a DENY"]
+    LOG[("7 · Decision written to the hash-chained log<br/>then returned to the runtime")]
+
+    CALL --> Q1
+    Q1 -->|no| Q2
+    Q2 -->|yes| Q3
+    Q3 -->|yes| Q4
+    Q4 -->|yes| Q5
+    Q5 -->|no| Q6
+    Q6 -->|no| ALLOW
+
+    Q1 -->|yes| DENY
+    Q2 -->|no| DENY
+    Q3 -->|no| DENY
+    Q4 -->|no| DENY
+    Q5 -->|yes| ISO
+    Q6 -->|yes| ASK
+    ERR -.-> DENY
+
+    ALLOW --> LOG
+    ASK --> LOG
+    ISO --> LOG
+    DENY --> LOG
+
+    classDef check fill:#EEF2F8,stroke:#2A62A8,color:#0F1B2D
+    classDef deny fill:#FBE9DD,stroke:#B5541A,color:#5A2A0C
+    classDef pass fill:#E6F2EA,stroke:#2E7D4F,color:#123D24
+    classDef hold fill:#F6F0DC,stroke:#8A6D1E,color:#3D300C
+    classDef store fill:#FFFFFF,stroke:#4A5568,color:#0F1B2D
+    classDef note fill:#FFFFFF,stroke:#B5541A,stroke-dasharray:4 3,color:#5A2A0C
+
+    class Q1,Q2,Q3,Q4,Q5,Q6 check
+    class DENY deny
+    class ALLOW pass
+    class ASK,ISO hold
+    class CALL,LOG store
+    class ERR note
