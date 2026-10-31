@@ -2,7 +2,11 @@
 
 [![floor](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml/badge.svg)](https://github.com/Steck43/capability-gate/actions/workflows/floor.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Steck43/capability-gate/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Steck43/capability-gate)
+[![DOI][doi-badge]][doi]
 [![License: MIT](https://img.shields.io/github/license/Steck43/capability-gate)](LICENSE)
+
+[doi-badge]: https://zenodo.org/badge/DOI/10.5281/zenodo.22018052.svg
+[doi]: https://doi.org/10.5281/zenodo.22018052
 
 A deny-by-default gate for agent tool calls. Before a tool runs, the agent's
 runtime asks the gate, and the gate answers allow, deny, ask or isolate from a
