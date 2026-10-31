@@ -42,6 +42,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -61,6 +62,7 @@ _DOMAIN = b"capability-gate-grant-v1\x00"
 _RECEIPT_DOMAIN = b"capability-gate-approval-v1\x00"
 _RENEWAL_DOMAIN = b"capability-gate-renewal-v1\x00"
 CLOCK_BACKWARD = "clock moved backward; grants refused until reviewed"
+CLOCK_NOT_FINITE = "clock reading is not a finite number; grants refused"
 _B64 = re.compile(r"^[A-Za-z0-9_-]+$")
 _ID = re.compile(r"^[A-Za-z0-9._:/-]{1,128}$")
 FIELDS = (
@@ -131,6 +133,7 @@ class GrantConfig:
             self.approval_key, self.key
         ):
             raise ValueError("approval_key must differ from the grant key")
+        _slack_ok(self.clock_backward_slack)
 
     def protected_files(self) -> tuple[str, ...]:
         out = [
@@ -478,8 +481,33 @@ def _check_clock(raw: float, st: Mapping, slack: float) -> None:
     that is still live at the high-water stops working until the clock is
     reviewed. The caller turns the refusal into a DENY row."""
     high = st.get("clock_high")
+    _finite_clock(raw, high)
     if high is not None and raw < high - slack:
         raise CredentialRefused(CLOCK_BACKWARD)
+
+
+def _finite_clock(raw, high) -> None:
+    """A NaN compares false both ways, so it would pass the step-back test,
+    revive an expired ticket and, stored as the high-water, switch the test
+    off for good. Refuse a reading or a stored high-water that is not a
+    finite number."""
+    if not _finite_number(raw) or (high is not None and not _finite_number(high)):
+        raise CredentialRefused(CLOCK_NOT_FINITE)
+
+
+def _finite_number(value) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _slack_ok(slack) -> None:
+    """A NaN or infinite slack skips the step-back test without a sound, and
+    a negative one is meaningless. Refuse them at config time."""
+    if not _finite_number(slack) or slack < 0:
+        raise ValueError("clock_backward_slack must be a finite number >= 0")
 
 
 def _issue_now(cfg: GrantConfig) -> float:

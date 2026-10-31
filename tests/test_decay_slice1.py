@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -68,6 +69,44 @@ def test_g6_slack_allows_a_small_step_and_refuses_a_larger_one(env):
     assert env.call(grant=t, gate=gate).verdict is Verdict.ALLOW
     env.clock.t -= 1
     assert is_deny(env.call(grant=t, gate=gate), gr.CLOCK_BACKWARD)
+
+
+def test_g6_a_nan_reading_is_deny_and_leaves_no_nan_high_water(env):
+    t = env.issue(ttl=60)
+    env.clock.t += 120  # the grant has expired
+    env.clock.t = float("nan")
+    assert is_deny(env.call(grant=t), gr.CLOCK_NOT_FINITE)
+    high = json.loads(Path(env.cfg.store_path).read_text()).get("clock_high")
+    assert high is None or math.isfinite(high)
+    env.clock.t = 1_000_000.0 + 120
+    assert is_deny(env.call(grant=t), "expired")
+
+
+def test_g6_go_red_without_the_finite_check_nan_revives_an_expired_grant(
+    env, monkeypatch
+):
+    monkeypatch.setattr(gr, "_finite_clock", lambda raw, high: None)
+    t = env.issue(ttl=60)
+    env.clock.t += 120
+    assert is_deny(env.call(grant=t), "expired")
+    env.clock.t = float("nan")
+    assert env.call(grant=t).verdict is Verdict.ALLOW
+
+
+@pytest.mark.parametrize("slack", [float("nan"), float("inf"), -1.0, True])
+def test_g6_bad_slack_is_refused_at_config(env, slack):
+    with pytest.raises(ValueError, match="clock_backward_slack"):
+        dataclasses.replace(env.cfg, clock_backward_slack=slack)
+
+
+def test_g6_go_red_without_the_slack_check_nan_slack_turns_i4_off(env, monkeypatch):
+    monkeypatch.setattr(gr, "_slack_ok", lambda slack: None)
+    cfg = dataclasses.replace(env.cfg, clock_backward_slack=float("nan"))
+    gate = wiring.Gate(env.policy, str(env.log), wiring.cg.ENFORCE, grants=cfg)
+    t = env.issue(ttl=600)
+    assert env.call(grant=t, gate=gate).verdict is Verdict.ALLOW
+    env.clock.t -= 100
+    assert env.call(grant=t, gate=gate).verdict is Verdict.ALLOW
 
 
 def test_g6_restart_does_not_forget_the_high_water(env):
@@ -184,7 +223,9 @@ def test_g5_an_approval_receipt_cannot_renew(env):
         pol_hash=gr.policy_hash(env.policy),
         not_after=int(env.clock.t) + 60,
     )
-    with pytest.raises(gr.CredentialRefused, match="renewal receipt"):
+    # "bad mac", not just "renewal receipt": the renewal domain is what refuses
+    # it. With the approval domain reused, the body-key check would catch it.
+    with pytest.raises(gr.CredentialRefused, match="renewal receipt bad mac"):
         gr.refresh(env.cfg, t, SESSION, 600, renewal=approval)
 
 
