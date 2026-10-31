@@ -59,6 +59,16 @@ own table). ASK and THROWN remain non-allow; decay does not convert them.
 See `FAILING-TESTS.md`. Independent review covers this design before any of those tests
 are wired into roof pytest.
 
+## Decisions
+
+- 2026-10-31, Landen Stecker: tool-class lifetimes (D2) never loosen the
+  risk-tier caps. Today's caps stay the ceiling, and a tool class becomes a
+  second cap: effective cap = min(risk cap, class cap). Irreversible actions
+  get one call. Class values are placeholders until calibrated. Not built yet.
+- 2026-10-31: slice 1 built. A clock step back past `clock_backward_slack`
+  refuses every grant, and renewal needs a human receipt (D3). T-DEC-12 and
+  the renewal half of T-DEC-07 are covered by `tests/test_decay_slice1.py`.
+
 ## NOT measured
 
 Live TTL on the WSL Hermes profile, judge apply, AgentDojo, paid API, B7.

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Grant clock fails closed (I4, T-DEC-12). A gate clock that steps back below the grant store's high-water mark by more than `GrantConfig.clock_backward_slack` (placeholder 0, uncalibrated) refuses every grant with "clock moved backward; grants refused until reviewed", at admission and again under the ledger lock before the charge. The refusal is a logged DENY row. Before this, a rollback was clamped, so an expired grant stayed dead but a grant still live at the high-water mark kept working and nothing was logged. `tests/test_decay_slice1.py`.
+- Grant renewal needs a human (D3). `refresh()` now requires a renewal receipt from `mint_renewal`, signed with the approval key under its own domain, bound to the grant id, principal and new lifetime. The approver must be named in `approvers`, must not be the principal and must not be any agent principal in the lineage, and the receipt nonce is spent once. An approval receipt cannot renew. `tests/test_decay_slice1.py`.
+
 - Trusted kit-local-manifest re-pin to kit global hooks path (`merge_gate.py` at `97fc05767615`).
 
 - Trusted kit-local-manifest re-pin: `merge_gate.py` at `97fc05767615` (default_branch + Windows gh router) synced under both hook paths.
