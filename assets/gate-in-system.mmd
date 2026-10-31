@@ -1,0 +1,33 @@
+%%{init: {"theme": "base", "fontFamily": "Arial, Helvetica, sans-serif", "flowchart": {"nodeSpacing": 34, "rankSpacing": 44, "curve": "basis", "padding": 12, "wrappingWidth": 420}, "themeVariables": {"fontFamily": "Arial, Helvetica, sans-serif", "fontSize": "16px", "primaryColor": "#EEF2F8", "primaryBorderColor": "#2A62A8", "primaryTextColor": "#0F1B2D", "lineColor": "#4A5568", "edgeLabelBackground": "#FFFFFF"}}}%%
+flowchart LR
+    P1[/"PEOPLE<br/>1 · Write the allowlist<br/>tools and paths per skill"/]
+    A2(["AGENT<br/>2 · Proposes a tool call"])
+    C3("CAPABILITY-GATE · this repo<br/>3 · Decides before the tool runs<br/>ALLOW · ASK · ISOLATE · DENY<br/>logged to a hash chain")
+    T4("AEGIS-ATOMS<br/>4 · Reads the gate's decision<br/>may tighten it, never loosens it")
+    H5["HOST<br/>5 · ALLOW runs here<br/>ASK and DENY are blocked"]
+    I5["ISOLATION-LAYER<br/>5 · ISOLATE runs in a fresh microVM<br/>needs the gate decision<br/>and the atoms ticket"]
+    A6(["AGENT<br/>6 · Gets the result<br/>or the reason it was blocked"])
+    O7["OVERSIGHT<br/>7 · Audit the chain<br/>report what was used but not granted"]
+    P8[/"PEOPLE<br/>8 · Grant it or keep it denied<br/>then back to step 1"/]
+
+    P1 -.->|"read at load"| C3
+    A2 --> C3 --> T4
+    T4 -->|"ALLOW · ASK · DENY"| H5
+    T4 -->|"ISOLATE"| I5
+    H5 --> A6
+    I5 --> A6
+    C3 -.->|"decision log"| O7 --> P8
+
+    classDef people fill:#FFFFFF,stroke:#4A5568,stroke-dasharray:4 3,color:#0F1B2D
+    classDef agent fill:#FFFFFF,stroke:#4A5568,color:#0F1B2D
+    classDef this fill:#DCE7F7,stroke:#2A62A8,stroke-width:3px,color:#0F1B2D
+    classDef sibling fill:#EEF2F8,stroke:#2A62A8,color:#0F1B2D
+    classDef run fill:#FFFFFF,stroke:#4A5568,color:#0F1B2D
+    classDef evidence fill:#E6F2EA,stroke:#2E7D4F,color:#123D24
+
+    class P1,P8 people
+    class A2,A6 agent
+    class C3 this
+    class T4,I5 sibling
+    class H5 run
+    class O7 evidence

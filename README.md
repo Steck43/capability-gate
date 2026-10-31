@@ -19,45 +19,18 @@ written allowlist of tools and paths per skill. The decision is plain Python
 you can read, not a model, and it is written to a hash-chained log before the
 answer goes back.
 
-```mermaid
-flowchart LR
-    subgraph AUTHORITY["Authority: set by people"]
-        direction TB
-        P["Written policy<br/>tools and paths each skill may use"]
-        K["Kill switch<br/>one throw halts the agent; a person clears it"]
-    end
+![Gate decision path: six checks in order, each failure a DENY, every verdict logged][fig-decide]
 
-    A(["Agent proposes a tool call"]) --> G{"capability-gate<br/>decides before anything runs"}
-    P -->|"defines what is granted"| G
-    K -.->|"once thrown, every call is denied"| G
+Read it top to bottom. The gate asks six questions in a fixed order and stops
+at the earliest answer that settles the call: a failed check is a deny, the
+isolate list gives isolate, and the approval list gives ask. A call that clears
+every check is allowed. Any error inside the gate is a deny. Every verdict is written to the
+hash-chained log before it goes back to the runtime. In enforce mode the
+runtime acts on the verdict. In observe mode the gate records the same verdict
+and blocks nothing, so a policy can be tuned on real traffic before it is
+enforced.
 
-    subgraph OUTCOME["Outcome, in enforce mode"]
-        direction TB
-        R["Allow<br/>the tool runs"]
-        H["Ask<br/>waits for a person's approval"]
-        I["Isolate<br/>routed to a sandbox, never the host"]
-        D["Deny<br/>blocked, with the rule that applied"]
-    end
-
-    G -->|"granted"| R
-    G -->|"granted, approval required"| H
-    G -->|"granted, isolation required"| I
-    G -->|"not granted, or any internal error"| D
-
-    subgraph EVIDENCE["Evidence"]
-        direction TB
-        L[("Hash-chained decision log")]
-        V["Verification<br/>an edited, deleted or truncated record is detected"]
-        L --> V
-    end
-
-    G ==>|"every decision, recorded before the agent hears it"| L
-```
-
-Read it left to right. People set the policy, the gate decides before any tool
-runs, the outcome is enforced, and every decision lands on a log an auditor can
-verify. In observe mode the gate makes and records the same decisions and blocks
-nothing, so a policy can be tuned on real traffic before it is enforced.
+[fig-decide]: assets/gate-decision.png
 
 ## See it work
 
@@ -115,6 +88,18 @@ See [demos/hire/DEMO.md](demos/hire/DEMO.md) for the limits of the demo.
 
 capability-gate is one of three public repos that work as one system:
 
+![Where capability-gate sits between the agent, aegis-atoms and isolation-layer][fig-system]
+
+Read it left to right. The gate is step 3: it decides before anything runs.
+aegis-atoms reads that decision and may make it stricter, never looser. An
+ALLOW runs on the host. An ISOLATE runs in an isolation-layer microVM, which
+takes the task when it carries the gate's decision and the atoms ticket. The
+decision log feeds the audit and the grant-gap report, and people decide what
+to grant next. CI tests these handoffs against pinned copies of the three
+repos; it checks the receipts, not a microVM boot.
+
+[fig-system]: assets/gate-in-system.png
+
 - **capability-gate** (this repo) decides each tool call and logs it.
 - **[aegis-atoms](https://github.com/Steck43/aegis-atoms)** holds policy
   atoms, a deny-overrides rollup and a judge that may tighten a verdict and
@@ -124,6 +109,9 @@ capability-gate is one of three public repos that work as one system:
   an `isolate` verdict goes: a Firecracker microVM per task under the jailer.
   It is a research build, and the demo rows here run against its stub door,
   not a microVM.
+
+Diagram sources are `assets/gate-decision.mmd` and `assets/gate-in-system.mmd`
+(Mermaid), drawn to PNG so they show in every viewer, the GitHub app included.
 
 ## What it is
 
