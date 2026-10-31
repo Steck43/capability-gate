@@ -12,15 +12,43 @@ answer goes back.
 
 ```mermaid
 flowchart LR
-    A[Agent asks to run a tool] --> G{capability-gate}
-    P[Allowlist per skill] --> G
-    K[Kill switch marker] --> G
-    G -->|allow| R[Tool runs]
-    G -->|deny| B[Blocked]
-    G -->|ask| H[Held for a person]
-    G -->|isolate| I[Sent to the isolation box]
-    G --> L[(Hash-chained decision log)]
+    subgraph AUTHORITY["Authority: set by people"]
+        direction TB
+        P["Written policy<br/>tools and paths each skill may use"]
+        K["Kill switch<br/>one throw halts the agent; a person clears it"]
+    end
+
+    A(["Agent proposes a tool call"]) --> G{"capability-gate<br/>decides before anything runs"}
+    P -->|"defines what is granted"| G
+    K -.->|"once thrown, every call is denied"| G
+
+    subgraph OUTCOME["Outcome, in enforce mode"]
+        direction TB
+        R["Allow<br/>the tool runs"]
+        H["Ask<br/>waits for a person's approval"]
+        I["Isolate<br/>routed to a sandbox, never the host"]
+        D["Deny<br/>blocked, with the rule that applied"]
+    end
+
+    G -->|"granted"| R
+    G -->|"granted, approval required"| H
+    G -->|"granted, isolation required"| I
+    G -->|"not granted, or any internal error"| D
+
+    subgraph EVIDENCE["Evidence"]
+        direction TB
+        L[("Hash-chained decision log")]
+        V["Verification<br/>an edited, deleted or truncated record is detected"]
+        L --> V
+    end
+
+    G ==>|"every decision, recorded before the agent hears it"| L
 ```
+
+Read it left to right. People set the policy, the gate decides before any tool
+runs, the outcome is enforced, and every decision lands on a log an auditor can
+verify. In observe mode the gate makes and records the same decisions and blocks
+nothing, so a policy can be tuned on real traffic before it is enforced.
 
 ## See it work
 
