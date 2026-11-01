@@ -2,7 +2,7 @@
 # The one exception: a gate with a signed checkpoint configured (C4, option a3)
 # imports cryptography to check the note's Ed25519 signature.
 PyYAML>=6.0
-cryptography>=50.0
+cryptography>=50.0.2
 hypothesis>=6.168
 pytest>=9.0.3
 pytest-xdist>=3.8
