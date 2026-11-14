@@ -98,7 +98,7 @@
     },
     {
       "path": "tests/test_floor_config.py",
-      "sha256": "656adda27c76711d18e47f9d1ffd375e3c00e256038c16e46aa61d630d2f147c"
+      "sha256": "697542b27e1208af9e43ef2610a38dd4eb894012978e3a02ddff6787501a2861"
     },
     {
       "path": "tests/test_kat_lint.py",
