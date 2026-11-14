@@ -53,6 +53,10 @@
       "sha256": "ccb52afc819c9ac0036422992afc1252eed9995fbdb8dd19b275acdf6e8435fd"
     },
     {
+      "path": "pyproject.toml",
+      "sha256": "fee278ec526264de5b59396aa6e411fb196b6bc13c5bddebd07c2d69a63bd136"
+    },
+    {
       "path": "pytest.ini",
       "sha256": "f26f5057babf7775f4a689365a0d82344e44417313f8c390c9c7a3b2a1bd5e38"
     },
