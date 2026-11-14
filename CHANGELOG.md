@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `pyproject.toml` makes the gate installable with `pip install .` and adds a `capability-gate` command for the operator subcommands (`reanchor`, `checkpoint-request`, `checkpoint-verify`, `checkpoint-sign`). It holds packaging metadata and no tool configuration. Python 3.12 or later, the version CI runs. The Hermes plugin layout is unchanged.
 - README diagrams are drawn images with their Mermaid sources beside them, so they show in every viewer, the GitHub app included. `assets/gate-decision.png` walks the gate's checks in the order `Gate.evaluate` and `_decide` run them. `assets/gate-in-system.png` places the gate in the full flow: people, agent, capability-gate, aegis-atoms, host or isolation-layer, and oversight. Each figure has a title, a takeaway and a key. Figure 2 marks isolation-layer as a research build whose stub door CI runs, and shows ASK waiting for a person. The README now names the go-red mutants (34 in `demos/hire/mutants.yaml`), the CI recheck of the Proof counts, the optional grant ledger with its stated limit, and three decision details Figure 1 leaves out.
 - `tests/test_gate_boundary.py` docstring: the three named misses cleared at Step 8 and the test fails on any miss. It said the test stayed red.
 - README shows the OpenSSF bestpractices.dev badge for project 16124, which reached the passing level on 2026-10-31.

@@ -643,7 +643,10 @@ def test_an_added_conftest_or_pytest_config_is_caught(tmp_path: Path) -> None:
     )
     found = guard.violations(root)
     assert "pin: file tests/conftest.py added" in found
-    assert "pin: file pyproject.toml added" in found
+    # The repo ships a pinned pyproject.toml for packaging, so a planted one reads as a
+    # change to a pinned file, and its pytest table is refused by the config rule too.
+    assert "pin: file pyproject.toml changed" in found
+    assert "pytest config: pyproject.toml configures pytest" in found
 
 
 def test_a_changed_lock_file_is_caught(tmp_path: Path) -> None:
