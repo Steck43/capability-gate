@@ -1,0 +1,27 @@
+# Packaging only. No tool configuration lives here: pytest is configured in
+# pytest.ini and ruff in ruff.toml, and the floor guard refuses either in this file.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capability-gate"
+version = "0.1.1"
+description = "Deny-by-default gate for AI agent tool calls: allow, deny, ask or isolate, into a hash-chained decision log with a kill switch."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Landen Stecker" }]
+dependencies = ["PyYAML>=6.0"]
+
+[project.optional-dependencies]
+checkpoint = ["cryptography>=50.0"]
+
+[project.urls]
+Repository = "https://github.com/Steck43/capability-gate"
+
+[project.scripts]
+capability-gate = "capability_gate:_main"
+
+[tool.setuptools]
+py-modules = ["capability_gate", "capability_gate_grants", "capability_gate_sdk"]
